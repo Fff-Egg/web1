@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { trpc } from "./trpc.js";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "./data/client.js";
 import { SourcesPage } from "./pages/SourcesPage.js";
 
 type Tab = "sources" | "digest" | "feed";
@@ -12,22 +13,26 @@ const TABS: { id: Tab; label: string }[] = [
 
 export function App() {
   const [tab, setTab] = useState<Tab>("sources");
-  const health = trpc.health.useQuery();
-  const status = trpc.sources.status.useQuery();
+  const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
+  const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 
   return (
     <div className="mx-auto max-w-4xl p-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold">Feed Watch — Investment Digest</h1>
         <p className="text-sm text-slate-500">
-          server {health.data?.ok ? "online" : "…"}
+          {api.mode === "static" ? "static demo" : "server"}{" "}
+          {health.data?.ok ? "online" : "…"}
         </p>
       </header>
 
       {status.data && !status.data.persisted && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          데모 모드: <code>DATABASE_URL</code> 미설정 — 데이터가 메모리에만 저장되어
-          서버 재시작 시 초기화됩니다. MySQL을 연결하면 영구 저장됩니다.
+          {api.mode === "static" ? (
+            <>데모 모드: 데이터는 이 브라우저(localStorage)에만 저장됩니다. 추가/삭제/토글을 자유롭게 시도해 보세요.</>
+          ) : (
+            <>데모 모드: <code>DATABASE_URL</code> 미설정 — 데이터가 메모리에만 저장됩니다.</>
+          )}
         </div>
       )}
 

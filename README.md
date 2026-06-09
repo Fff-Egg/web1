@@ -31,6 +31,18 @@ drizzle/         # generated SQL migrations
 legacy/          # original static HTML site (untouched)
 ```
 
+## Live demo (GitHub Pages)
+A backend-free demo (data stored in the browser's localStorage) is published to
+the `gh-pages` branch and served at **https://fff-egg.github.io/web1/**.
+
+One-time setup: repo **Settings → Pages → Source = "Deploy from a branch" →
+Branch: `gh-pages` / `(root)`**.
+
+To rebuild & republish the demo:
+```bash
+npm run deploy:pages    # builds static demo and pushes the gh-pages branch
+```
+
 ## Setup
 
 ### Quick start (no database — demo mode)

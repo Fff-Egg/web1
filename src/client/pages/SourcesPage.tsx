@@ -1,17 +1,24 @@
 import { useMemo, useState } from "react";
-import { trpc } from "../trpc.js";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { api } from "../data/client.js";
+import { PROVIDER_LIST } from "../../shared/providers.js";
 import type { Provider } from "../../server/db/schema.js";
 
 export function SourcesPage() {
-  const utils = trpc.useUtils();
-  const presets = trpc.sources.presets.useQuery();
-  const sources = trpc.sources.list.useQuery();
+  const qc = useQueryClient();
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["sources"] });
 
-  const invalidate = () => utils.sources.list.invalidate();
-  const create = trpc.sources.create.useMutation({ onSuccess: invalidate });
-  const toggle = trpc.sources.toggle.useMutation({ onSuccess: invalidate });
-  const remove = trpc.sources.remove.useMutation({ onSuccess: invalidate });
-  const update = trpc.sources.update.useMutation({ onSuccess: invalidate });
+  const sources = useQuery({ queryKey: ["sources"], queryFn: () => api.listSources() });
+  const create = useMutation({ mutationFn: api.createSource, onSuccess: invalidate });
+  const toggle = useMutation({
+    mutationFn: (v: { id: number; enabled: boolean }) => api.toggleSource(v.id, v.enabled),
+    onSuccess: invalidate,
+  });
+  const remove = useMutation({
+    mutationFn: (id: number) => api.removeSource(id),
+    onSuccess: invalidate,
+  });
+  const update = useMutation({ mutationFn: api.updateSource, onSuccess: invalidate });
 
   const [provider, setProvider] = useState<Provider>("generic_rss");
   const [identifier, setIdentifier] = useState("");
@@ -19,8 +26,8 @@ export function SourcesPage() {
   const [credentialRef, setCredentialRef] = useState("");
 
   const preset = useMemo(
-    () => presets.data?.find((p) => p.provider === provider),
-    [presets.data, provider],
+    () => PROVIDER_LIST.find((p) => p.provider === provider),
+    [provider],
   );
 
   const onAdd = (e: React.FormEvent) => {
@@ -31,9 +38,10 @@ export function SourcesPage() {
         provider,
         identifier: identifier.trim(),
         label: label.trim() || undefined,
-        config: preset?.requiresAuth && credentialRef.trim()
-          ? { credentialRef: credentialRef.trim() }
-          : undefined,
+        config:
+          preset?.requiresAuth && credentialRef.trim()
+            ? { credentialRef: credentialRef.trim() }
+            : undefined,
       },
       {
         onSuccess: () => {
@@ -59,7 +67,7 @@ export function SourcesPage() {
                 onChange={(e) => setProvider(e.target.value as Provider)}
                 className="mt-1 w-full rounded border border-slate-300 px-3 py-2"
               >
-                {presets.data?.map((p) => (
+                {PROVIDER_LIST.map((p) => (
                   <option key={p.provider} value={p.provider}>
                     {p.label}
                     {!p.implemented ? " (예정)" : ""}
@@ -105,8 +113,8 @@ export function SourcesPage() {
               </label>
               <p className="mt-1 text-xs text-amber-700">
                 비밀번호는 입력하지 않습니다. 환경변수에 <code>CRED_&lt;REF&gt;_USER</code> /
-                <code>CRED_&lt;REF&gt;_PASS</code>로 두고, 첫 로그인은 <code>npm run login -- --source=&lt;REF&gt;</code>로
-                세션을 저장하세요. (Phase 5)
+                <code>CRED_&lt;REF&gt;_PASS</code>로 두고, 첫 로그인은{" "}
+                <code>npm run login -- --source=&lt;REF&gt;</code>로 세션을 저장하세요. (Phase 5)
               </p>
             </div>
           )}
@@ -119,7 +127,7 @@ export function SourcesPage() {
             {create.isPending ? "추가 중…" : "추가"}
           </button>
           {create.error && (
-            <p className="text-sm text-red-600">에러: {create.error.message}</p>
+            <p className="text-sm text-red-600">에러: {(create.error as Error).message}</p>
           )}
         </form>
       </section>
@@ -131,7 +139,7 @@ export function SourcesPage() {
         </h2>
         {sources.isLoading && <p className="text-slate-500">로딩…</p>}
         {sources.error && (
-          <p className="text-red-600">DB 연결 실패: {sources.error.message}</p>
+          <p className="text-red-600">불러오기 실패: {(sources.error as Error).message}</p>
         )}
         <ul className="space-y-2">
           {sources.data?.map((s) => (
@@ -158,9 +166,7 @@ export function SourcesPage() {
                     </span>
                   )}
                 </div>
-                <div className="truncate font-mono text-xs text-slate-400">
-                  {s.identifier}
-                </div>
+                <div className="truncate font-mono text-xs text-slate-400">{s.identifier}</div>
                 {s.lastError && (
                   <div className="truncate text-xs text-red-500">⚠ {s.lastError}</div>
                 )}
@@ -180,9 +186,7 @@ export function SourcesPage() {
                   onClick={() => toggle.mutate({ id: s.id, enabled: !s.enabled })}
                   className={
                     "rounded px-2 py-1 text-xs font-medium " +
-                    (s.enabled
-                      ? "bg-green-100 text-green-700"
-                      : "bg-slate-100 text-slate-500")
+                    (s.enabled ? "bg-green-100 text-green-700" : "bg-slate-100 text-slate-500")
                   }
                 >
                   {s.enabled ? "on" : "off"}
@@ -190,7 +194,7 @@ export function SourcesPage() {
                 <button
                   onClick={() => {
                     if (window.confirm(`삭제: ${s.label ?? s.identifier}?`))
-                      remove.mutate({ id: s.id });
+                      remove.mutate(s.id);
                   }}
                   className="rounded px-2 py-1 text-xs text-red-600 hover:bg-red-50"
                 >
