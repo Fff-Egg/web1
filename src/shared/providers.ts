@@ -67,6 +67,15 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
     hint: "로그인 없이 공개 글만 수집. 환경변수 X_RSS_BRIDGE 설정 또는 소스의 rssUrl 에 RSS 주소 입력 필요.",
     implemented: true,
   },
+  telegram: {
+    provider: "telegram",
+    label: "Telegram",
+    fetchType: "telegram",
+    requiresAuth: true,
+    placeholder: "@channel  또는  t.me/channel",
+    hint: "공개 채널/채팅의 새 메시지를 몇 분마다 묶어서 한 덩어리로 수집. 내 계정 세션 필요(npm run telegram:login).",
+    implemented: true,
+  },
   naver_premium: {
     provider: "naver_premium",
     label: "네이버 프리미엄콘텐츠",

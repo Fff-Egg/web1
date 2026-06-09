@@ -25,6 +25,7 @@ export const PROVIDERS = [
   "naver_premium",
   "fanding",
   "hankyung",
+  "telegram",
   "generic_rss",
   "generic_scrape",
 ] as const;
@@ -40,6 +41,7 @@ export const FETCH_TYPES = [
   "x_auth",
   "scrape",
   "scrape_auth",
+  "telegram",
 ] as const;
 export type FetchType = (typeof FETCH_TYPES)[number];
 
@@ -91,6 +93,8 @@ export interface SourceConfig {
   pollIntervalMin?: number;
   /** Max items to pull per fetch (rate-limit friendliness). */
   maxItems?: number;
+  /** Telegram: highest message id already collected (batch cursor). */
+  lastMessageId?: number;
   [key: string]: unknown;
 }
 

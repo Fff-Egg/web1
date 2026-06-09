@@ -18,6 +18,7 @@
     "worker:analyze": "tsx src/server/workers/analyze.ts",
     "worker:digest": "tsx src/server/workers/digest.ts",
     "login": "tsx src/server/auth/login.ts",
+    "telegram:login": "tsx src/server/telegram/login.ts",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx src/server/db/migrate.ts",
     "db:push": "drizzle-kit push",
@@ -41,6 +42,7 @@
     "react-dom": "^19.0.0",
     "rss-parser": "^3.13.0",
     "superjson": "^2.2.1",
+    "telegram": "^2.26.22",
     "tsx": "^4.19.0",
     "zod": "^3.24.0"
   },

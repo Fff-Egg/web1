@@ -6,6 +6,7 @@ import { substackAdapter } from "./substack.js";
 import { naverPremiumAdapter } from "./naverPremium.js";
 import { fandingAdapter } from "./fanding.js";
 import { xAdapter } from "./x.js";
+import { telegramAdapter } from "./telegram.js";
 
 /**
  * Register all source adapters here. Importing this module wires up the
@@ -19,6 +20,7 @@ registerAdapter(substackAdapter);
 registerAdapter(naverPremiumAdapter);
 registerAdapter(fandingAdapter);
 registerAdapter(xAdapter);
+registerAdapter(telegramAdapter);
 
 export * from "./registry.js";
 export * from "./types.js";
