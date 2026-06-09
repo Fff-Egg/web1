@@ -96,8 +96,10 @@ export function SettingsPage() {
       </section>
 
       <p className="text-xs text-slate-400">
-        분석을 실제로 실행하려면 백엔드 서버에 <code>ANTHROPIC_API_KEY</code>와 MySQL이 연결돼
-        있어야 합니다. 정적 데모에서는 지침이 이 브라우저에만 저장됩니다.
+        자동 분석을 실행하려면 MySQL과 LLM이 연결돼 있어야 합니다 — <code>ANTHROPIC_API_KEY</code>
+        (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>,
+        예: Groq 무료). 키 없이도 <strong>분석(수동)</strong> 탭으로 분석할 수 있습니다. 정적 데모에서는
+        지침이 이 브라우저에만 저장됩니다.
       </p>
     </div>
   );

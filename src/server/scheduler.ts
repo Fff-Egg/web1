@@ -3,7 +3,7 @@ import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
 import { generateDigest } from "./digest/digest.js";
 import { hasDb } from "./db/client.js";
-import { hasAnthropic } from "./analysis/anthropic.js";
+import { hasLLM } from "./analysis/anthropic.js";
 
 /**
  * Background schedulers. Phase 1 wires the collection loop. The analysis
@@ -24,7 +24,7 @@ export function startSchedulers(): void {
     } catch (err) {
       console.error("[scheduler] collect failed:", err);
     }
-    if (hasAnthropic()) {
+    if (hasLLM()) {
       try {
         const a = await runAnalysis();
         console.log(`[scheduler] analyze: analyzed=${a.analyzed} relevant=${a.relevant} errors=${a.errors}`);
@@ -32,7 +32,7 @@ export function startSchedulers(): void {
         console.error("[scheduler] analyze failed:", err);
       }
     } else {
-      console.warn("[scheduler] ANTHROPIC_API_KEY not set — analysis disabled.");
+      console.warn("[scheduler] no LLM configured — auto-analysis disabled (manual mode still works).");
     }
   };
 

@@ -2,7 +2,7 @@ import { and, gte, lt, eq, desc } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
-import { complete, hasAnthropic, ANALYSIS_MODEL } from "../analysis/anthropic.js";
+import { complete, hasLLM, ANALYSIS_MODEL } from "../analysis/anthropic.js";
 
 /** Today's date (YYYY-MM-DD) in KST. */
 export function kstToday(): string {
@@ -85,7 +85,7 @@ export async function generateDigest(
   }
 
   let markdown: string;
-  if (hasAnthropic()) {
+  if (hasLLM()) {
     const cfg = await settingsRepo.getAnalysisConfig();
     const user =
       `날짜: ${date}\n\n분석된 글 (${rows.length}건):\n` +

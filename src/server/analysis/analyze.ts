@@ -6,7 +6,7 @@ import { settingsRepo } from "../repo/settings.js";
 import {
   complete,
   parseJsonLoose,
-  hasAnthropic,
+  hasLLM,
   FILTER_MODEL,
   ANALYSIS_MODEL,
 } from "./anthropic.js";
@@ -86,8 +86,8 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
     console.warn("[analyze] no DATABASE_URL — skipping.");
     return { analyzed: 0, relevant: 0, errors: 0 };
   }
-  if (!hasAnthropic()) {
-    console.warn("[analyze] ANTHROPIC_API_KEY not set — skipping.");
+  if (!hasLLM()) {
+    console.warn("[analyze] no LLM configured (ANTHROPIC_API_KEY or LLM_BASE_URL+LLM_API_KEY) — skipping.");
     return { analyzed: 0, relevant: 0, errors: 0 };
   }
 
