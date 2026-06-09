@@ -56,7 +56,12 @@ npm run server         # serves the whole site on http://localhost:3000
 npm run dev            # client (5173) + server (3000)
 ```
 
-### With MySQL (persistent)
+### Deploy a real 24/7 server
+See **[DEPLOY.md](./DEPLOY.md)** — one-click-ish deploy to Railway (Node + MySQL),
+all in the browser. Needs an `ANTHROPIC_API_KEY`. `npm start` runs migrations
+then serves the app on `$PORT`.
+
+### With MySQL (persistent, local)
 ```bash
 cp .env.example .env      # set DATABASE_URL, ANTHROPIC_API_KEY, …
 npm run db:generate       # generate SQL migration from schema (already committed)

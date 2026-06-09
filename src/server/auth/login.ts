@@ -1,7 +1,6 @@
 import "dotenv/config";
 import readline from "node:readline";
 import { eq } from "drizzle-orm";
-import { chromium } from "playwright";
 import { db, hasDb } from "../db/client.js";
 import { sources } from "../db/schema.js";
 import { ensureSessionsDir, sessionPath } from "./session.js";
@@ -43,6 +42,7 @@ async function main() {
   }
 
   ensureSessionsDir();
+  const { chromium } = await import("playwright");
   const browser = await chromium.launch({ headless: false });
   const context = await browser.newContext();
   const page = await context.newPage();

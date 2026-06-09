@@ -1,6 +1,12 @@
-import { chromium } from "playwright";
 import { storageStateFor } from "./session.js";
 import { SessionRequiredError } from "../adapters/types.js";
+
+// Lazy-load Playwright so the server boots on hosts without a browser
+// installed; it's only needed when actually rendering an authenticated page.
+async function getChromium() {
+  const { chromium } = await import("playwright");
+  return chromium;
+}
 
 /**
  * Render a page using a source's stored login session and extract text.
@@ -23,6 +29,7 @@ export async function fetchWithSession(opts: {
     );
   }
 
+  const chromium = await getChromium();
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ storageState: statePath });
@@ -74,6 +81,7 @@ export async function listLinksWithSession(opts: {
       "로그인 세션이 없습니다. `npm run login -- --source=<id>` 로 먼저 로그인하세요.",
     );
   }
+  const chromium = await getChromium();
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ storageState: statePath });
@@ -125,6 +133,7 @@ export async function extractItemsWithSession(opts: {
       "로그인 세션이 없습니다. `npm run login -- --source=<id>` 로 먼저 로그인하세요.",
     );
   }
+  const chromium = await getChromium();
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ storageState: statePath });
