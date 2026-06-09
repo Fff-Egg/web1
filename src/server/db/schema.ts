@@ -137,6 +137,8 @@ export const analyses = mysqlTable(
     relevant: boolean("relevant").notNull().default(false),
     summary: text("summary"),
     implications: text("implications"),
+    /** Full multi-section analysis report (markdown), per the user's framework. */
+    fullText: text("full_text"),
     tickers: json("tickers").$type<string[]>(),
     themes: json("themes").$type<string[]>(),
     impact: mysqlEnum("impact", IMPACTS),

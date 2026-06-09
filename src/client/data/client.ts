@@ -22,6 +22,7 @@ export interface FeedItem {
   provider: string;
   summary: string | null;
   implications: string | null;
+  fullText: string | null;
   tickers: string[] | null;
   themes: string[] | null;
   impact: Impact | null;
@@ -96,6 +97,7 @@ export interface ManualAnalysisInput {
   articleId: number;
   summary: string;
   implications: string;
+  fullText?: string;
   tickers: string[];
   themes: string[];
   impact: Impact;
@@ -267,6 +269,7 @@ function makeStaticApi(): DataApi {
         provider: art?.provider ?? "generic_rss",
         summary: input.summary,
         implications: input.implications,
+        fullText: input.fullText ?? null,
         tickers: input.tickers,
         themes: input.themes,
         impact: input.impact,
@@ -345,6 +348,7 @@ const SAMPLE_FEED: FeedItem[] = [
     provider: "generic_rss",
     summary: "데이터센터향 GPU 수요가 예상을 상회한다는 내용. 공급은 여전히 타이트.",
     implications: "AI 인프라 투자 사이클이 지속된다는 내 논제를 강화. 관련 밸류체인에 우호적.",
+    fullText: "## 한 줄 판정\n수요 가이던스 상향은 AI 인프라 스레드를 **강화**한다. 증거 티어 = 경영진 주장.\n\n## 신호의 정체\n경영진 가이던스 상향(경영진 주장 티어). 1차 출처(컨콜 트랜스크립트) 검증 필요.",
     tickers: ["NVDA"],
     themes: ["AI 반도체"],
     impact: "bullish",
@@ -359,6 +363,7 @@ const SAMPLE_FEED: FeedItem[] = [
     provider: "hankyung",
     summary: "중앙은행이 추가 인상에 신중. 시장은 동결을 기대.",
     implications: "성장주 비중이 높은 내 포트폴리오에 중립~소폭 우호적.",
+    fullText: null,
     tickers: [],
     themes: ["매크로", "금리"],
     impact: "neutral",

@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
@@ -91,6 +92,7 @@ export function FeedPage() {
 
 function FeedCard({ item }: { item: FeedItem }) {
   const [open, setOpen] = useState(false);
+  const [showFull, setShowFull] = useState(false);
   return (
     <li className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -141,6 +143,23 @@ function FeedCard({ item }: { item: FeedItem }) {
             <p className="mt-1 rounded bg-blue-50 p-2 text-sm text-slate-700">
               {item.implications}
             </p>
+          )}
+        </div>
+      )}
+
+      {item.fullText && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowFull((v) => !v)}
+            className="text-xs font-medium text-slate-700 hover:underline"
+          >
+            {showFull ? "▾ 전체 분석 접기" : "▸ 전체 분석 보기"}
+          </button>
+          {showFull && (
+            <div
+              className="prose-digest mt-1 rounded border border-slate-200 bg-slate-50 p-3 text-sm"
+              dangerouslySetInnerHTML={{ __html: marked.parse(item.fullText) as string }}
+            />
           )}
         </div>
       )}

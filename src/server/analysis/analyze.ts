@@ -65,6 +65,7 @@ export async function filterRelevant(
 export interface DeepAnalysis {
   summary: string;
   implications: string;
+  fullText: string;
   tickers: string[];
   themes: string[];
   impact: Impact;
@@ -84,15 +85,17 @@ export async function deepAnalyze(
     model: cfg.analysisModel || ANALYSIS_MODEL(),
     system,
     user,
-    maxTokens: 1024,
+    // Large enough for a full multi-section report in `fullAnalysis`.
+    maxTokens: Number(process.env.ANALYSIS_MAX_TOKENS ?? 4096),
   });
-  const parsed = parseJsonLoose<Partial<DeepAnalysis>>(text);
+  const parsed = parseJsonLoose<Partial<DeepAnalysis> & { fullAnalysis?: string }>(text);
   if (!parsed) return null;
   const impact: Impact =
     parsed.impact === "bullish" || parsed.impact === "bearish" ? parsed.impact : "neutral";
   return {
     summary: parsed.summary ?? "",
     implications: parsed.implications ?? "",
+    fullText: parsed.fullAnalysis ?? "",
     tickers: Array.isArray(parsed.tickers) ? parsed.tickers.map(String) : [],
     themes: Array.isArray(parsed.themes) ? parsed.themes.map(String) : [],
     impact,
@@ -146,6 +149,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         relevant: true,
         summary: deep?.summary,
         implications: deep?.implications,
+        fullText: deep?.fullText,
         tickers: deep?.tickers ?? [],
         themes: deep?.themes ?? [],
         impact: deep?.impact ?? "neutral",

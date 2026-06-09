@@ -40,6 +40,7 @@ export const feedRouter = router({
           provider: sources.provider,
           summary: analyses.summary,
           implications: analyses.implications,
+          fullText: analyses.fullText,
           tickers: analyses.tickers,
           themes: analyses.themes,
           impact: analyses.impact,

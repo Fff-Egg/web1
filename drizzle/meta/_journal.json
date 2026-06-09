@@ -15,6 +15,13 @@
       "when": 1780985069273,
       "tag": "0001_spooky_absorbing_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1781010187014,
+      "tag": "0002_premium_anthem",
+      "breakpoints": true
     }
   ]
 }

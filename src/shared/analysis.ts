@@ -25,12 +25,13 @@ export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
 };
 
 /** The fixed JSON output contract appended to the user's instructions for deep analysis. */
-export const ANALYSIS_OUTPUT_CONTRACT = `주어진 글에 대해 아래 JSON으로만 응답한다 (마크다운/코드펜스/설명 금지):
+export const ANALYSIS_OUTPUT_CONTRACT = `주어진 글을 위 지침/프레임워크에 따라 분석하고, 아래 JSON 하나로만 응답한다 (코드펜스/추가 설명 금지):
 {
-  "summary": "핵심을 한국어 3문장 이내로",
-  "implications": "내 관점에서 왜 중요한지. 내 논제를 강화/약화하는지 명시",
+  "fullAnalysis": "위 지침의 출력 형식을 모두 따른 완전한 분석 리포트. 한국어 마크다운, 판정-우선(verdict-first), 모든 섹션 포함. 줄바꿈은 \\n 으로.",
+  "summary": "fullAnalysis의 핵심을 한국어 3문장 이내로 (피드 카드 요약용)",
+  "implications": "내 논제를 강화/약화/반증하는지 한두 문장",
   "tickers": ["관련 종목 티커, 없으면 빈 배열"],
-  "themes": ["관련 테마"],
+  "themes": ["관련 테마/스레드"],
   "impact": "bullish | bearish | neutral"
 }`;
 
@@ -43,6 +44,7 @@ export type ImpactValue = "bullish" | "bearish" | "neutral";
 export interface ParsedAnalysis {
   summary: string;
   implications: string;
+  fullText: string;
   tickers: string[];
   themes: string[];
   impact: ImpactValue;
@@ -83,6 +85,7 @@ export function parseAnalysisJson(text: string): ParsedAnalysis | null {
   return {
     summary: typeof obj.summary === "string" ? obj.summary : "",
     implications: typeof obj.implications === "string" ? obj.implications : "",
+    fullText: typeof obj.fullAnalysis === "string" ? obj.fullAnalysis : "",
     tickers: Array.isArray(obj.tickers) ? obj.tickers.map(String) : [],
     themes: Array.isArray(obj.themes) ? obj.themes.map(String) : [],
     impact,
