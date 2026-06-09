@@ -8,7 +8,8 @@ const feedSelect = {
   id: articles.id,
   title: articles.title,
   url: articles.url,
-  body: articles.body,
+  // Only carry the full body for telegram (no original link); keeps the feed light.
+  body: sql<string | null>`CASE WHEN ${sources.provider} = 'telegram' THEN ${articles.body} ELSE NULL END`,
   author: articles.author,
   publishedAt: articles.publishedAt,
   sourceLabel: sources.label,
