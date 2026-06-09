@@ -71,9 +71,11 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
     provider: "telegram",
     label: "Telegram",
     fetchType: "telegram",
-    requiresAuth: true,
-    placeholder: "@channel  또는  t.me/channel",
-    hint: "공개 채널/채팅의 새 메시지를 몇 분마다 묶어서 한 덩어리로 수집. 내 계정 세션 필요(npm run telegram:login).",
+    // Auth is a global env session (TELEGRAM_SESSION), not a per-source login,
+    // so don't show the per-source "로그인 필요" UI.
+    requiresAuth: false,
+    placeholder: "@channel  또는  비공개채널 ID(-100…)",
+    hint: "공개 채널은 @이름, 비공개는 숫자 ID. 새 메시지를 몇 분마다 묶어 한 덩어리로 수집. 서버에 TELEGRAM_SESSION 필요.",
     implemented: true,
   },
   naver_premium: {
