@@ -1,5 +1,7 @@
+import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
+import { generateDigest } from "./digest/digest.js";
 import { hasDb } from "./db/client.js";
 import { hasAnthropic } from "./analysis/anthropic.js";
 
@@ -38,5 +40,16 @@ export function startSchedulers(): void {
   void tick();
   setInterval(tick, intervalMin * 60_000);
 
-  // Phase 4: digest cron at DIGEST_HOUR (KST).
+  // Evening digest cron at DIGEST_HOUR (KST).
+  const digestHour = Number(process.env.DIGEST_HOUR ?? 21);
+  cron.schedule(
+    `0 ${digestHour} * * *`,
+    () => {
+      generateDigest()
+        .then((r) => r && console.log(`[scheduler] digest: ${r.date} (${r.itemCount} items)`))
+        .catch((err) => console.error("[scheduler] digest failed:", err));
+    },
+    { timezone: "Asia/Seoul" },
+  );
+  console.log(`[scheduler] digest cron at ${digestHour}:00 KST`);
 }

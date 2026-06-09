@@ -74,6 +74,18 @@ export interface DataApi {
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
+  listDigestDates(): Promise<DigestDate[]>;
+  getDigest(date?: string): Promise<DigestFull | null>;
+}
+
+export interface DigestDate {
+  date: string;
+  createdAt: string | Date;
+}
+export interface DigestFull {
+  date: string;
+  markdown: string;
+  meta?: Record<string, unknown> | null;
 }
 
 const STATIC = import.meta.env.VITE_STATIC_DEMO === "true";
@@ -103,6 +115,8 @@ function makeTrpcApi(): DataApi {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
+    listDigestDates: () => client.digest.dates.query() as Promise<DigestDate[]>,
+    getDigest: (date) => client.digest.get.query({ date }) as Promise<DigestFull | null>,
   };
 }
 
@@ -190,6 +204,12 @@ function makeStaticApi(): DataApi {
       // Static demo has no backend/Claude — show example cards so the UI is visible.
       return SAMPLE_FEED;
     },
+    async listDigestDates() {
+      return [{ date: SAMPLE_DIGEST.date, createdAt: new Date().toISOString() }];
+    },
+    async getDigest() {
+      return SAMPLE_DIGEST;
+    },
   };
 }
 
@@ -225,6 +245,26 @@ const SAMPLE_FEED: FeedItem[] = [
     impact: "neutral",
   },
 ];
+
+const SAMPLE_DIGEST: DigestFull = {
+  date: new Date().toLocaleDateString("en-CA"),
+  markdown: `# 일일 다이제스트 (예시)
+
+## 오늘의 핵심 3가지
+- AI 데이터센터 GPU 수요 가이던스 상향 — 인프라 사이클 지속 신호.
+- 중앙은행 금리 동결 시그널 — 성장주 밸류에이션에 우호적.
+- 환율 변동성 확대 — 수출주 단기 변수.
+
+## 종목·테마별 업데이트
+- **AI 반도체 (상승)**: 데이터센터 수요 강세.
+- **매크로·금리 (중립)**: 동결 기대.
+
+## 주목할 신규 글
+- [엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향](https://example.com/sample-1) — 출처: 예시 소스 (상승)
+- [금리 동결 시그널, 성장주에 우호적](https://example.com/sample-2) — 출처: 한국경제 (중립)
+
+> 예시 데이터입니다. 실서버에서 ANTHROPIC_API_KEY로 분석이 돌면 실제 출처·링크가 채워집니다.`,
+};
 
 function seedRows(): SourceRow[] {
   const now = Date.now();

@@ -9,3 +9,14 @@
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
+
+/* Lightweight markdown styling for the Daily Digest. */
+.prose-digest h1 { @apply text-xl font-bold mt-2 mb-3; }
+.prose-digest h2 { @apply text-lg font-semibold mt-5 mb-2; }
+.prose-digest h3 { @apply text-base font-semibold mt-4 mb-1; }
+.prose-digest p { @apply my-2 text-slate-700; }
+.prose-digest ul { @apply list-disc pl-5 my-2 space-y-1 text-slate-700; }
+.prose-digest ol { @apply list-decimal pl-5 my-2 space-y-1 text-slate-700; }
+.prose-digest a { @apply text-blue-600 hover:underline; }
+.prose-digest strong { @apply font-semibold text-slate-900; }
+.prose-digest blockquote { @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-500 text-sm; }

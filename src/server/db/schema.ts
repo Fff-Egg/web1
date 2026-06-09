@@ -152,7 +152,7 @@ export const analyses = mysqlTable(
  */
 export const digests = mysqlTable("digests", {
   id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
-  date: date("date").notNull(),
+  date: date("date", { mode: "string" }).notNull(),
   markdown: text("markdown").notNull(),
   meta: json("meta").$type<Record<string, unknown>>(),
   createdAt: timestamp("created_at").notNull().defaultNow(),

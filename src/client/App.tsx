@@ -4,6 +4,7 @@ import { api } from "./data/client.js";
 import { SourcesPage } from "./pages/SourcesPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 import { FeedPage } from "./pages/FeedPage.js";
+import { DigestPage } from "./pages/DigestPage.js";
 
 type Tab = "sources" | "feed" | "digest" | "settings";
 
@@ -58,10 +59,8 @@ export function App() {
 
       {tab === "sources" && <SourcesPage />}
       {tab === "feed" && <FeedPage />}
+      {tab === "digest" && <DigestPage />}
       {tab === "settings" && <SettingsPage />}
-      {tab === "digest" && (
-        <p className="text-slate-500">Daily Digest 뷰는 다음 단계에서 제공됩니다.</p>
-      )}
     </div>
   );
 }

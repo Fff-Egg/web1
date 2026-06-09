@@ -135,6 +135,19 @@ function FeedCard({ item }: { item: FeedItem }) {
           )}
         </div>
       )}
+
+      {item.url && (
+        <div className="mt-3 border-t border-slate-100 pt-2">
+          <a
+            href={item.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-xs font-medium text-blue-600 hover:underline"
+          >
+            원문 보기 ↗ <span className="text-slate-400">({item.sourceLabel ?? item.provider})</span>
+          </a>
+        </div>
+      )}
     </li>
   );
 }
