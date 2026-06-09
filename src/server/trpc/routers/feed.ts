@@ -32,7 +32,7 @@ export const feedRouter = router({
           impact: z.enum(IMPACTS).optional(),
           ticker: z.string().optional(),
           theme: z.string().optional(),
-          limit: z.number().min(1).max(200).default(100),
+          limit: z.number().min(1).max(2000).default(500),
         })
         .optional(),
     )
@@ -65,7 +65,7 @@ export const feedRouter = router({
       .innerJoin(sources, eq(articles.sourceId, sources.id))
       .where(and(eq(analyses.relevant, true), isNotNull(articles.deletedAt)))
       .orderBy(desc(articles.deletedAt))
-      .limit(200);
+      .limit(1000);
   }),
 
   /** Move a feed item to trash (soft delete). */
