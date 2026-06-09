@@ -3,11 +3,19 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  /* Force light form controls so dark-mode phones don't render inputs black. */
+  color-scheme: light;
 }
 
 body {
   @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+/* Keep inputs readable everywhere (esp. mobile dark mode). */
+input,
+textarea,
+select {
+  @apply bg-white text-slate-900;
 }
 
 /* Lightweight markdown styling for the Daily Digest. */

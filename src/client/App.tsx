@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./data/client.js";
 import { SourcesPage } from "./pages/SourcesPage.js";
@@ -19,8 +19,17 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "trash", label: "휴지통" },
 ];
 
+const TAB_KEY = "feedwatch.activeTab";
+
 export function App() {
-  const [tab, setTab] = useState<Tab>("sources");
+  // Remember the last tab across refreshes; default to Feed.
+  const [tab, setTab] = useState<Tab>(() => {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(TAB_KEY) : null;
+    return saved && TABS.some((t) => t.id === saved) ? (saved as Tab) : "feed";
+  });
+  useEffect(() => {
+    localStorage.setItem(TAB_KEY, tab);
+  }, [tab]);
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 
