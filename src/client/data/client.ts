@@ -20,6 +20,7 @@ export interface FeedItem {
   publishedAt: string | Date | null;
   sourceLabel: string | null;
   provider: string;
+  body?: string | null;
   summary: string | null;
   implications: string | null;
   fullText: string | null;

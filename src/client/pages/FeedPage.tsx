@@ -93,6 +93,7 @@ export function FeedPage() {
 function FeedCard({ item }: { item: FeedItem }) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
+  const [showBody, setShowBody] = useState(false);
   const qc = useQueryClient();
   const del = useMutation({
     mutationFn: () => api.deleteFeedItem(item.id),
@@ -158,6 +159,22 @@ function FeedCard({ item }: { item: FeedItem }) {
             <p className="mt-1 rounded bg-blue-50 p-2 text-sm text-slate-700">
               {item.implications}
             </p>
+          )}
+        </div>
+      )}
+
+      {item.body && (
+        <div className="mt-2">
+          <button
+            onClick={() => setShowBody((v) => !v)}
+            className="text-xs font-medium text-blue-600 hover:underline"
+          >
+            {showBody ? "▾ 원문 내용 접기" : "▸ 원문 내용 보기"}
+          </button>
+          {showBody && (
+            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
+              {item.body}
+            </pre>
           )}
         </div>
       )}

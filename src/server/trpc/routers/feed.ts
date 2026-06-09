@@ -8,6 +8,7 @@ const feedSelect = {
   id: articles.id,
   title: articles.title,
   url: articles.url,
+  body: articles.body,
   author: articles.author,
   publishedAt: articles.publishedAt,
   sourceLabel: sources.label,

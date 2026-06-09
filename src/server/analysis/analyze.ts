@@ -54,12 +54,14 @@ export async function filterRelevant(
     `[요약 지침]\n${summaryGuide}\n\n` +
     `위 [관련성 판단 기준]으로 이 글이 관련 있는지 판단하고, 관련 있으면 [요약 지침]에 따라 요약하라. ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "summary": "요약 (관련 없으면 빈 문자열)"}`;
-  const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, 1500)}`;
+  // Give the summarizer enough of the (possibly batched) body to summarize well.
+  const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
+  const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
   const text = await complete({
     model: cfg.filterModel || FILTER_MODEL(),
     system,
     user,
-    maxTokens: 400,
+    maxTokens: 600,
   });
   const parsed = parseJsonLoose<{ relevant?: boolean; summary?: string }>(text);
   const summary = typeof parsed?.summary === "string" ? parsed.summary : "";
