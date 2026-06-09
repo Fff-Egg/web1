@@ -13,11 +13,19 @@ import { getTelegram, hasTelegram, ensureEntities } from "../telegram/client.js"
  *   -1001234567890    → -1001234567890 (number)
  */
 function parseRef(identifier: string): string | number {
-  const s = identifier
+  let s = identifier
     .trim()
-    .replace(/^https?:\/\/t\.me\//i, "")
-    .replace(/^@/, "")
-    .replace(/\/.*$/, "");
+    .replace(/^https?:\/\//i, "")
+    .replace(/^t\.me\//i, "")
+    .replace(/^@/, "");
+  // Invite links (t.me/+hash, joinchat/hash) are join links, not readable refs.
+  if (/^\+/.test(s) || /^joinchat\//i.test(s)) {
+    throw new Error(
+      "초대링크는 읽기용이 아닙니다 — 비공개 채널은 숫자 ID(-100…)를 넣으세요. " +
+        "(그 계정으로 가입 후, npm run telegram:login 목록 또는 @getidsbot 로 ID 확인)",
+    );
+  }
+  s = s.replace(/\/.*$/, "");
   return /^-?\d+$/.test(s) ? Number(s) : s;
 }
 
