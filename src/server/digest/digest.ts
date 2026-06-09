@@ -1,4 +1,4 @@
-import { and, gte, lt, eq, desc } from "drizzle-orm";
+import { and, gte, lt, eq, desc, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
@@ -9,10 +9,11 @@ export function kstToday(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 }
 
-/** [start, end) UTC instants bounding the given KST calendar day. */
-function kstDayBounds(date: string): { start: Date; end: Date } {
-  const start = new Date(`${date}T00:00:00+09:00`);
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+/** [start, end) UTC instants bounding the KST days [startDate, endDate] inclusive. */
+function kstRangeBounds(startDate: string, endDate: string): { start: Date; end: Date } {
+  const start = new Date(`${startDate}T00:00:00+09:00`);
+  // end is exclusive → midnight after the endDate
+  const end = new Date(new Date(`${endDate}T00:00:00+09:00`).getTime() + 24 * 60 * 60 * 1000);
   return { start, end };
 }
 
@@ -56,19 +57,31 @@ function sourceLinks(rows: DigestItem[]): string {
   return lines.join("\n");
 }
 
+export interface GenerateDigestOpts {
+  /** KST date YYYY-MM-DD (inclusive). Defaults to today. */
+  start?: string;
+  /** KST date YYYY-MM-DD (inclusive). Defaults to `start`. */
+  end?: string;
+  /** Display name. Defaults to the period string. */
+  title?: string;
+}
+
 /**
- * Generate (or regenerate) the daily digest for a KST date. Gathers that day's
- * relevant analyses, synthesizes a markdown report (with source attribution +
- * original links), and upserts it into `digests`. Returns null if nothing to do.
+ * Generate a saved digest over a KST date range. Gathers that period's relevant
+ * (non-trashed) picks, synthesizes a markdown report (2차 지침) with source
+ * links, and inserts a new `digests` row. Returns null if nothing to do.
  */
 export async function generateDigest(
-  date: string = kstToday(),
-): Promise<{ date: string; itemCount: number } | null> {
+  opts: GenerateDigestOpts = {},
+): Promise<{ id: number; title: string; itemCount: number } | null> {
   if (!hasDb) {
     console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
   }
-  const { start, end } = kstDayBounds(date);
+  const startDate = opts.start ?? kstToday();
+  const endDate = opts.end ?? startDate;
+  const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
+  const { start, end } = kstRangeBounds(startDate, endDate);
 
   const rows: DigestItem[] = await db
     .select({
@@ -87,6 +100,7 @@ export async function generateDigest(
     .where(
       and(
         eq(analyses.relevant, true),
+        isNull(articles.deletedAt),
         gte(analyses.createdAt, start),
         lt(analyses.createdAt, end),
       ),
@@ -97,7 +111,7 @@ export async function generateDigest(
     );
 
   if (rows.length === 0) {
-    console.log(`[digest] ${date}: no relevant analyses, skipping.`);
+    console.log(`[digest] ${title}: no relevant picks, skipping.`);
     return null;
   }
 
@@ -107,7 +121,7 @@ export async function generateDigest(
     // 2차 지침: how to synthesize the day's picks (user-editable in Settings).
     const system = cfg.digestInstructions?.trim() || DIGEST_SYSTEM;
     const user =
-      `날짜: ${date}\n\n오늘 1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
+      `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows
         .map(
           (it, i) =>
@@ -127,20 +141,26 @@ export async function generateDigest(
     markdown = `${report.trim()}\n${sourceLinks(rows)}`;
   } else {
     // No API key — build a simple deterministic digest so attribution still works.
-    markdown = buildFallbackMarkdown(date, rows);
+    markdown = buildFallbackMarkdown(title, rows);
   }
 
-  await db
+  const [res] = await db
     .insert(digests)
-    .values({ date, markdown, meta: { itemCount: rows.length } })
-    .onDuplicateKeyUpdate({ set: { markdown, meta: { itemCount: rows.length } } });
+    .values({
+      title,
+      periodStart: startDate,
+      periodEnd: endDate,
+      markdown,
+      meta: { itemCount: rows.length },
+    })
+    .$returningId();
 
-  console.log(`[digest] ${date}: saved (${rows.length} items).`);
-  return { date, itemCount: rows.length };
+  console.log(`[digest] "${title}": saved (${rows.length} items).`);
+  return { id: Number(res.id), title, itemCount: rows.length };
 }
 
-function buildFallbackMarkdown(date: string, rows: DigestItem[]): string {
-  const lines = [`# 일일 다이제스트 — ${date}`, "", "## 주목할 신규 글", ""];
+function buildFallbackMarkdown(title: string, rows: DigestItem[]): string {
+  const lines = [`# ${title}`, "", "## 주목할 신규 글", ""];
   for (const it of rows) {
     const link = it.url ? `[${it.title ?? "(제목없음)"}](${it.url})` : it.title ?? "(제목없음)";
     lines.push(`- ${link} — 출처: ${it.source} (${it.impact ?? "neutral"})`);

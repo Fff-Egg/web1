@@ -6,8 +6,9 @@ import { SettingsPage } from "./pages/SettingsPage.js";
 import { FeedPage } from "./pages/FeedPage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
+import { TrashPage } from "./pages/TrashPage.js";
 
-type Tab = "sources" | "analyze" | "feed" | "digest" | "settings";
+type Tab = "sources" | "analyze" | "feed" | "digest" | "settings" | "trash";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "sources", label: "Sources" },
@@ -15,6 +16,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "feed", label: "Feed" },
   { id: "digest", label: "Daily Digest" },
   { id: "settings", label: "Settings" },
+  { id: "trash", label: "휴지통" },
 ];
 
 export function App() {
@@ -64,6 +66,7 @@ export function App() {
       {tab === "feed" && <FeedPage />}
       {tab === "digest" && <DigestPage />}
       {tab === "settings" && <SettingsPage />}
+      {tab === "trash" && <TrashPage />}
     </div>
   );
 }

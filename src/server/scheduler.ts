@@ -46,7 +46,7 @@ export function startSchedulers(): void {
     `0 ${digestHour} * * *`,
     () => {
       generateDigest()
-        .then((r) => r && console.log(`[scheduler] digest: ${r.date} (${r.itemCount} items)`))
+        .then((r) => r && console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`))
         .catch((err) => console.error("[scheduler] digest failed:", err));
     },
     { timezone: "Asia/Seoul" },

@@ -1,37 +1,93 @@
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests } from "../../db/schema.js";
 import { generateDigest } from "../../digest/digest.js";
 
-/** digest router — list available dates, fetch one, or generate on demand. */
+const summarySelect = {
+  id: digests.id,
+  title: digests.title,
+  periodStart: digests.periodStart,
+  periodEnd: digests.periodEnd,
+  createdAt: digests.createdAt,
+};
+
+/** digest router — saved reports with custom period + name, plus trash. */
 export const digestRouter = router({
-  /** Available digest dates (newest first). */
-  dates: publicProcedure.query(async () => {
+  /** Saved (non-trashed) digests, newest first. */
+  list: publicProcedure.query(async () => {
     if (!hasDb) return [];
     return db
-      .select({ date: digests.date, createdAt: digests.createdAt })
+      .select(summarySelect)
       .from(digests)
-      .orderBy(desc(digests.date));
+      .where(isNull(digests.deletedAt))
+      .orderBy(desc(digests.createdAt));
   }),
 
-  /** A single digest by date (YYYY-MM-DD), or the latest if omitted. */
+  /** Soft-deleted digests (trash). */
+  trash: publicProcedure.query(async () => {
+    if (!hasDb) return [];
+    return db
+      .select(summarySelect)
+      .from(digests)
+      .where(isNotNull(digests.deletedAt))
+      .orderBy(desc(digests.createdAt));
+  }),
+
+  /** A single digest by id, or the latest non-trashed one if omitted. */
   get: publicProcedure
-    .input(z.object({ date: z.string().optional() }).optional())
+    .input(z.object({ id: z.number().optional() }).optional())
     .query(async ({ input }) => {
       if (!hasDb) return null;
-      const q = db.select().from(digests);
-      const rows = input?.date
-        ? await q.where(eq(digests.date, input.date)).limit(1)
-        : await q.orderBy(desc(digests.date)).limit(1);
+      const rows = input?.id
+        ? await db.select().from(digests).where(eq(digests.id, input.id)).limit(1)
+        : await db
+            .select()
+            .from(digests)
+            .where(isNull(digests.deletedAt))
+            .orderBy(desc(digests.createdAt))
+            .limit(1);
       return rows[0] ?? null;
     }),
 
-  /** Manually (re)generate a digest for a date (defaults to today KST). */
+  /** Generate a new saved digest over a KST date range. */
   generate: publicProcedure
-    .input(z.object({ date: z.string().optional() }).optional())
+    .input(
+      z
+        .object({
+          start: z.string().optional(),
+          end: z.string().optional(),
+          title: z.string().optional(),
+        })
+        .optional(),
+    )
+    .mutation(async ({ input }) => generateDigest(input ?? {})),
+
+  /** Move a digest to trash. */
+  delete: publicProcedure
+    .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
-      return generateDigest(input?.date);
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      await db.update(digests).set({ deletedAt: new Date() }).where(eq(digests.id, input.id));
+      return { ok: true };
+    }),
+
+  /** Restore from trash. */
+  restore: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      await db.update(digests).set({ deletedAt: null }).where(eq(digests.id, input.id));
+      return { ok: true };
+    }),
+
+  /** Permanently delete (only from trash). */
+  purge: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      await db.delete(digests).where(and(eq(digests.id, input.id), isNotNull(digests.deletedAt)));
+      return { ok: true };
     }),
 });

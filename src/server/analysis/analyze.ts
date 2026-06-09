@@ -1,4 +1,4 @@
-import { sql, desc } from "drizzle-orm";
+import { sql, desc, and, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { articles, analyses } from "../db/schema.js";
 import type { Article, AnalysisConfig, Impact } from "../db/schema.js";
@@ -123,7 +123,12 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
   const pending = await db
     .select()
     .from(articles)
-    .where(sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`)
+    .where(
+      and(
+        sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`,
+        isNull(articles.deletedAt),
+      ),
+    )
     .orderBy(desc(articles.id))
     .limit(BATCH);
 

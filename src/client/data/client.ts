@@ -75,9 +75,17 @@ export interface DataApi {
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
-  listDigestDates(): Promise<DigestDate[]>;
-  getDigest(date?: string): Promise<DigestFull | null>;
-  generateDigest(date?: string): Promise<{ date: string; itemCount: number } | null>;
+  trashFeed(): Promise<FeedItem[]>;
+  deleteFeedItem(id: number): Promise<void>;
+  restoreFeedItem(id: number): Promise<void>;
+  purgeFeedItem(id: number): Promise<void>;
+  listDigests(): Promise<DigestSummary[]>;
+  trashDigests(): Promise<DigestSummary[]>;
+  getDigest(id?: number): Promise<DigestFull | null>;
+  generateDigest(opts?: GenerateDigestOpts): Promise<{ id: number; title: string; itemCount: number } | null>;
+  deleteDigest(id: number): Promise<void>;
+  restoreDigest(id: number): Promise<void>;
+  purgeDigest(id: number): Promise<void>;
   listSessions(): Promise<SessionInfo[]>;
   listPending(): Promise<PendingArticle[]>;
   saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
@@ -109,12 +117,23 @@ export interface SessionInfo {
   hasSession: boolean;
 }
 
-export interface DigestDate {
-  date: string;
+export interface GenerateDigestOpts {
+  start?: string;
+  end?: string;
+  title?: string;
+}
+export interface DigestSummary {
+  id: number;
+  title: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
   createdAt: string | Date;
 }
 export interface DigestFull {
-  date: string;
+  id: number;
+  title: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
   markdown: string;
   meta?: Record<string, unknown> | null;
 }
@@ -146,10 +165,18 @@ function makeTrpcApi(): DataApi {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
-    listDigestDates: () => client.digest.dates.query() as Promise<DigestDate[]>,
-    getDigest: (date) => client.digest.get.query({ date }) as Promise<DigestFull | null>,
-    generateDigest: (date) =>
-      client.digest.generate.mutate({ date }) as Promise<{ date: string; itemCount: number } | null>,
+    trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
+    deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
+    restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
+    purgeFeedItem: async (id) => { await client.feed.purge.mutate({ id }); },
+    listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
+    trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
+    getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
+    generateDigest: (opts) =>
+      client.digest.generate.mutate(opts ?? {}) as Promise<{ id: number; title: string; itemCount: number } | null>,
+    deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
+    restoreDigest: async (id) => { await client.digest.restore.mutate({ id }); },
+    purgeDigest: async (id) => { await client.digest.purge.mutate({ id }); },
     listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
     listPending: () => client.manual.pending.query() as Promise<PendingArticle[]>,
     saveManualAnalysis: async (input) => {
@@ -245,15 +272,35 @@ function makeStaticApi(): DataApi {
       // Static demo: manually-saved analyses first, then example cards.
       return [...loadSavedFeed(), ...SAMPLE_FEED];
     },
-    async listDigestDates() {
-      return [{ date: SAMPLE_DIGEST.date, createdAt: new Date().toISOString() }];
+    async trashFeed() {
+      return [];
+    },
+    async deleteFeedItem() {},
+    async restoreFeedItem() {},
+    async purgeFeedItem() {},
+    async listDigests() {
+      return [
+        {
+          id: SAMPLE_DIGEST.id,
+          title: SAMPLE_DIGEST.title,
+          periodStart: SAMPLE_DIGEST.periodStart,
+          periodEnd: SAMPLE_DIGEST.periodEnd,
+          createdAt: new Date().toISOString(),
+        },
+      ];
+    },
+    async trashDigests() {
+      return [];
     },
     async getDigest() {
       return SAMPLE_DIGEST;
     },
     async generateDigest() {
-      return { date: SAMPLE_DIGEST.date, itemCount: 0 };
+      return { id: SAMPLE_DIGEST.id, title: SAMPLE_DIGEST.title ?? "", itemCount: 0 };
     },
+    async deleteDigest() {},
+    async restoreDigest() {},
+    async purgeDigest() {},
     async listSessions() {
       // Static demo has no server-side sessions.
       return load().map((s) => ({ id: s.id, hasSession: false }));
@@ -377,7 +424,10 @@ const SAMPLE_FEED: FeedItem[] = [
 ];
 
 const SAMPLE_DIGEST: DigestFull = {
-  date: new Date().toLocaleDateString("en-CA"),
+  id: 1,
+  title: `${new Date().toLocaleDateString("en-CA")} (예시)`,
+  periodStart: new Date().toLocaleDateString("en-CA"),
+  periodEnd: new Date().toLocaleDateString("en-CA"),
   markdown: `# 일일 다이제스트 (예시)
 
 ## 오늘의 핵심 3가지

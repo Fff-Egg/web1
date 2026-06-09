@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
@@ -93,6 +93,11 @@ export function FeedPage() {
 function FeedCard({ item }: { item: FeedItem }) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: () => api.deleteFeedItem(item.id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["feed"] }),
+  });
   return (
     <li className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -109,11 +114,21 @@ function FeedCard({ item }: { item: FeedItem }) {
             {item.sourceLabel ?? item.provider}
           </div>
         </div>
-        {item.impact && (
-          <span className={"shrink-0 rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
-            {IMPACT_LABEL[item.impact]}
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-2">
+          {item.impact && (
+            <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
+              {IMPACT_LABEL[item.impact]}
+            </span>
+          )}
+          <button
+            onClick={() => del.mutate()}
+            disabled={del.isPending}
+            title="휴지통으로"
+            className="text-slate-300 hover:text-red-600 disabled:opacity-50"
+          >
+            🗑
+          </button>
+        </div>
       </div>
 
       {item.summary && <p className="mt-2 text-sm text-slate-700">{item.summary}</p>}

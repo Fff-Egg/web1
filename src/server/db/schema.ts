@@ -113,6 +113,8 @@ export const articles = mysqlTable(
     author: varchar("author", { length: 255 }),
     publishedAt: timestamp("published_at"),
     fetchedAt: timestamp("fetched_at").notNull().defaultNow(),
+    /** Soft-delete (trash) — non-null = hidden from Feed and re-analysis. */
+    deletedAt: timestamp("deleted_at"),
   },
   (t) => ({
     sourceExternalUnq: uniqueIndex("articles_source_external_unq").on(
@@ -152,17 +154,19 @@ export const analyses = mysqlTable(
 );
 
 /**
- * digests — one synthesized markdown report per day.
+ * digests — saved synthesized reports. Each has a name (title) and a covered
+ * period [periodStart, periodEnd]. Soft-deletable (trash).
  */
 export const digests = mysqlTable("digests", {
   id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
-  date: date("date", { mode: "string" }).notNull(),
+  title: varchar("title", { length: 255 }),
+  periodStart: date("period_start", { mode: "string" }),
+  periodEnd: date("period_end", { mode: "string" }),
   markdown: text("markdown").notNull(),
   meta: json("meta").$type<Record<string, unknown>>(),
+  deletedAt: timestamp("deleted_at"),
   createdAt: timestamp("created_at").notNull().defaultNow(),
-}, (t) => ({
-  dateUnq: uniqueIndex("digests_date_unq").on(t.date),
-}));
+});
 
 /**
  * settings — singleton-ish key/value config edited from the dashboard.
