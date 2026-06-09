@@ -44,7 +44,12 @@ export interface CompleteOpts {
 
 /** Single-turn helper: system prompt + user content -> assistant text. */
 export async function complete(opts: CompleteOpts): Promise<string> {
-  if (usingOpenAI()) return completeOpenAI(opts);
+  if (usingOpenAI()) {
+    // Saved Settings may still carry Claude model ids (the old defaults); those
+    // 404 on an OpenAI-compatible host, so fall back to the configured open model.
+    const model = opts.model.startsWith("claude") ? OPENAI_DEFAULT_MODEL() : opts.model;
+    return completeOpenAI({ ...opts, model });
+  }
   return completeAnthropic(opts);
 }
 
