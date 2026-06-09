@@ -97,3 +97,8 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
 };
 
 export const PROVIDER_LIST: ProviderPreset[] = Object.values(PROVIDER_PRESETS);
+
+/** Display label for a provider id, falling back to the raw id if unknown. */
+export function providerLabel(provider: string): string {
+  return PROVIDER_PRESETS[provider as Provider]?.label ?? provider;
+}

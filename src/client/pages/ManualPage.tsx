@@ -3,22 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { PendingArticle } from "../data/client.js";
 import { buildManualPrompt, parseAnalysisJson } from "../../shared/analysis.js";
-import { PROVIDER_PRESETS } from "../../shared/providers.js";
-
-/** Order groups are shown in; any unlisted provider falls to the end. */
-const GROUP_ORDER = [
-  "naver_blog",
-  "x",
-  "hankyung",
-  "generic_rss",
-  "substack",
-  "naver_premium",
-  "fanding",
-] as const;
-
-function providerLabel(provider: string): string {
-  return PROVIDER_PRESETS[provider as keyof typeof PROVIDER_PRESETS]?.label ?? provider;
-}
+import { providerLabel } from "../../shared/providers.js";
+import { SourceTabs, SOURCE_ORDER } from "../components/SourceTabs.js";
 
 /**
  * Manual analysis (for Claude Max users, no API key):
@@ -28,6 +14,7 @@ function providerLabel(provider: string): string {
 export function ManualPage() {
   const cfg = useQuery({ queryKey: ["analysisConfig"], queryFn: () => api.getAnalysisConfig() });
   const pending = useQuery({ queryKey: ["pending"], queryFn: () => api.listPending() });
+  const [active, setActive] = useState<string | null>(null);
 
   // Group pending articles by source type (네이버 블로그 / X / 한경 / RSS …).
   const groups = useMemo(() => {
@@ -38,7 +25,7 @@ export function ManualPage() {
       byProvider.set(art.provider, arr);
     }
     const ordered: { provider: string; items: PendingArticle[] }[] = [];
-    for (const p of GROUP_ORDER) {
+    for (const p of SOURCE_ORDER) {
       const items = byProvider.get(p);
       if (items) {
         ordered.push({ provider: p, items });
@@ -49,12 +36,17 @@ export function ManualPage() {
     return ordered;
   }, [pending.data]);
 
+  const counts = groups.map((g) => ({ provider: g.provider, count: g.items.length }));
+  const shown = active ? groups.filter((g) => g.provider === active) : groups;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="rounded border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
         <strong>수동 분석 모드</strong> — API 키 없이 Claude Max로 분석합니다. 각 글의{" "}
         <em>복사</em>를 눌러 claude.ai에 붙여넣고, 돌아온 JSON 답변을 아래 칸에 붙여넣어 저장하세요.
       </div>
+
+      <SourceTabs counts={counts} active={active} onChange={setActive} />
 
       {pending.isLoading && <p className="text-slate-500">로딩…</p>}
       {pending.error && <p className="text-red-600">{(pending.error as Error).message}</p>}
@@ -62,7 +54,7 @@ export function ManualPage() {
         <p className="text-slate-500">분석할 새 글이 없습니다. (소스에서 글이 수집되면 여기에 쌓입니다)</p>
       )}
 
-      {groups.map((g) => (
+      {shown.map((g) => (
         <section key={g.provider}>
           <h3 className="mb-2 flex items-center gap-2 border-b border-slate-200 pb-1 text-sm font-semibold text-slate-700">
             <span>{providerLabel(g.provider)}</span>

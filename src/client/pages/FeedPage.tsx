@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
+import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
 
 const IMPACT_STYLE: Record<Impact, string> = {
   bullish: "bg-green-100 text-green-700",
@@ -17,10 +18,16 @@ const IMPACT_LABEL: Record<Impact, string> = {
 
 export function FeedPage() {
   const [filter, setFilter] = useState<FeedFilter>({});
+  const [provider, setProvider] = useState<string | null>(null);
   const feed = useQuery({
     queryKey: ["feed", filter],
     queryFn: () => api.listFeed(filter),
   });
+
+  const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
+  const items = provider
+    ? (feed.data ?? []).filter((i) => i.provider === provider)
+    : feed.data ?? [];
 
   return (
     <div className="space-y-4">
@@ -63,6 +70,8 @@ export function FeedPage() {
         )}
       </div>
 
+      <SourceTabs counts={counts} active={provider} onChange={setProvider} />
+
       {feed.isLoading && <p className="text-slate-500">로딩…</p>}
       {feed.error && <p className="text-red-600">{(feed.error as Error).message}</p>}
       {feed.data && feed.data.length === 0 && (
@@ -72,7 +81,7 @@ export function FeedPage() {
       )}
 
       <ul className="space-y-3">
-        {feed.data?.map((item) => (
+        {items.map((item) => (
           <FeedCard key={item.id} item={item} />
         ))}
       </ul>
