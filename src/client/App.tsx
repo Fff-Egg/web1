@@ -2,13 +2,16 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "./data/client.js";
 import { SourcesPage } from "./pages/SourcesPage.js";
+import { SettingsPage } from "./pages/SettingsPage.js";
+import { FeedPage } from "./pages/FeedPage.js";
 
-type Tab = "sources" | "digest" | "feed";
+type Tab = "sources" | "feed" | "digest" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "sources", label: "Sources" },
-  { id: "digest", label: "Daily Digest" },
   { id: "feed", label: "Feed" },
+  { id: "digest", label: "Daily Digest" },
+  { id: "settings", label: "Settings" },
 ];
 
 export function App() {
@@ -54,11 +57,10 @@ export function App() {
       </nav>
 
       {tab === "sources" && <SourcesPage />}
+      {tab === "feed" && <FeedPage />}
+      {tab === "settings" && <SettingsPage />}
       {tab === "digest" && (
-        <p className="text-slate-500">Daily Digest 뷰는 Phase 4에서 제공됩니다.</p>
-      )}
-      {tab === "feed" && (
-        <p className="text-slate-500">Feed 뷰는 Phase 4에서 제공됩니다.</p>
+        <p className="text-slate-500">Daily Digest 뷰는 다음 단계에서 제공됩니다.</p>
       )}
     </div>
   );

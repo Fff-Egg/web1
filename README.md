@@ -92,6 +92,6 @@ npm run dev
 ## Status
 - ✅ **Phase 1** — foundation, DB schema + migration, adapter interface + provider registry + RSS adapter, collection worker, seed.
 - ✅ **Phase 2** — public-provider adapters (naver_blog, hankyung, generic_rss, substack-rss) + provider preset catalog + Sources management UI (add/toggle/edit/delete, credentialRef field for auth providers).
-- ⬜ Phase 3 — analysis pipeline.
-- ⬜ Phase 4 — digest cron + Daily Digest / Feed views.
+- ✅ **Phase 3** — user-editable analysis instructions (Settings tab, stored in `settings`); 2-pass Claude pipeline (cheap relevance filter → structured deep analysis driven by the instructions); analysis worker + scheduler hook; Feed view with theme/ticker/impact filters and "왜 중요한지" toggle. Requires `ANTHROPIC_API_KEY` + MySQL to run.
+- ⬜ Phase 4 — digest cron + Daily Digest view.
 - ⬜ Phase 5 — authenticated sources (login script, sessions, substack paid, naver_premium, fanding, x).

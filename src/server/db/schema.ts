@@ -160,6 +160,31 @@ export const digests = mysqlTable("digests", {
   dateUnq: uniqueIndex("digests_date_unq").on(t.date),
 }));
 
+/**
+ * settings — singleton-ish key/value config edited from the dashboard.
+ * The analysis instructions ("지침") live here under key="analysis" so the
+ * user can change how articles are analyzed without touching code.
+ */
+export const settings = mysqlTable("settings", {
+  id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+  key: varchar("key", { length: 64 }).notNull(),
+  value: json("value").$type<Record<string, unknown>>().notNull(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow().onUpdateNow(),
+}, (t) => ({
+  keyUnq: uniqueIndex("settings_key_unq").on(t.key),
+}));
+
+/** Shape stored under settings key="analysis". */
+export interface AnalysisConfig {
+  /** Free-form instructions = the system prompt that drives deep analysis. */
+  instructions: string;
+  /** Optional criteria for the cheap 1st-pass relevance filter. Falls back to `instructions`. */
+  relevanceCriteria?: string;
+  /** Optional model overrides (else FILTER_MODEL / ANALYSIS_MODEL env). */
+  filterModel?: string;
+  analysisModel?: string;
+}
+
 // ─── Relations ──────────────────────────────────────────────────────
 export const sourcesRelations = relations(sources, ({ many }) => ({
   articles: many(articles),
@@ -192,3 +217,5 @@ export type Analysis = typeof analyses.$inferSelect;
 export type NewAnalysis = typeof analyses.$inferInsert;
 export type Digest = typeof digests.$inferSelect;
 export type NewDigest = typeof digests.$inferInsert;
+export type Setting = typeof settings.$inferSelect;
+export type NewSetting = typeof settings.$inferInsert;

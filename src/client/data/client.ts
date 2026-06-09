@@ -1,7 +1,31 @@
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
-import type { Provider, FetchType, SourceConfig } from "../../server/db/schema.js";
+import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact } from "../../server/db/schema.js";
+import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
+
+export type { AnalysisConfig };
+
+export interface FeedFilter {
+  impact?: Impact;
+  ticker?: string;
+  theme?: string;
+}
+
+export interface FeedItem {
+  id: number;
+  title: string | null;
+  url: string | null;
+  author: string | null;
+  publishedAt: string | Date | null;
+  sourceLabel: string | null;
+  provider: string;
+  summary: string | null;
+  implications: string | null;
+  tickers: string[] | null;
+  themes: string[] | null;
+  impact: Impact | null;
+}
 
 /**
  * Client data layer. The same dashboard runs in two modes:
@@ -47,6 +71,9 @@ export interface DataApi {
   updateSource(input: UpdateInput): Promise<void>;
   toggleSource(id: number, enabled: boolean): Promise<void>;
   removeSource(id: number): Promise<void>;
+  getAnalysisConfig(): Promise<AnalysisConfig>;
+  updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
+  listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
 }
 
 const STATIC = import.meta.env.VITE_STATIC_DEMO === "true";
@@ -71,6 +98,11 @@ function makeTrpcApi(): DataApi {
     removeSource: async (id) => {
       await client.sources.remove.mutate({ id });
     },
+    getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
+    updateAnalysisConfig: async (cfg) => {
+      await client.settings.updateAnalysisConfig.mutate(cfg);
+    },
+    listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
   };
 }
 
@@ -140,8 +172,59 @@ function makeStaticApi(): DataApi {
     async removeSource(id) {
       save(load().filter((x) => x.id !== id));
     },
+    async getAnalysisConfig() {
+      const raw = localStorage.getItem(CFG_KEY);
+      if (raw) {
+        try {
+          return { ...DEFAULT_ANALYSIS_CONFIG, ...(JSON.parse(raw) as AnalysisConfig) };
+        } catch {
+          /* fall through */
+        }
+      }
+      return { ...DEFAULT_ANALYSIS_CONFIG };
+    },
+    async updateAnalysisConfig(cfg) {
+      localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+    },
+    async listFeed() {
+      // Static demo has no backend/Claude — show example cards so the UI is visible.
+      return SAMPLE_FEED;
+    },
   };
 }
+
+const CFG_KEY = "feedwatch.analysis.v1";
+
+const SAMPLE_FEED: FeedItem[] = [
+  {
+    id: 1,
+    title: "(예시) 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향",
+    url: "https://example.com/sample-1",
+    author: null,
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "예시 소스",
+    provider: "generic_rss",
+    summary: "데이터센터향 GPU 수요가 예상을 상회한다는 내용. 공급은 여전히 타이트.",
+    implications: "AI 인프라 투자 사이클이 지속된다는 내 논제를 강화. 관련 밸류체인에 우호적.",
+    tickers: ["NVDA"],
+    themes: ["AI 반도체"],
+    impact: "bullish",
+  },
+  {
+    id: 2,
+    title: "(예시) 금리 동결 시그널, 성장주 밸류에이션에 우호적",
+    url: "https://example.com/sample-2",
+    author: null,
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "예시 소스",
+    provider: "hankyung",
+    summary: "중앙은행이 추가 인상에 신중. 시장은 동결을 기대.",
+    implications: "성장주 비중이 높은 내 포트폴리오에 중립~소폭 우호적.",
+    tickers: [],
+    themes: ["매크로", "금리"],
+    impact: "neutral",
+  },
+];
 
 function seedRows(): SourceRow[] {
   const now = Date.now();

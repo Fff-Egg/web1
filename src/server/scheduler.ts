@@ -1,5 +1,7 @@
 import { collectAll } from "./workers/collect.js";
+import { runAnalysis } from "./analysis/analyze.js";
 import { hasDb } from "./db/client.js";
+import { hasAnthropic } from "./analysis/anthropic.js";
 
 /**
  * Background schedulers. Phase 1 wires the collection loop. The analysis
@@ -13,19 +15,28 @@ export function startSchedulers(): void {
   const intervalMin = Number(process.env.COLLECT_INTERVAL_MIN ?? 30);
   console.log(`[scheduler] collection every ${intervalMin}m`);
 
-  const runCollect = async () => {
+  const tick = async () => {
     try {
-      const r = await collectAll();
-      console.log(`[scheduler] collect: inserted=${r.inserted} errors=${r.errors}`);
+      const c = await collectAll();
+      console.log(`[scheduler] collect: inserted=${c.inserted} errors=${c.errors}`);
     } catch (err) {
       console.error("[scheduler] collect failed:", err);
     }
+    if (hasAnthropic()) {
+      try {
+        const a = await runAnalysis();
+        console.log(`[scheduler] analyze: analyzed=${a.analyzed} relevant=${a.relevant} errors=${a.errors}`);
+      } catch (err) {
+        console.error("[scheduler] analyze failed:", err);
+      }
+    } else {
+      console.warn("[scheduler] ANTHROPIC_API_KEY not set — analysis disabled.");
+    }
   };
 
-  // Kick once on boot, then on the interval.
-  void runCollect();
-  setInterval(runCollect, intervalMin * 60_000);
+  // Kick once on boot, then on the interval (collect then analyze new articles).
+  void tick();
+  setInterval(tick, intervalMin * 60_000);
 
-  // Phase 3: analysis pipeline tick (filter + deep analysis of new articles).
   // Phase 4: digest cron at DIGEST_HOUR (KST).
 }
