@@ -1,4 +1,6 @@
 import "dotenv/config";
+import path from "node:path";
+import fs from "node:fs";
 import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./trpc/routers/index.js";
@@ -30,6 +32,16 @@ app.use(
     createContext: (): Context => ({}),
   }),
 );
+
+// Serve the built client (production) with SPA fallback, if it exists.
+const distDir = path.resolve(process.cwd(), "dist");
+if (fs.existsSync(path.join(distDir, "index.html"))) {
+  app.use(express.static(distDir));
+  app.get(/^(?!\/(trpc|api)).*/, (_req, res) => {
+    res.sendFile(path.join(distDir, "index.html"));
+  });
+  console.log(`[server] serving built client from ${distDir}`);
+}
 
 app.listen(PORT, () => {
   console.log(`[server] listening on http://localhost:${PORT}`);

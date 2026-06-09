@@ -1,10 +1,10 @@
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
-import { db } from "../../db/client.js";
-import { sources, PROVIDERS, FETCH_TYPES } from "../../db/schema.js";
+import { PROVIDERS, FETCH_TYPES } from "../../db/schema.js";
 import { listProviders } from "../../adapters/index.js";
 import { PROVIDER_LIST, PROVIDER_PRESETS } from "../../../shared/providers.js";
+import { sourcesRepo } from "../../repo/sources.js";
+import { hasDb } from "../../db/client.js";
 
 const providerEnum = z.enum(PROVIDERS);
 const fetchTypeEnum = z.enum(FETCH_TYPES);
@@ -20,13 +20,15 @@ const configSchema = z
   .passthrough();
 
 /**
- * sources router — UI-driven CRUD for feed sources. This is the backbone of
- * "I can add/remove/toggle sources from the dashboard" (Section 1).
+ * sources router — UI-driven CRUD for feed sources. Backed by the repo layer,
+ * which uses MySQL when DATABASE_URL is set and an in-memory store otherwise
+ * (so the dashboard works without a database).
  */
 export const sourcesRouter = router({
-  list: publicProcedure.query(async () => {
-    return db.select().from(sources).orderBy(desc(sources.createdAt));
-  }),
+  /** Whether data is persisted (MySQL) or running in in-memory dev mode. */
+  status: publicProcedure.query(() => ({ persisted: hasDb })),
+
+  list: publicProcedure.query(() => sourcesRepo.list()),
 
   /** Providers that actually have a registered adapter. */
   providers: publicProcedure.query(() => listProviders()),
@@ -38,7 +40,6 @@ export const sourcesRouter = router({
     .input(
       z.object({
         provider: providerEnum,
-        // fetchType is derived from the provider preset unless explicitly given.
         fetchType: fetchTypeEnum.optional(),
         identifier: z.string().min(1),
         label: z.string().optional(),
@@ -48,7 +49,7 @@ export const sourcesRouter = router({
     )
     .mutation(async ({ input }) => {
       const preset = PROVIDER_PRESETS[input.provider];
-      const [res] = await db.insert(sources).values({
+      return sourcesRepo.create({
         provider: input.provider,
         fetchType: input.fetchType ?? preset.fetchType,
         identifier: input.identifier,
@@ -56,7 +57,6 @@ export const sourcesRouter = router({
         enabled: input.enabled,
         config: input.config ?? {},
       });
-      return { id: res.insertId };
     }),
 
   update: publicProcedure
@@ -70,22 +70,21 @@ export const sourcesRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
-      const { id, ...patch } = input;
-      await db.update(sources).set(patch).where(eq(sources.id, id));
+      await sourcesRepo.update(input);
       return { ok: true };
     }),
 
   toggle: publicProcedure
     .input(z.object({ id: z.number(), enabled: z.boolean() }))
     .mutation(async ({ input }) => {
-      await db.update(sources).set({ enabled: input.enabled }).where(eq(sources.id, input.id));
+      await sourcesRepo.setEnabled(input.id, input.enabled);
       return { ok: true };
     }),
 
   remove: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
-      await db.delete(sources).where(eq(sources.id, input.id));
+      await sourcesRepo.remove(input.id);
       return { ok: true };
     }),
 });

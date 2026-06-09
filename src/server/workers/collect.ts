@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { eq } from "drizzle-orm";
-import { db } from "../db/client.js";
+import { db, hasDb } from "../db/client.js";
 import { sources, articles } from "../db/schema.js";
 import type { Source } from "../db/schema.js";
 import { getAdapter, SessionRequiredError } from "../adapters/index.js";
@@ -14,6 +14,10 @@ import { getAdapter, SessionRequiredError } from "../adapters/index.js";
  * server (see src/server/index.ts).
  */
 export async function collectAll(): Promise<{ inserted: number; errors: number }> {
+  if (!hasDb) {
+    console.warn("[collect] no DATABASE_URL — skipping (in-memory dev mode).");
+    return { inserted: 0, errors: 0 };
+  }
   const enabled = await db.select().from(sources).where(eq(sources.enabled, true));
   let inserted = 0;
   let errors = 0;

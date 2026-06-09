@@ -32,13 +32,25 @@ legacy/          # original static HTML site (untouched)
 ```
 
 ## Setup
+
+### Quick start (no database — demo mode)
+The site runs out of the box without MySQL. Without `DATABASE_URL` it uses an
+in-memory store (seeded with 세상학개론 / 한국경제); data resets on restart.
 ```bash
 npm install
-cp .env.example .env      # fill in DATABASE_URL, ANTHROPIC_API_KEY, …
+npm run build          # build the client
+npm run server         # serves the whole site on http://localhost:3000
+# — or, for live-reload development —
+npm run dev            # client (5173) + server (3000)
+```
+
+### With MySQL (persistent)
+```bash
+cp .env.example .env      # set DATABASE_URL, ANTHROPIC_API_KEY, …
 npm run db:generate       # generate SQL migration from schema (already committed)
 npm run db:migrate        # apply migrations to MySQL
 npm run db:seed           # seed initial sources (세상학개론 / 한국경제)
-npm run dev               # client (5173) + server (3000)
+npm run dev
 ```
 
 ### Useful scripts

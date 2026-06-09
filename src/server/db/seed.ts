@@ -43,11 +43,11 @@ async function main() {
     await db.insert(sources).values(seed);
     console.log(`[seed] inserted: ${seed.provider} ${seed.identifier}`);
   }
-  await pool.end();
+  await pool?.end();
 }
 
 main().catch(async (err) => {
   console.error(err);
-  await pool.end();
+  await pool?.end();
   process.exit(1);
 });

@@ -13,6 +13,7 @@ const TABS: { id: Tab; label: string }[] = [
 export function App() {
   const [tab, setTab] = useState<Tab>("sources");
   const health = trpc.health.useQuery();
+  const status = trpc.sources.status.useQuery();
 
   return (
     <div className="mx-auto max-w-4xl p-6">
@@ -22,6 +23,13 @@ export function App() {
           server {health.data?.ok ? "online" : "…"}
         </p>
       </header>
+
+      {status.data && !status.data.persisted && (
+        <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          데모 모드: <code>DATABASE_URL</code> 미설정 — 데이터가 메모리에만 저장되어
+          서버 재시작 시 초기화됩니다. MySQL을 연결하면 영구 저장됩니다.
+        </div>
+      )}
 
       <nav className="mb-6 flex gap-1 border-b border-slate-200">
         {TABS.map((t) => (
