@@ -19,9 +19,26 @@ export const DEFAULT_INSTRUCTIONS = `너는 내 개인 투자 리서치 어시�
 
 export const DEFAULT_RELEVANCE_CRITERIA = `위 관심 테마/섹터/종목과 직접 관련이 있으면 관련 있음. 단순 일반 뉴스/광고/잡담은 관련 없음.`;
 
+/** 2차: 하루 1회, 그날 뽑힌 글들을 종합하는 다이제스트 지침. */
+export const DEFAULT_DIGEST_INSTRUCTIONS = `너는 내 개인 투자 다이제스트 편집자다. 아래는 오늘 1차로 선별된 글들이다.
+이 글들이 서로 어떻게 연결되는지, 그리고 내 관점에서 왜 중요한지를 종합해 한국어 마크다운 리포트를 쓴다.
+
+구성:
+## 오늘의 핵심 흐름
+- 오늘 신호들을 관통하는 큰 그림 2~3가지.
+
+## 연결과 함의
+- 서로 다른 글들이 어떤 논지를 강화/약화하는지, 어떻게 이어지는지 산문으로.
+
+## 종목·테마별 메모
+- 종목/테마별로 묶어 한 줄씩.
+
+규칙: 제공된 글에 없는 내용을 지어내지 말 것. 매수/매도 권유 금지. 사실·구조 정리만.`;
+
 export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
   instructions: DEFAULT_INSTRUCTIONS,
   relevanceCriteria: DEFAULT_RELEVANCE_CRITERIA,
+  digestInstructions: DEFAULT_DIGEST_INSTRUCTIONS,
 };
 
 /** The fixed JSON output contract appended to the user's instructions for deep analysis. */

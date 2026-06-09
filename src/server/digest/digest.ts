@@ -36,8 +36,24 @@ interface DigestItem {
   source: string;
   impact: string | null;
   summary: string | null;
+  body: string | null;
   tickers: string[] | null;
   themes: string[] | null;
+}
+
+function clip(s: string | null | undefined, n: number): string {
+  if (!s) return "";
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+/** Deterministic "원문 모음" list so picked articles always carry their links. */
+function sourceLinks(rows: DigestItem[]): string {
+  const lines = ["", "## 원문 모음", ""];
+  for (const it of rows) {
+    const link = it.url ? `[${it.title ?? "(제목없음)"}](${it.url})` : it.title ?? "(제목없음)";
+    lines.push(`- ${link} — 출처: ${it.source}`);
+  }
+  return lines.join("\n");
 }
 
 /**
@@ -61,6 +77,7 @@ export async function generateDigest(
       source: sources.label,
       impact: analyses.impact,
       summary: analyses.summary,
+      body: articles.body,
       tickers: analyses.tickers,
       themes: analyses.themes,
     })
@@ -87,26 +104,27 @@ export async function generateDigest(
   let markdown: string;
   if (hasLLM()) {
     const cfg = await settingsRepo.getAnalysisConfig();
+    // 2차 지침: how to synthesize the day's picks (user-editable in Settings).
+    const system = cfg.digestInstructions?.trim() || DIGEST_SYSTEM;
     const user =
-      `날짜: ${date}\n\n분석된 글 (${rows.length}건):\n` +
+      `날짜: ${date}\n\n오늘 1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows
         .map(
           (it, i) =>
-            `${i + 1}. 제목: ${it.title ?? "(제목없음)"}\n` +
-            `   출처: ${it.source}\n` +
-            `   원문: ${it.url ?? "(링크없음)"}\n` +
-            `   영향: ${it.impact ?? "neutral"}\n` +
-            `   종목: ${(it.tickers ?? []).join(", ") || "-"}\n` +
-            `   테마: ${(it.themes ?? []).join(", ") || "-"}\n` +
-            `   요약: ${it.summary ?? "-"}`,
+            `[${i + 1}] 제목: ${it.title ?? "(제목없음)"}\n` +
+            `출처: ${it.source}\n` +
+            `원문: ${it.url ?? "(링크없음)"}\n` +
+            `본문:\n${clip(it.body ?? it.summary, 1500)}`,
         )
-        .join("\n\n");
-    markdown = await complete({
+        .join("\n\n---\n\n");
+    const report = await complete({
       model: cfg.analysisModel || ANALYSIS_MODEL(),
-      system: DIGEST_SYSTEM,
+      system,
       user,
-      maxTokens: 2048,
+      maxTokens: Number(process.env.DIGEST_MAX_TOKENS ?? 4096),
     });
+    // Always append the picked articles with their original links.
+    markdown = `${report.trim()}\n${sourceLinks(rows)}`;
   } else {
     // No API key — build a simple deterministic digest so attribution still works.
     markdown = buildFallbackMarkdown(date, rows);

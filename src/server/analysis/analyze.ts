@@ -131,6 +131,10 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
   let relevant = 0;
   let errors = 0;
 
+  // Per-article deep analysis is off by default — the daily digest does the
+  // synthesis. Set DEEP_ANALYSIS=1 to also analyze each article individually.
+  const deepPerArticle = process.env.DEEP_ANALYSIS === "1";
+
   for (const article of pending) {
     try {
       const isRelevant = await filterRelevant(article, cfg);
@@ -143,7 +147,8 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         analyzed++;
         continue;
       }
-      const deep = await deepAnalyze(article, cfg);
+      // 1st-pass pick. Deep analysis only when explicitly enabled.
+      const deep = deepPerArticle ? await deepAnalyze(article, cfg) : null;
       await db.insert(analyses).values({
         articleId: article.id,
         relevant: true,
@@ -153,7 +158,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         tickers: deep?.tickers ?? [],
         themes: deep?.themes ?? [],
         impact: deep?.impact ?? "neutral",
-        model: cfg.analysisModel || ANALYSIS_MODEL(),
+        model: deepPerArticle ? cfg.analysisModel || ANALYSIS_MODEL() : cfg.filterModel || FILTER_MODEL(),
       });
       analyzed++;
       relevant++;

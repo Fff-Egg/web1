@@ -77,6 +77,7 @@ export interface DataApi {
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   listDigestDates(): Promise<DigestDate[]>;
   getDigest(date?: string): Promise<DigestFull | null>;
+  generateDigest(date?: string): Promise<{ date: string; itemCount: number } | null>;
   listSessions(): Promise<SessionInfo[]>;
   listPending(): Promise<PendingArticle[]>;
   saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
@@ -147,6 +148,8 @@ function makeTrpcApi(): DataApi {
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     listDigestDates: () => client.digest.dates.query() as Promise<DigestDate[]>,
     getDigest: (date) => client.digest.get.query({ date }) as Promise<DigestFull | null>,
+    generateDigest: (date) =>
+      client.digest.generate.mutate({ date }) as Promise<{ date: string; itemCount: number } | null>,
     listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
     listPending: () => client.manual.pending.query() as Promise<PendingArticle[]>,
     saveManualAnalysis: async (input) => {
@@ -247,6 +250,9 @@ function makeStaticApi(): DataApi {
     },
     async getDigest() {
       return SAMPLE_DIGEST;
+    },
+    async generateDigest() {
+      return { date: SAMPLE_DIGEST.date, itemCount: 0 };
     },
     async listSessions() {
       // Static demo has no server-side sessions.

@@ -29,58 +29,85 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <section className="rounded-lg border border-slate-200 bg-white p-5">
-        <h2 className="text-lg font-semibold">분석 지침</h2>
-        <p className="mt-1 mb-4 text-sm text-slate-500">
-          여기에 쓴 내용이 곧 Claude의 시스템 프롬프트가 됩니다. 내가 추가한 소스에서 모인 글을
-          이 지침대로 분석합니다. (관심 테마·보유 종목·논제·투자 스타일을 적어두면 그 기준으로 분석)
-        </p>
+      <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-5">
+        <div>
+          <h2 className="text-lg font-semibold">분석 지침</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            <strong>1차</strong>로 어떤 글을 뽑을지 거르고, <strong>2차</strong>로 그날 뽑힌 글들을
+            <strong> 하루 한 번</strong> 종합 분석(다이제스트)합니다.
+          </p>
+        </div>
 
         <label className="block">
-          <span className="text-sm font-medium text-slate-700">심층 분석 지침 (필수)</span>
-          <textarea
-            value={form.instructions}
-            onChange={(e) => set({ instructions: e.target.value })}
-            rows={12}
-            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
-          />
-        </label>
-
-        <label className="mt-4 block">
-          <span className="text-sm font-medium text-slate-700">
-            1차 필터 기준 (선택 — 비우면 위 지침으로 판단)
+          <span className="text-sm font-semibold text-slate-700">
+            1차 — 어떤 정보를 뽑을지 (필터)
           </span>
+          <p className="text-xs text-slate-400">
+            글마다 싼 모델이 이 기준으로 관련 여부를 판단합니다. 모든 글을 통과시키려면 “전부”라고 쓰세요.
+          </p>
           <textarea
             value={form.relevanceCriteria ?? ""}
             onChange={(e) => set({ relevanceCriteria: e.target.value })}
-            rows={3}
-            placeholder="어떤 글을 '관련 있음'으로 볼지. 싼 모델이 먼저 걸러냅니다."
+            rows={6}
+            placeholder="예: 반도체·AI 인프라·메모리/스토리지·광인터커넥트와 관련된 신호만. 단순 잡담/광고는 제외."
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
         </label>
 
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">1차 필터 모델 (선택)</span>
-            <input
-              value={form.filterModel ?? ""}
-              onChange={(e) => set({ filterModel: e.target.value || undefined })}
-              placeholder="기본: FILTER_MODEL 환경변수"
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
-            />
-          </label>
-          <label className="block">
-            <span className="text-sm font-medium text-slate-700">심층 분석 모델 (선택)</span>
-            <input
-              value={form.analysisModel ?? ""}
-              onChange={(e) => set({ analysisModel: e.target.value || undefined })}
-              placeholder="기본: ANALYSIS_MODEL 환경변수"
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
-            />
-          </label>
-        </div>
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700">
+            2차 — 뽑힌 정보를 어떻게 종합 분석할지 (하루 1회 다이제스트)
+          </span>
+          <p className="text-xs text-slate-400">
+            그날 1차로 뽑힌 글들을 한 번에 묶어, 서로 어떻게 연결되고 왜 중요한지 종합합니다. 결과 맨 아래엔
+            뽑힌 글의 원문 링크가 자동으로 붙습니다.
+          </p>
+          <textarea
+            value={form.digestInstructions ?? ""}
+            onChange={(e) => set({ digestInstructions: e.target.value })}
+            rows={14}
+            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+          />
+        </label>
 
-        <div className="mt-4 flex items-center gap-3">
+        <details className="text-sm text-slate-600">
+          <summary className="cursor-pointer font-medium">고급 (선택)</summary>
+          <div className="mt-3 space-y-4">
+            <label className="block">
+              <span className="text-xs font-medium text-slate-700">
+                글별 개별 심층 분석 지침 — <code>DEEP_ANALYSIS=1</code>일 때만 사용
+              </span>
+              <textarea
+                value={form.instructions}
+                onChange={(e) => set({ instructions: e.target.value })}
+                rows={6}
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
+              />
+            </label>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block">
+                <span className="text-xs font-medium text-slate-700">1차 필터 모델 (선택)</span>
+                <input
+                  value={form.filterModel ?? ""}
+                  onChange={(e) => set({ filterModel: e.target.value || undefined })}
+                  placeholder="기본: FILTER_MODEL 환경변수"
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
+                />
+              </label>
+              <label className="block">
+                <span className="text-xs font-medium text-slate-700">2차/심층 모델 (선택)</span>
+                <input
+                  value={form.analysisModel ?? ""}
+                  onChange={(e) => set({ analysisModel: e.target.value || undefined })}
+                  placeholder="기본: ANALYSIS_MODEL 환경변수"
+                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
+                />
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <div className="flex items-center gap-3">
           <button
             onClick={() => save.mutate(form)}
             disabled={save.isPending}
@@ -96,10 +123,9 @@ export function SettingsPage() {
       </section>
 
       <p className="text-xs text-slate-400">
-        자동 분석을 실행하려면 MySQL과 LLM이 연결돼 있어야 합니다 — <code>ANTHROPIC_API_KEY</code>
-        (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>,
-        예: Groq 무료). 키 없이도 <strong>분석(수동)</strong> 탭으로 분석할 수 있습니다. 정적 데모에서는
-        지침이 이 브라우저에만 저장됩니다.
+        자동 분석/다이제스트를 실행하려면 MySQL과 LLM이 연결돼 있어야 합니다 — <code>ANTHROPIC_API_KEY</code>
+        (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>). 다이제스트는
+        매일 <code>DIGEST_HOUR</code>(KST)에 생성됩니다.
       </p>
     </div>
   );

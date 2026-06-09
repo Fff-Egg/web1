@@ -180,10 +180,12 @@ export const settings = mysqlTable("settings", {
 
 /** Shape stored under settings key="analysis". */
 export interface AnalysisConfig {
-  /** Free-form instructions = the system prompt that drives deep analysis. */
-  instructions: string;
-  /** Optional criteria for the cheap 1st-pass relevance filter. Falls back to `instructions`. */
+  /** 1차 필터 지침: 어떤 글을 '관련 있음'으로 뽑을지. (cheap per-article filter) */
   relevanceCriteria?: string;
+  /** 2차 다이제스트 지침: 하루 1회, 뽑힌 글들이 어떻게 연결되고 왜 중요한지 종합. */
+  digestInstructions?: string;
+  /** Optional per-article deep-analysis prompt (only used when DEEP_ANALYSIS=1). */
+  instructions: string;
   /** Optional model overrides (else FILTER_MODEL / ANALYSIS_MODEL env). */
   filterModel?: string;
   analysisModel?: string;

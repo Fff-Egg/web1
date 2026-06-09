@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 
@@ -9,8 +9,18 @@ import { api } from "../data/client.js";
  * from the markdown the digest generator produces).
  */
 export function DigestPage() {
+  const qc = useQueryClient();
   const dates = useQuery({ queryKey: ["digestDates"], queryFn: () => api.listDigestDates() });
   const [selected, setSelected] = useState<string | undefined>(undefined);
+
+  const generate = useMutation({
+    mutationFn: () => api.generateDigest(),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["digestDates"] });
+      qc.invalidateQueries({ queryKey: ["digest"] });
+      if (res?.date) setSelected(res.date);
+    },
+  });
 
   // Default to the newest date once loaded.
   useEffect(() => {
@@ -43,6 +53,19 @@ export function DigestPage() {
             </option>
           ))}
         </select>
+        <button
+          onClick={() => generate.mutate()}
+          disabled={generate.isPending}
+          className="rounded bg-slate-900 px-3 py-1 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {generate.isPending ? "생성 중…" : "오늘 다이제스트 생성"}
+        </button>
+        {generate.data && generate.data.itemCount === 0 && (
+          <span className="text-xs text-slate-500">오늘 뽑힌 글이 없습니다.</span>
+        )}
+        {generate.error && (
+          <span className="text-xs text-red-600">{(generate.error as Error).message}</span>
+        )}
       </div>
 
       {dates.data && dates.data.length === 0 && (
