@@ -56,6 +56,22 @@ export function SettingsPage() {
 
         <label className="block">
           <span className="text-sm font-semibold text-slate-700">
+            요약 지침 — 뽑힌 글을 Feed에 어떻게 요약할지
+          </span>
+          <p className="text-xs text-slate-400">
+            1차에서 뽑힌 글마다 이 방식으로 요약해 Feed 카드에 보여줍니다. (판단과 별개 지침)
+          </p>
+          <textarea
+            value={form.summaryInstructions ?? ""}
+            onChange={(e) => set({ summaryInstructions: e.target.value })}
+            rows={4}
+            placeholder="예: 무엇을 발표/주장했는지 1~2문장 + 내 논지에 주는 함의 1문장."
+            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700">
             2차 — 뽑힌 정보를 어떻게 종합 분석할지 (하루 1회 다이제스트)
           </span>
           <p className="text-xs text-slate-400">

@@ -19,6 +19,9 @@ export const DEFAULT_INSTRUCTIONS = `너는 내 개인 투자 리서치 어시�
 
 export const DEFAULT_RELEVANCE_CRITERIA = `위 관심 테마/섹터/종목과 직접 관련이 있으면 관련 있음. 단순 일반 뉴스/광고/잡담은 관련 없음.`;
 
+/** 요약: Feed에 보일 한 글의 요약 방식. */
+export const DEFAULT_SUMMARY_INSTRUCTIONS = `핵심 내용을 한국어 2~3문장으로 요약한다. 무엇을 발표/주장했는지와 내 관점에서의 의미를 간결하게.`;
+
 /** 2차: 하루 1회, 그날 뽑힌 글들을 종합하는 다이제스트 지침. */
 export const DEFAULT_DIGEST_INSTRUCTIONS = `너는 내 개인 투자 다이제스트 편집자다. 아래는 오늘 1차로 선별된 글들이다.
 이 글들이 서로 어떻게 연결되는지, 그리고 내 관점에서 왜 중요한지를 종합해 한국어 마크다운 리포트를 쓴다.
@@ -38,6 +41,7 @@ export const DEFAULT_DIGEST_INSTRUCTIONS = `너는 내 개인 투자 다이제�
 export const DEFAULT_ANALYSIS_CONFIG: AnalysisConfig = {
   instructions: DEFAULT_INSTRUCTIONS,
   relevanceCriteria: DEFAULT_RELEVANCE_CRITERIA,
+  summaryInstructions: DEFAULT_SUMMARY_INSTRUCTIONS,
   digestInstructions: DEFAULT_DIGEST_INSTRUCTIONS,
 };
 

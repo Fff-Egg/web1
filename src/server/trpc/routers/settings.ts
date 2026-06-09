@@ -5,6 +5,7 @@ import { settingsRepo } from "../../repo/settings.js";
 const analysisConfigSchema = z.object({
   instructions: z.string(),
   relevanceCriteria: z.string().optional(),
+  summaryInstructions: z.string().optional(),
   digestInstructions: z.string().optional(),
   filterModel: z.string().optional(),
   analysisModel: z.string().optional(),

@@ -184,8 +184,10 @@ export const settings = mysqlTable("settings", {
 
 /** Shape stored under settings key="analysis". */
 export interface AnalysisConfig {
-  /** 1차 필터 지침: 어떤 글을 '관련 있음'으로 뽑을지. (cheap per-article filter) */
+  /** 1차 판단 지침: 어떤 글을 '관련 있음'으로 뽑을지. (cheap per-article filter) */
   relevanceCriteria?: string;
+  /** 요약 지침: 뽑힌 글을 Feed에 어떻게 요약해 보여줄지. */
+  summaryInstructions?: string;
   /** 2차 다이제스트 지침: 하루 1회, 뽑힌 글들이 어떻게 연결되고 왜 중요한지 종합. */
   digestInstructions?: string;
   /** Optional per-article deep-analysis prompt (only used when DEEP_ANALYSIS=1). */

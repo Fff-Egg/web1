@@ -32,34 +32,43 @@ function analyzeEverything(criteria: string): boolean {
   return /^(전부|모두|모든\s*글|all|everything)\.?$/i.test(criteria.trim());
 }
 
-/** 1st pass: cheap relevance filter driven by the user's criteria/instructions. */
+export interface Classification {
+  relevant: boolean;
+  /** Short summary of the article (shown in the Feed). Empty if not relevant. */
+  summary: string;
+}
+
+/**
+ * 1st pass — one cheap call that BOTH decides relevance AND summarizes, driven
+ * by the user's 1차 지침 (relevanceCriteria: 무엇을 뽑을지 + 어떻게 요약할지).
+ */
 export async function filterRelevant(
   article: Article,
   cfg: AnalysisConfig,
-): Promise<boolean> {
+): Promise<Classification> {
   const criteria = cfg.relevanceCriteria?.trim() || cfg.instructions;
-  // "Analyze everything" — skip the LLM filter entirely (saves tokens, and
-  // never drops an article on an ambiguous criterion).
-  if (analyzeEverything(criteria)) return true;
+  const summaryGuide = cfg.summaryInstructions?.trim() || "핵심 내용을 한국어 2~3문장으로 요약한다.";
+  const forceAll = analyzeEverything(criteria);
   const system =
-    `${criteria}\n\n` +
-    `다음 글이 위 기준에 관련 있는지 판단해 JSON으로만 답한다: {"relevant": true} 또는 {"relevant": false}`;
-  const user = `제목: ${article.title ?? ""}\n미리보기: ${clip(article.body, 600)}`;
+    `[관련성 판단 기준]\n${criteria}\n\n` +
+    `[요약 지침]\n${summaryGuide}\n\n` +
+    `위 [관련성 판단 기준]으로 이 글이 관련 있는지 판단하고, 관련 있으면 [요약 지침]에 따라 요약하라. ` +
+    `JSON 하나로만 답한다: {"relevant": true 또는 false, "summary": "요약 (관련 없으면 빈 문자열)"}`;
+  const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, 1500)}`;
   const text = await complete({
     model: cfg.filterModel || FILTER_MODEL(),
     system,
     user,
-    maxTokens: 200,
+    maxTokens: 400,
   });
-  const parsed = parseJsonLoose<{ relevant?: boolean }>(text);
-  // Fail open: if the filter's answer can't be read (e.g. a reasoning model
-  // emitted thinking, no JSON), keep the article rather than silently dropping
-  // it. Only an explicit `false` filters it out.
+  const parsed = parseJsonLoose<{ relevant?: boolean; summary?: string }>(text);
+  const summary = typeof parsed?.summary === "string" ? parsed.summary : "";
+  // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
+  const relevant = forceAll || !parsed || parsed.relevant !== false;
   if (!parsed) {
     console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
-    return true;
   }
-  return parsed.relevant !== false;
+  return { relevant, summary };
 }
 
 export interface DeepAnalysis {
@@ -142,7 +151,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
 
   for (const article of pending) {
     try {
-      const isRelevant = await filterRelevant(article, cfg);
+      const { relevant: isRelevant, summary } = await filterRelevant(article, cfg);
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
@@ -152,12 +161,12 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         analyzed++;
         continue;
       }
-      // 1st-pass pick. Deep analysis only when explicitly enabled.
+      // 1st-pass pick (with its summary). Deep analysis only when enabled.
       const deep = deepPerArticle ? await deepAnalyze(article, cfg) : null;
       await db.insert(analyses).values({
         articleId: article.id,
         relevant: true,
-        summary: deep?.summary,
+        summary: deep?.summary ?? summary,
         implications: deep?.implications,
         fullText: deep?.fullText,
         tickers: deep?.tickers ?? [],
