@@ -71,7 +71,7 @@ npm run dev
 | `npm run dev` | run client + server together |
 | `npm run worker:collect` | one-shot collection pass |
 | `npm run db:generate` / `db:migrate` / `db:seed` | Drizzle migration + seed |
-| `npm run login -- --source=<ref>` | (Phase 5) interactive login → save session |
+| `npm run login -- --source=<sourceId>` | interactive browser login → save session (you log in with your own ID/PW) |
 
 ## Providers
 | provider | fetch type | you enter | auth |
@@ -85,8 +85,24 @@ npm run dev
 | `generic_rss` | rss | RSS URL | – |
 | `generic_scrape` | scrape | page URL | – |
 
+## Authenticated sources (Substack paid / Naver Premium / Fanding / X)
+No password fields anywhere. For an auth source you log in **yourself** in a real
+browser, and only the resulting session is saved:
+```bash
+npm run login -- --source=<sourceId>   # opens a headed browser
+# log in with your own ID/PW (+2FA/captcha), then press Enter
+npx playwright install chromium        # one-time, on the machine running login
+```
+The session is stored at `sessions/source-<id>.json` and reused for collection.
+Sessions expire → the source is flagged "로그인 필요" (no silent re-login).
+
+> ⚠️ Automating a main **X** account risks suspension — prefer the X API
+> (`X_API_PROVIDER`). The session path is best-effort. Scrapers respect each
+> site's terms; use for your own subscribed accounts only.
+
 ## Security
-- Credentials live **only** in environment variables (`CRED_<REF>_USER` / `CRED_<REF>_PASS`). The DB stores only a `credentialRef` key name.
+- **Passwords are never stored** — not in the DB, env, or repo. Only login
+  sessions (cookies) are saved locally.
 - `.env` and `sessions/` are git-ignored and must never be committed.
 
 ## Status
@@ -94,4 +110,5 @@ npm run dev
 - ✅ **Phase 2** — public-provider adapters (naver_blog, hankyung, generic_rss, substack-rss) + provider preset catalog + Sources management UI (add/toggle/edit/delete, credentialRef field for auth providers).
 - ✅ **Phase 3** — user-editable analysis instructions (Settings tab, stored in `settings`); 2-pass Claude pipeline (cheap relevance filter → structured deep analysis driven by the instructions); analysis worker + scheduler hook; Feed view with theme/ticker/impact filters, "왜 중요한지" toggle, and an "원문 보기 ↗" link to the original source. Requires `ANTHROPIC_API_KEY` + MySQL to run.
 - ✅ **Phase 4** — evening digest cron (`DIGEST_HOUR` KST, node-cron) synthesizing the day's relevant analyses into a markdown report **with source attribution + original links**; digest worker (`worker:digest`); digest tRPC router (dates/get/generate); Daily Digest view (date picker + rendered markdown).
+- ✅ **Phase 5** — authenticated sources via **browser login (no stored passwords)**: `npm run login` saves a Playwright session; adapters for substack (paid full text), naver_premium, fanding, and x (session scrape; API path if `X_API_PROVIDER` set). Sources UI shows login status + the per-source login command. Requires a machine with a browser to log in.
 - ⬜ Phase 5 — authenticated sources (login script, sessions, substack paid, naver_premium, fanding, x).

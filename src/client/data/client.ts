@@ -76,6 +76,12 @@ export interface DataApi {
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   listDigestDates(): Promise<DigestDate[]>;
   getDigest(date?: string): Promise<DigestFull | null>;
+  listSessions(): Promise<SessionInfo[]>;
+}
+
+export interface SessionInfo {
+  id: number;
+  hasSession: boolean;
 }
 
 export interface DigestDate {
@@ -117,6 +123,7 @@ function makeTrpcApi(): DataApi {
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     listDigestDates: () => client.digest.dates.query() as Promise<DigestDate[]>,
     getDigest: (date) => client.digest.get.query({ date }) as Promise<DigestFull | null>,
+    listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
   };
 }
 
@@ -209,6 +216,10 @@ function makeStaticApi(): DataApi {
     },
     async getDigest() {
       return SAMPLE_DIGEST;
+    },
+    async listSessions() {
+      // Static demo has no server-side sessions.
+      return load().map((s) => ({ id: s.id, hasSession: false }));
     },
   };
 }

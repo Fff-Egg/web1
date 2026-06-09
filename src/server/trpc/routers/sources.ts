@@ -5,6 +5,7 @@ import { listProviders } from "../../adapters/index.js";
 import { PROVIDER_LIST, PROVIDER_PRESETS } from "../../../shared/providers.js";
 import { sourcesRepo } from "../../repo/sources.js";
 import { hasDb } from "../../db/client.js";
+import { hasSession } from "../../auth/session.js";
 
 const providerEnum = z.enum(PROVIDERS);
 const fetchTypeEnum = z.enum(FETCH_TYPES);
@@ -29,6 +30,12 @@ export const sourcesRouter = router({
   status: publicProcedure.query(() => ({ persisted: hasDb })),
 
   list: publicProcedure.query(() => sourcesRepo.list()),
+
+  /** Which sources have a saved login session on disk (for the session badge). */
+  sessions: publicProcedure.query(async () => {
+    const all = await sourcesRepo.list();
+    return all.map((s) => ({ id: s.id, hasSession: hasSession(s.id) }));
+  }),
 
   /** Providers that actually have a registered adapter. */
   providers: publicProcedure.query(() => listProviders()),

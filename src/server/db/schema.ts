@@ -83,6 +83,8 @@ export interface SourceConfig {
   credentialRef?: string;
   /** CSS selector for article body when scraping. */
   bodySelector?: string;
+  /** CSS selector for post links on a list/channel page (auth list providers). */
+  listSelector?: string;
   /** Override RSS url (otherwise derived from identifier). */
   rssUrl?: string;
   /** Per-source polling interval override (minutes). */
