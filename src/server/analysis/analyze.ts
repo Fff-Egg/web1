@@ -26,12 +26,21 @@ function clip(s: string | null | undefined, n: number): string {
   return s.length > n ? s.slice(0, n) : s;
 }
 
+/** Criteria text that means "don't filter — analyze everything". */
+function analyzeEverything(criteria: string): boolean {
+  if (process.env.ANALYZE_ALL === "1") return true;
+  return /^(전부|모두|모든\s*글|all|everything)\.?$/i.test(criteria.trim());
+}
+
 /** 1st pass: cheap relevance filter driven by the user's criteria/instructions. */
 export async function filterRelevant(
   article: Article,
   cfg: AnalysisConfig,
 ): Promise<boolean> {
   const criteria = cfg.relevanceCriteria?.trim() || cfg.instructions;
+  // "Analyze everything" — skip the LLM filter entirely (saves tokens, and
+  // never drops an article on an ambiguous criterion).
+  if (analyzeEverything(criteria)) return true;
   const system =
     `${criteria}\n\n` +
     `다음 글이 위 기준에 관련 있는지 판단해 JSON으로만 답한다: {"relevant": true} 또는 {"relevant": false}`;
@@ -40,10 +49,17 @@ export async function filterRelevant(
     model: cfg.filterModel || FILTER_MODEL(),
     system,
     user,
-    maxTokens: 16,
+    maxTokens: 200,
   });
   const parsed = parseJsonLoose<{ relevant?: boolean }>(text);
-  return parsed?.relevant === true;
+  // Fail open: if the filter's answer can't be read (e.g. a reasoning model
+  // emitted thinking, no JSON), keep the article rather than silently dropping
+  // it. Only an explicit `false` filters it out.
+  if (!parsed) {
+    console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
+    return true;
+  }
+  return parsed.relevant !== false;
 }
 
 export interface DeepAnalysis {
