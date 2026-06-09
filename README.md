@@ -67,7 +67,7 @@ npm run dev               # client (5173) + server (3000)
 
 ## Status
 - ✅ **Phase 1** — foundation, DB schema + migration, adapter interface + provider registry + RSS adapter, collection worker, seed.
-- ⬜ Phase 2 — public providers (naver_blog, hankyung, generic_rss, substack-rss) + Sources management UI.
+- ✅ **Phase 2** — public-provider adapters (naver_blog, hankyung, generic_rss, substack-rss) + provider preset catalog + Sources management UI (add/toggle/edit/delete, credentialRef field for auth providers).
 - ⬜ Phase 3 — analysis pipeline.
 - ⬜ Phase 4 — digest cron + Daily Digest / Feed views.
 - ⬜ Phase 5 — authenticated sources (login script, sessions, substack paid, naver_premium, fanding, x).

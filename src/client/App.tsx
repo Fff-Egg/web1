@@ -1,49 +1,52 @@
+import { useState } from "react";
 import { trpc } from "./trpc.js";
+import { SourcesPage } from "./pages/SourcesPage.js";
 
-/**
- * Phase 1 shell. Phase 2 fills in the Sources management UI; Phase 4 adds the
- * Daily Digest and Feed views.
- */
+type Tab = "sources" | "digest" | "feed";
+
+const TABS: { id: Tab; label: string }[] = [
+  { id: "sources", label: "Sources" },
+  { id: "digest", label: "Daily Digest" },
+  { id: "feed", label: "Feed" },
+];
+
 export function App() {
+  const [tab, setTab] = useState<Tab>("sources");
   const health = trpc.health.useQuery();
-  const sources = trpc.sources.list.useQuery();
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
+    <div className="mx-auto max-w-4xl p-6">
       <header className="mb-6">
         <h1 className="text-2xl font-bold">Feed Watch — Investment Digest</h1>
         <p className="text-sm text-slate-500">
-          Phase 1 foundation · server {health.data?.ok ? "online" : "…"}
+          server {health.data?.ok ? "online" : "…"}
         </p>
       </header>
 
-      <section>
-        <h2 className="mb-2 text-lg font-semibold">Sources</h2>
-        {sources.isLoading && <p className="text-slate-500">Loading…</p>}
-        {sources.error && (
-          <p className="text-red-600">DB not reachable: {sources.error.message}</p>
-        )}
-        <ul className="space-y-2">
-          {sources.data?.map((s) => (
-            <li
-              key={s.id}
-              className="flex items-center justify-between rounded border border-slate-200 bg-white px-4 py-2"
-            >
-              <div>
-                <span className="font-medium">{s.label ?? s.identifier}</span>{" "}
-                <span className="text-xs text-slate-400">[{s.provider}]</span>
-              </div>
-              <span
-                className={
-                  s.enabled ? "text-xs text-green-600" : "text-xs text-slate-400"
-                }
-              >
-                {s.enabled ? "on" : "off"}
-              </span>
-            </li>
-          ))}
-        </ul>
-      </section>
+      <nav className="mb-6 flex gap-1 border-b border-slate-200">
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={
+              "px-4 py-2 text-sm font-medium -mb-px border-b-2 " +
+              (tab === t.id
+                ? "border-slate-900 text-slate-900"
+                : "border-transparent text-slate-500 hover:text-slate-800")
+            }
+          >
+            {t.label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "sources" && <SourcesPage />}
+      {tab === "digest" && (
+        <p className="text-slate-500">Daily Digest 뷰는 Phase 4에서 제공됩니다.</p>
+      )}
+      {tab === "feed" && (
+        <p className="text-slate-500">Feed 뷰는 Phase 4에서 제공됩니다.</p>
+      )}
     </div>
   );
 }

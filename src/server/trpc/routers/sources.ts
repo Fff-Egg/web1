@@ -4,6 +4,7 @@ import { router, publicProcedure } from "../trpc.js";
 import { db } from "../../db/client.js";
 import { sources, PROVIDERS, FETCH_TYPES } from "../../db/schema.js";
 import { listProviders } from "../../adapters/index.js";
+import { PROVIDER_LIST, PROVIDER_PRESETS } from "../../../shared/providers.js";
 
 const providerEnum = z.enum(PROVIDERS);
 const fetchTypeEnum = z.enum(FETCH_TYPES);
@@ -30,11 +31,15 @@ export const sourcesRouter = router({
   /** Providers that actually have a registered adapter. */
   providers: publicProcedure.query(() => listProviders()),
 
+  /** Full provider catalog (presets) for the UI dropdown. */
+  presets: publicProcedure.query(() => PROVIDER_LIST),
+
   create: publicProcedure
     .input(
       z.object({
         provider: providerEnum,
-        fetchType: fetchTypeEnum,
+        // fetchType is derived from the provider preset unless explicitly given.
+        fetchType: fetchTypeEnum.optional(),
         identifier: z.string().min(1),
         label: z.string().optional(),
         enabled: z.boolean().default(true),
@@ -42,9 +47,10 @@ export const sourcesRouter = router({
       }),
     )
     .mutation(async ({ input }) => {
+      const preset = PROVIDER_PRESETS[input.provider];
       const [res] = await db.insert(sources).values({
         provider: input.provider,
-        fetchType: input.fetchType,
+        fetchType: input.fetchType ?? preset.fetchType,
         identifier: input.identifier,
         label: input.label,
         enabled: input.enabled,
