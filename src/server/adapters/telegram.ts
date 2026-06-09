@@ -4,15 +4,21 @@ import type { SourceAdapter, NormalizedArticle } from "./types.js";
 import { SessionRequiredError } from "./types.js";
 import { db } from "../db/client.js";
 import { sources } from "../db/schema.js";
-import { getTelegram, hasTelegram } from "../telegram/client.js";
+import { getTelegram, hasTelegram, ensureEntities } from "../telegram/client.js";
 
-/** Normalize @name / t.me/name / https://t.me/name → name. */
-function channelRef(identifier: string): string {
-  return identifier
+/**
+ * Normalize an identifier to either a public username (string) or a numeric
+ * channel id (number, for private channels):
+ *   @name / t.me/name → "name"
+ *   -1001234567890    → -1001234567890 (number)
+ */
+function parseRef(identifier: string): string | number {
+  const s = identifier
     .trim()
     .replace(/^https?:\/\/t\.me\//i, "")
     .replace(/^@/, "")
     .replace(/\/.*$/, "");
+  return /^-?\d+$/.test(s) ? Number(s) : s;
 }
 
 /**
@@ -33,7 +39,8 @@ export const telegramAdapter: SourceAdapter = {
       );
     }
     const client = await getTelegram();
-    const ref = channelRef(source.identifier);
+    await ensureEntities(client); // needed to resolve private channels by id
+    const ref = parseRef(source.identifier);
     const cursor = source.config?.lastMessageId ?? 0;
     const limit = source.config?.maxItems ?? 50;
 
@@ -58,13 +65,16 @@ export const telegramAdapter: SourceAdapter = {
       .set({ config: { ...(source.config ?? {}), lastMessageId: maxId } })
       .where(eq(sources.id, source.id));
 
+    const refStr = String(ref);
+    const name = source.label ?? refStr;
     return [
       {
-        externalId: `${ref}:${cursor}-${maxId}`,
-        url: `https://t.me/${ref}/${maxId}`,
-        title: `텔레그램 ${source.label ?? ref} — 메시지 ${fresh.length}건`,
+        externalId: `${refStr}:${cursor}-${maxId}`,
+        // Public channels get a deep link; private channels have no public URL.
+        url: typeof ref === "string" ? `https://t.me/${ref}/${maxId}` : null,
+        title: `텔레그램 ${name} — 메시지 ${fresh.length}건`,
         body,
-        author: source.label ?? ref,
+        author: name,
         publishedAt: last.date ? new Date(last.date * 1000) : null,
       },
     ];

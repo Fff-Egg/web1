@@ -31,6 +31,22 @@ async function main() {
   console.log("\n===== 아래 한 줄을 TELEGRAM_SESSION 환경변수에 넣으세요 =====\n");
   console.log(session);
   console.log("\n=============================================================\n");
+
+  // List the account's channels/groups so private channels can be added by id.
+  try {
+    const dialogs = await client.getDialogs({ limit: 500 });
+    console.log("===== 내 채널/그룹 (아이디  ←  제목) =====");
+    console.log("(비공개 채널은 @이름이 없으니 아래 '아이디'를 소스에 넣으세요)\n");
+    for (const d of dialogs) {
+      if (d.isChannel || d.isGroup) {
+        console.log(`${d.id?.toString()}\t${d.title ?? ""}`);
+      }
+    }
+    console.log("\n=============================================================\n");
+  } catch (e) {
+    console.error("채널 목록을 불러오지 못했습니다:", e);
+  }
+
   await client.disconnect();
   rl.close();
   process.exit(0);

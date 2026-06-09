@@ -36,3 +36,15 @@ export async function getTelegram(): Promise<TelegramClient> {
   })();
   return _connecting;
 }
+
+let _entitiesLoaded = false;
+
+/**
+ * Populate the entity cache once (resolving private channels by numeric id
+ * requires their access_hash, which dialogs provide).
+ */
+export async function ensureEntities(client: TelegramClient): Promise<void> {
+  if (_entitiesLoaded) return;
+  await client.getDialogs({ limit: 500 });
+  _entitiesLoaded = true;
+}
