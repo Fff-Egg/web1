@@ -33,3 +33,58 @@ export const ANALYSIS_OUTPUT_CONTRACT = `주어진 글에 대해 아래 JSON으�
   "themes": ["관련 테마"],
   "impact": "bullish | bearish | neutral"
 }`;
+
+// ─── Manual (Max subscription) analysis helpers ─────────────────────
+// Used by the manual flow: build a block to paste into claude.ai, and parse
+// the JSON answer back. No API key required.
+
+export type ImpactValue = "bullish" | "bearish" | "neutral";
+
+export interface ParsedAnalysis {
+  summary: string;
+  implications: string;
+  tickers: string[];
+  themes: string[];
+  impact: ImpactValue;
+}
+
+const MANUAL_BODY_CAP = 12000;
+
+/** Build the text the user pastes into claude.ai for one article. */
+export function buildManualPrompt(
+  instructions: string,
+  article: { title?: string | null; url?: string | null; source?: string | null; body?: string | null },
+): string {
+  const body = (article.body ?? "").slice(0, MANUAL_BODY_CAP);
+  return (
+    `${instructions}\n\n${ANALYSIS_OUTPUT_CONTRACT}\n\n` +
+    `---\n` +
+    `제목: ${article.title ?? ""}\n` +
+    `출처: ${article.source ?? ""}\n` +
+    `원문: ${article.url ?? ""}\n\n` +
+    `본문:\n${body}`
+  );
+}
+
+/** Strip code fences / surrounding prose and parse the JSON answer. */
+export function parseAnalysisJson(text: string): ParsedAnalysis | null {
+  let s = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+  const first = s.indexOf("{");
+  const last = s.lastIndexOf("}");
+  if (first >= 0 && last > first) s = s.slice(first, last + 1);
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const impact: ImpactValue =
+    obj.impact === "bullish" || obj.impact === "bearish" ? obj.impact : "neutral";
+  return {
+    summary: typeof obj.summary === "string" ? obj.summary : "",
+    implications: typeof obj.implications === "string" ? obj.implications : "",
+    tickers: Array.isArray(obj.tickers) ? obj.tickers.map(String) : [],
+    themes: Array.isArray(obj.themes) ? obj.themes.map(String) : [],
+    impact,
+  };
+}

@@ -77,6 +77,28 @@ export interface DataApi {
   listDigestDates(): Promise<DigestDate[]>;
   getDigest(date?: string): Promise<DigestFull | null>;
   listSessions(): Promise<SessionInfo[]>;
+  listPending(): Promise<PendingArticle[]>;
+  saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
+  skipPending(articleId: number): Promise<void>;
+}
+
+export interface PendingArticle {
+  id: number;
+  title: string | null;
+  url: string | null;
+  body: string | null;
+  publishedAt: string | Date | null;
+  sourceLabel: string | null;
+  provider: string;
+}
+
+export interface ManualAnalysisInput {
+  articleId: number;
+  summary: string;
+  implications: string;
+  tickers: string[];
+  themes: string[];
+  impact: Impact;
 }
 
 export interface SessionInfo {
@@ -124,6 +146,13 @@ function makeTrpcApi(): DataApi {
     listDigestDates: () => client.digest.dates.query() as Promise<DigestDate[]>,
     getDigest: (date) => client.digest.get.query({ date }) as Promise<DigestFull | null>,
     listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
+    listPending: () => client.manual.pending.query() as Promise<PendingArticle[]>,
+    saveManualAnalysis: async (input) => {
+      await client.manual.save.mutate(input);
+    },
+    skipPending: async (articleId) => {
+      await client.manual.skip.mutate({ articleId });
+    },
   };
 }
 
@@ -208,8 +237,8 @@ function makeStaticApi(): DataApi {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
     },
     async listFeed() {
-      // Static demo has no backend/Claude — show example cards so the UI is visible.
-      return SAMPLE_FEED;
+      // Static demo: manually-saved analyses first, then example cards.
+      return [...loadSavedFeed(), ...SAMPLE_FEED];
     },
     async listDigestDates() {
       return [{ date: SAMPLE_DIGEST.date, createdAt: new Date().toISOString() }];
@@ -221,8 +250,87 @@ function makeStaticApi(): DataApi {
       // Static demo has no server-side sessions.
       return load().map((s) => ({ id: s.id, hasSession: false }));
     },
+    async listPending() {
+      return loadPending();
+    },
+    async saveManualAnalysis(input) {
+      const pending = loadPending();
+      const art = pending.find((p) => p.id === input.articleId);
+      const saved = loadSavedFeed();
+      saved.unshift({
+        id: input.articleId,
+        title: art?.title ?? null,
+        url: art?.url ?? null,
+        author: null,
+        publishedAt: art?.publishedAt ?? new Date().toISOString(),
+        sourceLabel: art?.sourceLabel ?? null,
+        provider: art?.provider ?? "generic_rss",
+        summary: input.summary,
+        implications: input.implications,
+        tickers: input.tickers,
+        themes: input.themes,
+        impact: input.impact,
+      });
+      localStorage.setItem(SAVED_FEED_KEY, JSON.stringify(saved));
+      savePending(pending.filter((p) => p.id !== input.articleId));
+    },
+    async skipPending(articleId) {
+      savePending(loadPending().filter((p) => p.id !== articleId));
+    },
   };
 }
+
+const PENDING_KEY = "feedwatch.pending.v1";
+const SAVED_FEED_KEY = "feedwatch.savedfeed.v1";
+
+function loadPending(): PendingArticle[] {
+  const raw = localStorage.getItem(PENDING_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as PendingArticle[];
+    } catch {
+      /* reseed */
+    }
+  }
+  const seeded = SAMPLE_PENDING;
+  localStorage.setItem(PENDING_KEY, JSON.stringify(seeded));
+  return seeded;
+}
+function savePending(rows: PendingArticle[]) {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(rows));
+}
+function loadSavedFeed(): FeedItem[] {
+  const raw = localStorage.getItem(SAVED_FEED_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as FeedItem[];
+    } catch {
+      /* ignore */
+    }
+  }
+  return [];
+}
+
+const SAMPLE_PENDING: PendingArticle[] = [
+  {
+    id: 101,
+    title: "(예시) 한국은행, 기준금리 동결 결정… 추가 인하 신중론",
+    url: "https://example.com/pending-1",
+    body: "한국은행 금융통화위원회가 기준금리를 동결했다. 위원 다수는 물가 안정세를 확인하면서도 가계부채와 환율 변동성을 이유로 추가 인하에 신중한 입장을 보였다. 시장은 다음 분기 인하 가능성을 절반 정도로 보고 있다…",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "한국경제",
+    provider: "hankyung",
+  },
+  {
+    id: 102,
+    title: "(예시) 세상학개론: 반도체 사이클, 지금 어디쯤인가",
+    url: "https://example.com/pending-2",
+    body: "이번 글에서는 메모리 반도체 가격 반등과 AI 가속기 수요를 바탕으로 현재 반도체 사이클의 위치를 점검한다. 공급 측 감산 효과가 가격에 반영되기 시작했고, 데이터센터 투자가 수요를 견인하는 구조가 당분간 이어질 것으로 본다…",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "세상학개론",
+    provider: "fanding",
+  },
+];
 
 const CFG_KEY = "feedwatch.analysis.v1";
 

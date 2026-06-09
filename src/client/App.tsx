@@ -5,11 +5,13 @@ import { SourcesPage } from "./pages/SourcesPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 import { FeedPage } from "./pages/FeedPage.js";
 import { DigestPage } from "./pages/DigestPage.js";
+import { ManualPage } from "./pages/ManualPage.js";
 
-type Tab = "sources" | "feed" | "digest" | "settings";
+type Tab = "sources" | "analyze" | "feed" | "digest" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "sources", label: "Sources" },
+  { id: "analyze", label: "분석(수동)" },
   { id: "feed", label: "Feed" },
   { id: "digest", label: "Daily Digest" },
   { id: "settings", label: "Settings" },
@@ -58,6 +60,7 @@ export function App() {
       </nav>
 
       {tab === "sources" && <SourcesPage />}
+      {tab === "analyze" && <ManualPage />}
       {tab === "feed" && <FeedPage />}
       {tab === "digest" && <DigestPage />}
       {tab === "settings" && <SettingsPage />}
