@@ -1,4 +1,4 @@
-import { sql } from "drizzle-orm";
+import { sql, desc } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { articles, analyses } from "../db/schema.js";
 import type { Article, AnalysisConfig, Impact } from "../db/schema.js";
@@ -12,8 +12,14 @@ import {
 } from "./anthropic.js";
 import { ANALYSIS_OUTPUT_CONTRACT } from "../../shared/analysis.js";
 
-const MAX_BODY_CHARS = 12_000; // cap body length sent to the model
+// Cap body length sent to the model (cuts token cost). Tune via env.
+const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
 const BATCH = 20; // max articles per analysis pass
+
+/** Rate-limit / quota errors (e.g. Groq free-tier daily token cap). */
+function isRateLimit(msg: string): boolean {
+  return msg.includes("429") || /rate limit|quota|TPD|tokens per day/i.test(msg);
+}
 
 function clip(s: string | null | undefined, n: number): string {
   if (!s) return "";
@@ -93,11 +99,13 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
 
   const cfg = await settingsRepo.getAnalysisConfig();
 
-  // Articles with no analysis row yet.
+  // Articles with no analysis row yet — newest first, so fresh posts get
+  // analyzed before an old backlog (and aren't starved by it).
   const pending = await db
     .select()
     .from(articles)
     .where(sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`)
+    .orderBy(desc(articles.id))
     .limit(BATCH);
 
   let analyzed = 0;
@@ -131,7 +139,14 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
       relevant++;
     } catch (err) {
       errors++;
-      console.error(`[analyze] article ${article.id} failed:`, err instanceof Error ? err.message : err);
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(`[analyze] article ${article.id} failed:`, msg);
+      // Hit the provider's rate/quota limit — stop this cycle instead of
+      // hammering it with the rest of the batch (each call just re-fails).
+      if (isRateLimit(msg)) {
+        console.warn("[analyze] rate/quota limit hit — pausing analysis until next cycle.");
+        break;
+      }
     }
   }
 
