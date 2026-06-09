@@ -1,50 +1,52 @@
 import type { Source } from "../db/schema.js";
 import type { SourceAdapter, NormalizedArticle } from "./types.js";
-import { extractItemsWithSession } from "../auth/browser.js";
+import { fetchRss } from "./rss.js";
 
 function handle(identifier: string): string {
-  return identifier.trim().replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//i, "");
+  return identifier.trim().replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//i, "").replace(/\/.*$/, "");
 }
 
 /**
- * x — posts from a handle.
- *  - If X_API_PROVIDER is set, use the API path (recommended; lower ban risk).
- *  - Otherwise fall back to session scraping of the profile page.
+ * Resolve the public RSS feed URL for an X handle. No login required — X public
+ * posts are pulled through an RSS bridge (Nitter / RSSHub / RSS.app …):
  *
- * ⚠ Automated login/scraping of a main X account risks suspension. Prefer the
- * API path; the session path is best-effort.
+ *  - Per-source override: set `config.rssUrl` to a ready-made feed URL
+ *    (e.g. an RSS.app feed) and it's used as-is.
+ *  - Global template: set env `X_RSS_BRIDGE` to a bridge template. Either use a
+ *    `{handle}` placeholder (e.g. "https://nitter.example/{handle}/rss") or a
+ *    base URL ("https://nitter.example") and we append "/{handle}/rss".
+ */
+function feedUrlFor(source: Source): string {
+  const direct = source.config?.rssUrl;
+  if (direct) return direct;
+
+  const bridge = process.env.X_RSS_BRIDGE?.trim();
+  if (!bridge) {
+    throw new Error(
+      "X 공개 수집에는 RSS 브리지가 필요합니다. 환경변수 X_RSS_BRIDGE 를 설정하거나, " +
+        "이 소스의 rssUrl 에 RSS 주소(예: RSS.app 피드)를 직접 넣으세요.",
+    );
+  }
+  const h = handle(source.identifier);
+  return bridge.includes("{handle}")
+    ? bridge.replace("{handle}", h)
+    : `${bridge.replace(/\/+$/, "")}/${h}/rss`;
+}
+
+/**
+ * x — public posts from a handle, no login. Reads through an RSS bridge so the
+ * server never needs a logged-in browser session. (Member-only / protected
+ * accounts are out of scope by design.)
  */
 export const xAdapter: SourceAdapter = {
   provider: "x",
   label: "X (Twitter)",
-  requiresAuth: true,
+  requiresAuth: false,
   async fetch(source: Source): Promise<NormalizedArticle[]> {
     const h = handle(source.identifier);
-
-    if (process.env.X_API_PROVIDER) {
-      // API path: wire your chosen X API provider here. Kept explicit so we
-      // don't silently scrape when an API was intended.
-      throw new Error(
-        `X_API_PROVIDER="${process.env.X_API_PROVIDER}" 설정됨 — API 연동을 src/server/adapters/x.ts 에 구현하세요. (세션 스크래핑을 쓰려면 X_API_PROVIDER 를 비우세요)`,
-      );
-    }
-
-    // Session scraping fallback.
-    const items = await extractItemsWithSession({
-      sourceId: source.id,
-      url: `https://x.com/${h}`,
-      itemSelector: 'article[data-testid="tweet"]',
-      linkSelector: 'a[href*="/status/"]',
-      limit: source.config?.maxItems ?? 20,
-    });
-
-    return items.map((it) => ({
-      externalId: it.url ?? `${h}:${it.text.slice(0, 64)}`,
-      url: it.url,
-      title: it.text.slice(0, 120),
-      body: it.text,
-      author: `@${h}`,
-      publishedAt: null,
-    }));
+    const items = await fetchRss(feedUrlFor(source), { maxItems: source.config?.maxItems ?? 30 });
+    // Bridge feeds often omit an author; stamp the handle so the Feed/Manual UI
+    // groups and labels them clearly.
+    return items.map((it) => ({ ...it, author: it.author ?? `@${h}` }));
   },
 };

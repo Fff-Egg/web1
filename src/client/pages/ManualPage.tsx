@@ -1,8 +1,24 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { PendingArticle } from "../data/client.js";
 import { buildManualPrompt, parseAnalysisJson } from "../../shared/analysis.js";
+import { PROVIDER_PRESETS } from "../../shared/providers.js";
+
+/** Order groups are shown in; any unlisted provider falls to the end. */
+const GROUP_ORDER = [
+  "naver_blog",
+  "x",
+  "hankyung",
+  "generic_rss",
+  "substack",
+  "naver_premium",
+  "fanding",
+] as const;
+
+function providerLabel(provider: string): string {
+  return PROVIDER_PRESETS[provider as keyof typeof PROVIDER_PRESETS]?.label ?? provider;
+}
 
 /**
  * Manual analysis (for Claude Max users, no API key):
@@ -13,8 +29,28 @@ export function ManualPage() {
   const cfg = useQuery({ queryKey: ["analysisConfig"], queryFn: () => api.getAnalysisConfig() });
   const pending = useQuery({ queryKey: ["pending"], queryFn: () => api.listPending() });
 
+  // Group pending articles by source type (네이버 블로그 / X / 한경 / RSS …).
+  const groups = useMemo(() => {
+    const byProvider = new Map<string, PendingArticle[]>();
+    for (const art of pending.data ?? []) {
+      const arr = byProvider.get(art.provider) ?? [];
+      arr.push(art);
+      byProvider.set(art.provider, arr);
+    }
+    const ordered: { provider: string; items: PendingArticle[] }[] = [];
+    for (const p of GROUP_ORDER) {
+      const items = byProvider.get(p);
+      if (items) {
+        ordered.push({ provider: p, items });
+        byProvider.delete(p);
+      }
+    }
+    for (const [provider, items] of byProvider) ordered.push({ provider, items });
+    return ordered;
+  }, [pending.data]);
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
       <div className="rounded border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
         <strong>수동 분석 모드</strong> — API 키 없이 Claude Max로 분석합니다. 각 글의{" "}
         <em>복사</em>를 눌러 claude.ai에 붙여넣고, 돌아온 JSON 답변을 아래 칸에 붙여넣어 저장하세요.
@@ -26,11 +62,21 @@ export function ManualPage() {
         <p className="text-slate-500">분석할 새 글이 없습니다. (소스에서 글이 수집되면 여기에 쌓입니다)</p>
       )}
 
-      <ul className="space-y-3">
-        {pending.data?.map((art) => (
-          <ManualCard key={art.id} article={art} instructions={cfg.data?.instructions ?? ""} />
-        ))}
-      </ul>
+      {groups.map((g) => (
+        <section key={g.provider}>
+          <h3 className="mb-2 flex items-center gap-2 border-b border-slate-200 pb-1 text-sm font-semibold text-slate-700">
+            <span>{providerLabel(g.provider)}</span>
+            <span className="rounded-full bg-slate-200 px-2 py-0.5 text-xs font-normal text-slate-600">
+              {g.items.length}
+            </span>
+          </h3>
+          <ul className="space-y-3">
+            {g.items.map((art) => (
+              <ManualCard key={art.id} article={art} instructions={cfg.data?.instructions ?? ""} />
+            ))}
+          </ul>
+        </section>
+      ))}
     </div>
   );
 }

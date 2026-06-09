@@ -61,10 +61,10 @@ export const PROVIDER_PRESETS: Record<Provider, ProviderPreset> = {
   x: {
     provider: "x",
     label: "X (Twitter)",
-    fetchType: "x_auth",
-    requiresAuth: true,
-    placeholder: "@handle",
-    hint: "추가 후 로그인하면 내 계정 세션으로 수집. ⚠ 자동화는 정지 위험 — 가능하면 X API.",
+    fetchType: "rss",
+    requiresAuth: false,
+    placeholder: "@handle  (예: jukan05)",
+    hint: "로그인 없이 공개 글만 수집. 환경변수 X_RSS_BRIDGE 설정 또는 소스의 rssUrl 에 RSS 주소 입력 필요.",
     implemented: true,
   },
   naver_premium: {
