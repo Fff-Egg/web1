@@ -43,6 +43,13 @@
       "when": 1781040000000,
       "tag": "0005_saved",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1781050000000,
+      "tag": "0006_bigger_text",
+      "breakpoints": true
     }
   ]
 }
