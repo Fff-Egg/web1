@@ -47,6 +47,19 @@ function clip(s: string | null | undefined, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
+/**
+ * Replace numeric citations like [3] with a real markdown link [제목](원문링크)
+ * to the matching input article. (?!\() avoids touching real markdown links.
+ */
+function linkifyRefs(md: string, rows: DigestItem[]): string {
+  return md.replace(/\[(\d+)\](?!\()/g, (m, num) => {
+    const it = rows[Number(num) - 1];
+    if (!it) return m;
+    const title = it.title ?? "(제목없음)";
+    return it.url ? `[${title}](${it.url})` : title;
+  });
+}
+
 /** Deterministic "원문 모음" list so picked articles always carry their links. */
 function sourceLinks(rows: DigestItem[]): string {
   const lines = ["", "## 원문 모음", ""];
@@ -128,7 +141,9 @@ export async function generateDigest(
     // 2차 지침: how to synthesize the day's picks (user-editable in Settings).
     const system =
       "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
-      (cfg.digestInstructions?.trim() || DIGEST_SYSTEM);
+      (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+      "\n\n[인용 규칙(필수)] 특정 글을 언급·추천(특히 '원문 정독 추천')할 때는 제목이나 링크를 직접 쓰지 말고, " +
+      "위 입력의 글 번호만 대괄호로 [3] 처럼 표기한다. 시스템이 그 번호를 자동으로 '[제목](원문링크)'로 바꾼다.";
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows
@@ -146,8 +161,8 @@ export async function generateDigest(
       user,
       maxTokens: Number(process.env.DIGEST_MAX_TOKENS ?? 4096),
     });
-    // Always append the picked articles with their original links.
-    markdown = `${report.trim()}\n${sourceLinks(rows)}`;
+    // Turn [N] citations into real links, then append the full source list.
+    markdown = `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
   } else {
     // No API key — build a simple deterministic digest so attribution still works.
     markdown = buildFallbackMarkdown(title, rows);
