@@ -464,6 +464,22 @@ const SAMPLE_FEED: FeedItem[] = [
     themes: ["매크로", "금리"],
     impact: "neutral",
   },
+  {
+    id: 3,
+    title: "(예시) 텔레그램 투자채널 — 메시지 3건",
+    url: null,
+    author: "투자채널",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "텔레그램 투자채널",
+    provider: "telegram",
+    body: "[09:12] 오늘 외국인 반도체 순매수 지속. 수급 양호.\n[10:30] 환율 1,330원대 진입, 수출주 단기 변수 주의.\n[13:05] AI 데이터센터 관련 부품주 거래량 급증.",
+    summary: "외국인 반도체 순매수 지속, 환율·AI 부품주 동향 메모.",
+    implications: "단기 수급/환율 체크용. 원문 링크가 없어 피드에서 본문으로 확인.",
+    fullText: null,
+    tickers: [],
+    themes: ["반도체", "환율"],
+    impact: "neutral",
+  },
 ];
 
 const SAMPLE_DIGEST: DigestFull = {
@@ -479,19 +495,21 @@ const SAMPLE_DIGEST: DigestFull = {
 - 환율 변동성 확대 — 수출주 단기 변수.
 
 ## 종목·테마별 업데이트
-- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup>.
+- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup>. 텔레그램 수급 메모도 동일 방향 <sup class="cite" id="cite-3" data-tip="텔레그램 투자채널 — 메시지 3건 — 출처: 텔레그램 투자채널"><a href="#ref-3">[3]</a></sup>.
 - **매크로·금리 (중립)**: 동결 기대 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="#ref-2">[2]</a></sup>.
 
 ## 주목할 신규 글
 - 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup> (상승)
 - 금리 동결 시그널, 성장주에 우호적 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="#ref-2">[2]</a></sup> (중립)
+- 텔레그램 투자채널 수급·환율 메모 <sup class="cite" data-tip="텔레그램 투자채널 — 메시지 3건 — 출처: 텔레그램 투자채널"><a href="#ref-3">[3]</a></sup> (중립)
 
-> 예시 데이터입니다. 숫자를 누르면 아래 '참조 원문'으로 이동하고, 거기서 원문 링크로 연결됩니다.
+> 예시 데이터입니다. 숫자를 누르면 아래 '참조 원문'으로 이동하고, 거기서 원문 링크로 연결됩니다. 텔레그램 글은 원문이 없어 '피드에서 원문 보기'로 연결됩니다.
 
 <h2>참조 원문</h2>
 <ol class="digest-refs">
   <li id="ref-1"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향</a> <span class="ref-src">— 출처: 예시 소스</span> <a href="#cite-1" class="ref-back" title="본문으로">↩</a></li>
   <li id="ref-2"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">금리 동결 시그널, 성장주에 우호적</a> <span class="ref-src">— 출처: 한국경제</span> <a href="#cite-2" class="ref-back" title="본문으로">↩</a></li>
+  <li id="ref-3"><a href="?article=3" class="ref-feed" target="_blank" rel="noopener">텔레그램 투자채널 — 메시지 3건</a> <span class="ref-src">— 출처: 텔레그램 투자채널 · 피드에서 원문 보기 ↗</span> <a href="#cite-3" class="ref-back" title="본문으로">↩</a></li>
 </ol>`,
 };
 

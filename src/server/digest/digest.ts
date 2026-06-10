@@ -123,11 +123,11 @@ function sourceLinks(rows: DigestItem[]): string {
     let main: string;
     if (it.provider === "telegram") {
       // Telegram has no viewable original (private channels) or a members-only
-      // t.me link, so point to the Feed where the collected message body is
-      // stored and readable. (Client intercepts data-article to open it there.)
+      // t.me link, so link to the Feed (new tab) deep-linked to this article,
+      // where the collected message body is stored and readable.
       main =
-        `<a href="#" class="ref-feed" data-article="${it.id}">${title}</a>` +
-        ` <span class="ref-src">— 출처: ${src} · 피드에서 원문 보기</span>`;
+        `<a href="?article=${it.id}" class="ref-feed" target="_blank" rel="noopener">${title}</a>` +
+        ` <span class="ref-src">— 출처: ${src} · 피드에서 원문 보기 ↗</span>`;
     } else {
       const url = safeUrl(it.url);
       const titleHtml = url

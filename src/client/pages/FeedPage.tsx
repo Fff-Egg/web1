@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
-import { OPEN_FEED_ARTICLE, takePendingFeedArticle } from "../data/feedFocus.js";
 
 const IMPACT_STYLE: Record<Impact, string> = {
   bullish: "bg-green-100 text-green-700",
@@ -35,31 +34,37 @@ export function FeedPage() {
   const [filter, setFilter] = useState<FeedFilter>({});
   const [provider, setProvider] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
-  const feed = useQuery({
-    queryKey: ["feed", filter],
-    queryFn: () => api.listFeed(filter),
-  });
-  const bucketCounts = useQuery({ queryKey: ["feedCounts"], queryFn: () => api.feedCounts() });
-  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0 };
 
-  // Article opened from the digest's "피드에서 원문 보기" link (e.g. telegram).
-  const [focusId, setFocusId] = useState<number | null>(() => takePendingFeedArticle());
-  useEffect(() => {
-    const onOpen = (e: Event) => setFocusId((e as CustomEvent<number>).detail);
-    window.addEventListener(OPEN_FEED_ARTICLE, onOpen);
-    return () => window.removeEventListener(OPEN_FEED_ARTICLE, onOpen);
-  }, []);
+  // A single article opened from the digest's "피드에서 원문 보기" link (e.g.
+  // telegram, no viewable original) via ?article=<id>, usually in a new tab.
+  // While focused we render only that article — no full feed list, so it's light.
+  const [focusId, setFocusId] = useState<number | null>(() => {
+    const a = new URLSearchParams(window.location.search).get("article");
+    return a ? Number(a) : null;
+  });
   const focused = useQuery({
     queryKey: ["feedItem", focusId],
     queryFn: () => api.getFeedItem(focusId as number),
     enabled: focusId != null,
   });
-  const focusRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (focusId != null && focused.data) {
-      focusRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-  }, [focusId, focused.data]);
+  const clearFocus = () => {
+    setFocusId(null);
+    const u = new URL(window.location.href);
+    u.searchParams.delete("article");
+    window.history.replaceState(null, "", u.pathname + u.search + u.hash);
+  };
+
+  const feed = useQuery({
+    queryKey: ["feed", filter],
+    queryFn: () => api.listFeed(filter),
+    enabled: focusId == null,
+  });
+  const bucketCounts = useQuery({
+    queryKey: ["feedCounts"],
+    queryFn: () => api.feedCounts(),
+    enabled: focusId == null,
+  });
+  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0 };
 
   const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
   const items = provider
@@ -90,20 +95,20 @@ export function FeedPage() {
   const selectAll = () => setSelected(new Set(items.map((i) => i.id)));
   const ids = [...selected];
 
-  return (
-    <div className="space-y-4">
-      {/* 다이제스트에서 "피드에서 원문 보기"로 열린 글 (텔레그램 등) */}
-      {focusId != null && (
-        <section ref={focusRef} className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+  // Focused single-article view (opened from the digest) — light, no full list.
+  if (focusId != null) {
+    return (
+      <div className="space-y-4">
+        <section className="rounded-lg border border-amber-300 bg-amber-50 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <span className="text-sm font-medium text-amber-800">
               📌 다이제스트에서 선택한 글 — 저장된 원문
             </span>
             <button
-              onClick={() => setFocusId(null)}
-              className="text-xs text-slate-500 hover:text-slate-800"
+              onClick={clearFocus}
+              className="text-xs font-medium text-blue-600 hover:underline"
             >
-              ✕ 닫기
+              전체 피드 보기 →
             </button>
           </div>
           {focused.isLoading && <p className="text-sm text-slate-500">불러오는 중…</p>}
@@ -116,8 +121,12 @@ export function FeedPage() {
             </ul>
           )}
         </section>
-      )}
+      </div>
+    );
+  }
 
+  return (
+    <div className="space-y-4">
       {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
       <div className="flex items-center gap-1">
         {([

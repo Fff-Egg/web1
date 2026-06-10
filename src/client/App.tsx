@@ -7,7 +7,6 @@ import { FeedPage } from "./pages/FeedPage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
-import { OPEN_FEED_ARTICLE } from "./data/feedFocus.js";
 
 type Tab = "sources" | "analyze" | "feed" | "digest" | "settings" | "trash";
 
@@ -23,20 +22,18 @@ const TABS: { id: Tab; label: string }[] = [
 const TAB_KEY = "feedwatch.activeTab";
 
 export function App() {
-  // Remember the last tab across refreshes; default to Feed.
+  // Remember the last tab across refreshes; default to Feed. A digest deep link
+  // (?article=<id>, opened in a new tab) lands straight on the Feed.
   const [tab, setTab] = useState<Tab>(() => {
+    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("article")) {
+      return "feed";
+    }
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem(TAB_KEY) : null;
     return saved && TABS.some((t) => t.id === saved) ? (saved as Tab) : "feed";
   });
   useEffect(() => {
     localStorage.setItem(TAB_KEY, tab);
   }, [tab]);
-  // Digest "피드에서 원문 보기" (telegram) → jump to the Feed tab.
-  useEffect(() => {
-    const toFeed = () => setTab("feed");
-    window.addEventListener(OPEN_FEED_ARTICLE, toFeed);
-    return () => window.removeEventListener(OPEN_FEED_ARTICLE, toFeed);
-  }, []);
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 

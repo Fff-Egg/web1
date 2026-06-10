@@ -2,30 +2,20 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
-import { requestFeedArticle } from "../data/feedFocus.js";
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
 /**
- * Clicks inside the rendered digest:
- *  - data-article (telegram "피드에서 원문 보기"): open that article in the Feed.
- *  - in-page footnote jumps ([N] → #ref-N, back ↩ → #cite-N): scroll the target
- *    to the middle of the viewport instead of the very top, then flash it.
- *  - external (http) links: left untouched so they still open in a new tab.
+ * In-page footnote jumps ([N] → #ref-N, back ↩ → #cite-N): scroll the target to
+ * the middle of the viewport instead of the very top, then flash it. Other links
+ * (external originals, and the telegram "?article=<id>" feed deep link) are left
+ * untouched so they open normally — in a new tab.
  */
 function onDigestClick(e: MouseEvent<HTMLElement>) {
   const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
   if (!link) return;
-
-  const articleId = link.getAttribute("data-article");
-  if (articleId) {
-    e.preventDefault();
-    requestFeedArticle(Number(articleId));
-    return;
-  }
-
   const href = link.getAttribute("href") || "";
-  if (!href.startsWith("#")) return; // external links open normally
+  if (!href.startsWith("#")) return; // external / feed-deep-link open normally
   const id = decodeURIComponent(href.slice(1));
   if (!id) return;
   const el = document.getElementById(id);
