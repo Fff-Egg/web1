@@ -63,19 +63,50 @@ function safeUrl(u: string | null | undefined): string | null {
 }
 
 /**
- * Turn numeric citations like [3] into footnote-style superscript links that
- * jump to the matching entry in the "참조 원문" list (#ref-N). (?!\() avoids
- * touching real markdown links; out-of-range numbers are left as plain text.
- * The first occurrence of each number gets an id so its footnote can link back.
+ * Parse the inside of a citation bracket into in-range article numbers.
+ * Supports "3", grouped "3, 5" / "3,5", and ranges "3-5" / "3–5".
+ * Out-of-range and non-numeric segments are dropped; order/dedup preserved.
+ */
+function parseRefNums(inner: string, max: number): number[] {
+  const out: number[] = [];
+  const add = (n: number) => {
+    if (n >= 1 && n <= max && !out.includes(n)) out.push(n);
+  };
+  for (const seg of inner.split(",")) {
+    const s = seg.trim();
+    if (!s) continue;
+    const range = s.match(/^(\d+)\s*[-–]\s*(\d+)$/);
+    if (range) {
+      let a = Number(range[1]);
+      let b = Number(range[2]);
+      if (a > b) [a, b] = [b, a];
+      for (let n = a; n <= b; n++) add(n);
+    } else if (/^\d+$/.test(s)) {
+      add(Number(s));
+    }
+  }
+  return out;
+}
+
+/**
+ * Turn numeric citations into footnote-style superscript links to the matching
+ * "참조 원문" entry (#ref-N). Handles single [3], grouped [3, 5] / [3,5], and
+ * ranges [3-5]; (?!\() avoids real markdown links; out-of-range/non-numeric
+ * brackets are left untouched. The first occurrence of each number gets an id
+ * so its footnote can link back.
  */
 function linkifyRefs(md: string, rows: DigestItem[]): string {
   const seen = new Set<number>();
-  return md.replace(/\[(\d+)\](?!\()/g, (m, numStr) => {
-    const n = Number(numStr);
-    if (n < 1 || n > rows.length) return m;
-    const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
-    seen.add(n);
-    return `<sup class="cite"${idAttr}><a href="#ref-${n}">[${n}]</a></sup>`;
+  return md.replace(/\[([\d, –-]+)\](?!\()/g, (m, inner) => {
+    const nums = parseRefNums(inner, rows.length);
+    if (nums.length === 0) return m;
+    return nums
+      .map((n) => {
+        const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
+        seen.add(n);
+        return `<sup class="cite"${idAttr}><a href="#ref-${n}">[${n}]</a></sup>`;
+      })
+      .join("");
   });
 }
 
@@ -168,6 +199,8 @@ export async function generateDigest(
       (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
       "\n\n[인용·링크 규칙(필수)] 글을 언급·요약·추천(특히 '원문 정독 추천')할 때 제목 텍스트나 URL을 본문에 직접 쓰지 마라. " +
       "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
+      "'나머지 한 줄 정리'·'기타' 같은 목록을 포함해 글을 가리키는 모든 항목에 번호를 빠짐없이 단다(누락 금지). " +
+      "한 줄에서 여러 글을 묶을 때는 글마다 번호를 단다: [3][5] 또는 [3, 5] 형식(범위 [3-5]도 가능). " +
       "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
       "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
     const user =
