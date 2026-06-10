@@ -126,7 +126,9 @@ export async function generateDigest(
   if (hasLLM()) {
     const cfg = await settingsRepo.getAnalysisConfig();
     // 2차 지침: how to synthesize the day's picks (user-editable in Settings).
-    const system = cfg.digestInstructions?.trim() || DIGEST_SYSTEM;
+    const system =
+      "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
+      (cfg.digestInstructions?.trim() || DIGEST_SYSTEM);
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows

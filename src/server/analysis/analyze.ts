@@ -26,6 +26,11 @@ function clip(s: string | null | undefined, n: number): string {
   return s.length > n ? s.slice(0, n) : s;
 }
 
+/** True if the text contains Hangul (i.e., it's actually Korean). */
+function hasKorean(s: string): boolean {
+  return /[가-힣]/.test(s);
+}
+
 /** Criteria text that means "don't filter — analyze everything". */
 function analyzeEverything(criteria: string): boolean {
   if (process.env.ANALYZE_ALL === "1") return true;
@@ -55,12 +60,14 @@ export async function filterRelevant(
     "단순 잡담·인사·개인 일상·반복·광고는 낮음. 투자 판단·시황·실적·뉴스는 높음.";
   const forceAll = analyzeEverything(criteria);
   const system =
+    `★ 출력 언어(최우선 규칙): 모든 출력은 반드시 한국어로 작성한다. summary는 한국어 문장으로만 쓰며 ` +
+    `중국어·일본어를 절대 사용하지 않는다. (영어 고유명사·종목 티커만 예외)\n\n` +
     `[관련성 판단 기준]\n${criteria}\n\n` +
     `[중요도 판단 기준]\n${importanceGuide}\n\n` +
     `[요약 지침]\n${summaryGuide}\n\n` +
     `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
-    `(3) 관련 있으면 [요약 지침]대로 summary. ` +
-    `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "요약 (관련 없으면 빈 문자열)"}`;
+    `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
+    `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
   const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
   const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
@@ -71,13 +78,27 @@ export async function filterRelevant(
     maxTokens: 600,
   });
   const parsed = parseJsonLoose<{ relevant?: boolean; important?: boolean; summary?: string }>(text);
-  const summary = typeof parsed?.summary === "string" ? parsed.summary : "";
+  let summary = typeof parsed?.summary === "string" ? parsed.summary : "";
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
   const relevant = forceAll || !parsed || parsed.relevant !== false;
   // Important unless explicitly false (so nothing is hidden by accident).
   const important = parsed?.important !== false;
   if (!parsed) {
     console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
+  }
+  // DeepSeek etc. sometimes summarize in Chinese — force a Korean re-summary.
+  if (relevant && summary.trim() && !hasKorean(summary)) {
+    try {
+      const re = await complete({
+        model: cfg.filterModel || FILTER_MODEL(),
+        system: "너는 한국어 요약가다. 반드시 한국어로만 2~3문장 요약한다. 중국어·일본어는 절대 쓰지 않는다.",
+        user: `다음 글을 한국어로만 2~3문장으로 요약:\n${clip(article.body, bodyChars)}`,
+        maxTokens: 400,
+      });
+      if (hasKorean(re)) summary = re.trim();
+    } catch {
+      /* keep the original summary */
+    }
   }
   return { relevant, important, summary };
 }
