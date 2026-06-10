@@ -249,15 +249,11 @@ function FeedCard({
           </a>
           <div className="mt-0.5 text-xs text-slate-400">
             {item.sourceLabel ?? item.provider}
+            {item.addedAt && <span className="text-slate-300"> · {fmtAdded(item.addedAt)}</span>}
           </div>
           </div>
         </div>
-        <div className="flex shrink-0 items-center gap-2">
-          {item.addedAt && (
-            <span className="text-[10px] text-slate-400" title="피드에 추가된 시각">
-              {fmtAdded(item.addedAt)}
-            </span>
-          )}
+        <div className="flex shrink-0 items-center gap-1.5">
           {item.impact && (
             <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
               {IMPACT_LABEL[item.impact]}
