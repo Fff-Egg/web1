@@ -21,6 +21,7 @@ const feedSelect = {
   themes: analyses.themes,
   impact: analyses.impact,
   lowPriority: analyses.lowPriority,
+  saved: analyses.saved,
 };
 
 /**
@@ -35,7 +36,7 @@ export const feedRouter = router({
           impact: z.enum(IMPACTS).optional(),
           ticker: z.string().optional(),
           theme: z.string().optional(),
-          priority: z.enum(["important", "low"]).default("important"),
+          priority: z.enum(["important", "low", "saved"]).default("important"),
           limit: z.number().min(1).max(2000).default(500),
         })
         .optional(),
@@ -43,8 +44,9 @@ export const feedRouter = router({
     .query(async ({ input }) => {
       if (!hasDb) return [];
       const conds = [eq(analyses.relevant, true), isNull(articles.deletedAt)];
-      // Main feed = important; "low" = the review bucket.
-      conds.push(eq(analyses.lowPriority, input?.priority === "low"));
+      // important = main feed, low = review bucket, saved = read-later bucket.
+      if (input?.priority === "saved") conds.push(eq(analyses.saved, true));
+      else conds.push(eq(analyses.lowPriority, input?.priority === "low"));
       if (input?.impact) conds.push(eq(analyses.impact, input.impact));
       if (input?.ticker)
         conds.push(sql`JSON_CONTAINS(${analyses.tickers}, JSON_QUOTE(${input.ticker}))`);
@@ -107,6 +109,15 @@ export const feedRouter = router({
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
       await db.update(analyses).set({ lowPriority: false }).where(eq(analyses.articleId, input.id));
+      return { ok: true };
+    }),
+
+  /** Toggle "saved / read later" on a feed item. */
+  setSaved: publicProcedure
+    .input(z.object({ id: z.number(), saved: z.boolean() }))
+    .mutation(async ({ input }) => {
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      await db.update(analyses).set({ saved: input.saved }).where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
 

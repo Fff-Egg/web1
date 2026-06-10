@@ -10,7 +10,7 @@ export interface FeedFilter {
   impact?: Impact;
   ticker?: string;
   theme?: string;
-  priority?: "important" | "low";
+  priority?: "important" | "low" | "saved";
 }
 
 export interface FeedItem {
@@ -29,6 +29,7 @@ export interface FeedItem {
   themes: string[] | null;
   impact: Impact | null;
   lowPriority?: boolean;
+  saved?: boolean;
 }
 
 /**
@@ -83,6 +84,7 @@ export interface DataApi {
   restoreFeedItem(id: number): Promise<void>;
   purgeFeedItem(id: number): Promise<void>;
   promoteFeedItem(id: number): Promise<void>;
+  setSavedFeedItem(id: number, saved: boolean): Promise<void>;
   feedDeleteMany(ids: number[]): Promise<void>;
   feedRestoreMany(ids: number[]): Promise<void>;
   feedPurgeMany(ids: number[]): Promise<void>;
@@ -181,6 +183,7 @@ function makeTrpcApi(): DataApi {
     restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
     purgeFeedItem: async (id) => { await client.feed.purge.mutate({ id }); },
     promoteFeedItem: async (id) => { await client.feed.promote.mutate({ id }); },
+    setSavedFeedItem: async (id, saved) => { await client.feed.setSaved.mutate({ id, saved }); },
     feedDeleteMany: async (ids) => { await client.feed.deleteMany.mutate({ ids }); },
     feedRestoreMany: async (ids) => { await client.feed.restoreMany.mutate({ ids }); },
     feedPurgeMany: async (ids) => { await client.feed.purgeMany.mutate({ ids }); },
@@ -298,6 +301,7 @@ function makeStaticApi(): DataApi {
     async restoreFeedItem() {},
     async purgeFeedItem() {},
     async promoteFeedItem() {},
+    async setSavedFeedItem() {},
     async feedDeleteMany() {},
     async feedRestoreMany() {},
     async feedPurgeMany() {},

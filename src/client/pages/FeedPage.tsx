@@ -61,13 +61,14 @@ export function FeedPage() {
       <div className="flex items-center gap-1">
         {([
           ["important", "중요"],
-          ["low", "검토 대상 (낮은 중요도/개인적)"],
+          ["low", "검토 대상"],
+          ["saved", "⭐ 저장됨"],
         ] as const).map(([key, label]) => {
           const on = (filter.priority ?? "important") === key;
           return (
             <button
               key={key}
-              onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : "low" }))}
+              onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : key }))}
               className={
                 "rounded-full px-3 py-1 text-sm font-medium " +
                 (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
@@ -200,6 +201,7 @@ function FeedCard({
   const invalidate = () => qc.invalidateQueries({ queryKey: ["feed"] });
   const del = useMutation({ mutationFn: () => api.deleteFeedItem(item.id), onSuccess: invalidate });
   const promote = useMutation({ mutationFn: () => api.promoteFeedItem(item.id), onSuccess: invalidate });
+  const save = useMutation({ mutationFn: () => api.setSavedFeedItem(item.id, !item.saved), onSuccess: invalidate });
   return (
     <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
       <div className="flex items-start justify-between gap-3">
@@ -230,6 +232,14 @@ function FeedCard({
               {IMPACT_LABEL[item.impact]}
             </span>
           )}
+          <button
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            title={item.saved ? "저장 해제" : "나중에 보기 저장"}
+            className={"text-base disabled:opacity-50 " + (item.saved ? "text-amber-500" : "text-slate-300 hover:text-amber-500")}
+          >
+            {item.saved ? "★" : "☆"}
+          </button>
           {review && (
             <button
               onClick={() => promote.mutate()}

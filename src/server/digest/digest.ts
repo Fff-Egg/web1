@@ -1,4 +1,4 @@
-import { and, gte, lt, eq, desc, isNull } from "drizzle-orm";
+import { and, or, gte, lt, eq, desc, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
@@ -100,10 +100,16 @@ export async function generateDigest(
     .where(
       and(
         eq(analyses.relevant, true),
-        eq(analyses.lowPriority, false),
         isNull(articles.deletedAt),
-        gte(analyses.createdAt, start),
-        lt(analyses.createdAt, end),
+        // period's important picks, plus saved "read later" items from any time
+        or(
+          and(
+            eq(analyses.lowPriority, false),
+            gte(analyses.createdAt, start),
+            lt(analyses.createdAt, end),
+          ),
+          eq(analyses.saved, true),
+        ),
       ),
     )
     .orderBy(desc(articles.publishedAt))

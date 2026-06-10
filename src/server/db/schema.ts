@@ -143,6 +143,8 @@ export const analyses = mysqlTable(
     relevant: boolean("relevant").notNull().default(false),
     /** Low-importance / personal — sorted into a separate review bucket, off the main feed. */
     lowPriority: boolean("low_priority").notNull().default(false),
+    /** Saved "read later" — appears in the saved bucket and always feeds the digest. */
+    saved: boolean("saved").notNull().default(false),
     summary: text("summary"),
     implications: text("implications"),
     /** Full multi-section analysis report (markdown), per the user's framework. */
