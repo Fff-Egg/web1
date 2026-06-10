@@ -26,6 +26,8 @@ export function FeedPage() {
     queryKey: ["feed", filter],
     queryFn: () => api.listFeed(filter),
   });
+  const bucketCounts = useQuery({ queryKey: ["feedCounts"], queryFn: () => api.feedCounts() });
+  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0 };
 
   const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
   const items = provider
@@ -37,6 +39,7 @@ export function FeedPage() {
   const clearSel = () => setSelected(new Set());
   const onDone = () => {
     qc.invalidateQueries({ queryKey: ["feed"] });
+    qc.invalidateQueries({ queryKey: ["feedCounts"] });
     clearSel();
   };
   const delMany = useMutation({ mutationFn: (ids: number[]) => api.feedDeleteMany(ids), onSuccess: onDone });
@@ -65,6 +68,7 @@ export function FeedPage() {
           ["saved", "⭐ 저장됨"],
         ] as const).map(([key, label]) => {
           const on = (filter.priority ?? "important") === key;
+          const n = key === "important" ? bc.important : key === "low" ? bc.low : bc.saved;
           return (
             <button
               key={key}
@@ -74,7 +78,7 @@ export function FeedPage() {
                 (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
               }
             >
-              {label}
+              {label} <span className={on ? "text-slate-300" : "text-slate-400"}>{n}</span>
             </button>
           );
         })}
@@ -198,7 +202,10 @@ function FeedCard({
   const [showFull, setShowFull] = useState(false);
   const [showBody, setShowBody] = useState(false);
   const qc = useQueryClient();
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["feed"] });
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: ["feed"] });
+    qc.invalidateQueries({ queryKey: ["feedCounts"] });
+  };
   const del = useMutation({ mutationFn: () => api.deleteFeedItem(item.id), onSuccess: invalidate });
   const promote = useMutation({ mutationFn: () => api.promoteFeedItem(item.id), onSuccess: invalidate });
   const save = useMutation({ mutationFn: () => api.setSavedFeedItem(item.id, !item.saved), onSuccess: invalidate });

@@ -63,6 +63,25 @@ export const feedRouter = router({
         .limit(input?.limit ?? 100);
     }),
 
+  /** Counts per bucket for the tab badges. */
+  counts: publicProcedure.query(async () => {
+    if (!hasDb) return { important: 0, low: 0, saved: 0 };
+    const [row] = await db
+      .select({
+        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false THEN 1 ELSE 0 END)`,
+        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true THEN 1 ELSE 0 END)`,
+        saved: sql<number>`SUM(CASE WHEN ${analyses.saved} = true THEN 1 ELSE 0 END)`,
+      })
+      .from(analyses)
+      .innerJoin(articles, eq(analyses.articleId, articles.id))
+      .where(and(eq(analyses.relevant, true), isNull(articles.deletedAt)));
+    return {
+      important: Number(row?.important ?? 0),
+      low: Number(row?.low ?? 0),
+      saved: Number(row?.saved ?? 0),
+    };
+  }),
+
   /** Soft-deleted feed items (trash). */
   trash: publicProcedure.query(async () => {
     if (!hasDb) return [];
