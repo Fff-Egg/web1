@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, isNull, isNotNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
@@ -109,4 +109,33 @@ export const feedRouter = router({
       await db.update(analyses).set({ lowPriority: false }).where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
+
+  // ── Batch ops (multi-select) ──────────────────────────────────────
+  deleteMany: publicProcedure
+    .input(z.object({ ids: z.array(z.number()) }))
+    .mutation(async ({ input }) => {
+      if (!hasDb || input.ids.length === 0) return { ok: true };
+      await db.update(articles).set({ deletedAt: new Date() }).where(inArray(articles.id, input.ids));
+      return { ok: true };
+    }),
+  restoreMany: publicProcedure
+    .input(z.object({ ids: z.array(z.number()) }))
+    .mutation(async ({ input }) => {
+      if (!hasDb || input.ids.length === 0) return { ok: true };
+      await db.update(articles).set({ deletedAt: null }).where(inArray(articles.id, input.ids));
+      return { ok: true };
+    }),
+  purgeMany: publicProcedure
+    .input(z.object({ ids: z.array(z.number()) }))
+    .mutation(async ({ input }) => {
+      if (!hasDb || input.ids.length === 0) return { ok: true };
+      await db.delete(articles).where(and(inArray(articles.id, input.ids), isNotNull(articles.deletedAt)));
+      return { ok: true };
+    }),
+  /** Empty the feed trash (permanently delete all trashed feed items). */
+  purgeAll: publicProcedure.mutation(async () => {
+    if (!hasDb) return { ok: true };
+    await db.delete(articles).where(isNotNull(articles.deletedAt));
+    return { ok: true };
+  }),
 });

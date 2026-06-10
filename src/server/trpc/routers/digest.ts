@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, isNull, isNotNull } from "drizzle-orm";
+import { and, desc, eq, isNull, isNotNull, inArray } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests } from "../../db/schema.js";
@@ -90,4 +90,26 @@ export const digestRouter = router({
       await db.delete(digests).where(and(eq(digests.id, input.id), isNotNull(digests.deletedAt)));
       return { ok: true };
     }),
+
+  // ── Batch ops (multi-select) ──────────────────────────────────────
+  restoreMany: publicProcedure
+    .input(z.object({ ids: z.array(z.number()) }))
+    .mutation(async ({ input }) => {
+      if (!hasDb || input.ids.length === 0) return { ok: true };
+      await db.update(digests).set({ deletedAt: null }).where(inArray(digests.id, input.ids));
+      return { ok: true };
+    }),
+  purgeMany: publicProcedure
+    .input(z.object({ ids: z.array(z.number()) }))
+    .mutation(async ({ input }) => {
+      if (!hasDb || input.ids.length === 0) return { ok: true };
+      await db.delete(digests).where(and(inArray(digests.id, input.ids), isNotNull(digests.deletedAt)));
+      return { ok: true };
+    }),
+  /** Empty the digest trash. */
+  purgeAll: publicProcedure.mutation(async () => {
+    if (!hasDb) return { ok: true };
+    await db.delete(digests).where(isNotNull(digests.deletedAt));
+    return { ok: true };
+  }),
 });

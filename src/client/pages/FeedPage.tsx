@@ -18,8 +18,10 @@ const IMPACT_LABEL: Record<Impact, string> = {
 };
 
 export function FeedPage() {
+  const qc = useQueryClient();
   const [filter, setFilter] = useState<FeedFilter>({});
   const [provider, setProvider] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const feed = useQuery({
     queryKey: ["feed", filter],
     queryFn: () => api.listFeed(filter),
@@ -31,6 +33,27 @@ export function FeedPage() {
     : feed.data ?? [];
 
   const review = filter.priority === "low";
+
+  const clearSel = () => setSelected(new Set());
+  const onDone = () => {
+    qc.invalidateQueries({ queryKey: ["feed"] });
+    clearSel();
+  };
+  const delMany = useMutation({ mutationFn: (ids: number[]) => api.feedDeleteMany(ids), onSuccess: onDone });
+  const promoteMany = useMutation({
+    mutationFn: async (ids: number[]) => {
+      for (const id of ids) await api.promoteFeedItem(id);
+    },
+    onSuccess: onDone,
+  });
+  const toggleSel = (id: number) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      n.has(id) ? n.delete(id) : n.add(id);
+      return n;
+    });
+  const selectAll = () => setSelected(new Set(items.map((i) => i.id)));
+  const ids = [...selected];
 
   return (
     <div className="space-y-4">
@@ -112,16 +135,64 @@ export function FeedPage() {
         </p>
       )}
 
+      {items.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <button onClick={selectAll} className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600">
+            전체 선택
+          </button>
+          {selected.size > 0 && (
+            <>
+              <span className="text-xs text-slate-500">{selected.size}개 선택됨</span>
+              <button
+                onClick={() => delMany.mutate(ids)}
+                disabled={delMany.isPending}
+                className="rounded bg-red-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+              >
+                선택 삭제(휴지통)
+              </button>
+              {review && (
+                <button
+                  onClick={() => promoteMany.mutate(ids)}
+                  disabled={promoteMany.isPending}
+                  className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
+                >
+                  선택 남기기
+                </button>
+              )}
+              <button onClick={clearSel} className="text-xs text-slate-400 underline">
+                선택 해제
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
       <ul className="space-y-3">
         {items.map((item) => (
-          <FeedCard key={item.id} item={item} review={review} />
+          <FeedCard
+            key={item.id}
+            item={item}
+            review={review}
+            checked={selected.has(item.id)}
+            onToggle={() => toggleSel(item.id)}
+          />
         ))}
       </ul>
     </div>
   );
 }
 
-function FeedCard({ item, review }: { item: FeedItem; review?: boolean }) {
+function FeedCard({
+  item,
+  review,
+  checked,
+  onToggle,
+}: {
+  item: FeedItem;
+  review?: boolean;
+  checked?: boolean;
+  onToggle?: () => void;
+}) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
   const [showBody, setShowBody] = useState(false);
@@ -130,9 +201,16 @@ function FeedCard({ item, review }: { item: FeedItem; review?: boolean }) {
   const del = useMutation({ mutationFn: () => api.deleteFeedItem(item.id), onSuccess: invalidate });
   const promote = useMutation({ mutationFn: () => api.promoteFeedItem(item.id), onSuccess: invalidate });
   return (
-    <li className="rounded-lg border border-slate-200 bg-white p-4">
+    <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="flex min-w-0 items-start gap-2">
+          <input
+            type="checkbox"
+            checked={checked ?? false}
+            onChange={onToggle}
+            className="mt-1 h-4 w-4 shrink-0"
+          />
+          <div className="min-w-0">
           <a
             href={item.url ?? "#"}
             target="_blank"
@@ -143,6 +221,7 @@ function FeedCard({ item, review }: { item: FeedItem; review?: boolean }) {
           </a>
           <div className="mt-0.5 text-xs text-slate-400">
             {item.sourceLabel ?? item.provider}
+          </div>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">

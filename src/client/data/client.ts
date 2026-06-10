@@ -83,6 +83,13 @@ export interface DataApi {
   restoreFeedItem(id: number): Promise<void>;
   purgeFeedItem(id: number): Promise<void>;
   promoteFeedItem(id: number): Promise<void>;
+  feedDeleteMany(ids: number[]): Promise<void>;
+  feedRestoreMany(ids: number[]): Promise<void>;
+  feedPurgeMany(ids: number[]): Promise<void>;
+  feedPurgeAll(): Promise<void>;
+  digestRestoreMany(ids: number[]): Promise<void>;
+  digestPurgeMany(ids: number[]): Promise<void>;
+  digestPurgeAll(): Promise<void>;
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
@@ -174,6 +181,13 @@ function makeTrpcApi(): DataApi {
     restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
     purgeFeedItem: async (id) => { await client.feed.purge.mutate({ id }); },
     promoteFeedItem: async (id) => { await client.feed.promote.mutate({ id }); },
+    feedDeleteMany: async (ids) => { await client.feed.deleteMany.mutate({ ids }); },
+    feedRestoreMany: async (ids) => { await client.feed.restoreMany.mutate({ ids }); },
+    feedPurgeMany: async (ids) => { await client.feed.purgeMany.mutate({ ids }); },
+    feedPurgeAll: async () => { await client.feed.purgeAll.mutate(); },
+    digestRestoreMany: async (ids) => { await client.digest.restoreMany.mutate({ ids }); },
+    digestPurgeMany: async (ids) => { await client.digest.purgeMany.mutate({ ids }); },
+    digestPurgeAll: async () => { await client.digest.purgeAll.mutate(); },
     listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
@@ -284,6 +298,13 @@ function makeStaticApi(): DataApi {
     async restoreFeedItem() {},
     async purgeFeedItem() {},
     async promoteFeedItem() {},
+    async feedDeleteMany() {},
+    async feedRestoreMany() {},
+    async feedPurgeMany() {},
+    async feedPurgeAll() {},
+    async digestRestoreMany() {},
+    async digestPurgeMany() {},
+    async digestPurgeAll() {},
     async listDigests() {
       return [
         {
