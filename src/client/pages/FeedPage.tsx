@@ -1,10 +1,11 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
+import { OPEN_FEED_ARTICLE, takePendingFeedArticle } from "../data/feedFocus.js";
 
 const IMPACT_STYLE: Record<Impact, string> = {
   bullish: "bg-green-100 text-green-700",
@@ -41,6 +42,25 @@ export function FeedPage() {
   const bucketCounts = useQuery({ queryKey: ["feedCounts"], queryFn: () => api.feedCounts() });
   const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0 };
 
+  // Article opened from the digest's "피드에서 원문 보기" link (e.g. telegram).
+  const [focusId, setFocusId] = useState<number | null>(() => takePendingFeedArticle());
+  useEffect(() => {
+    const onOpen = (e: Event) => setFocusId((e as CustomEvent<number>).detail);
+    window.addEventListener(OPEN_FEED_ARTICLE, onOpen);
+    return () => window.removeEventListener(OPEN_FEED_ARTICLE, onOpen);
+  }, []);
+  const focused = useQuery({
+    queryKey: ["feedItem", focusId],
+    queryFn: () => api.getFeedItem(focusId as number),
+    enabled: focusId != null,
+  });
+  const focusRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (focusId != null && focused.data) {
+      focusRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [focusId, focused.data]);
+
   const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
   const items = provider
     ? (feed.data ?? []).filter((i) => i.provider === provider)
@@ -72,6 +92,32 @@ export function FeedPage() {
 
   return (
     <div className="space-y-4">
+      {/* 다이제스트에서 "피드에서 원문 보기"로 열린 글 (텔레그램 등) */}
+      {focusId != null && (
+        <section ref={focusRef} className="rounded-lg border border-amber-300 bg-amber-50 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <span className="text-sm font-medium text-amber-800">
+              📌 다이제스트에서 선택한 글 — 저장된 원문
+            </span>
+            <button
+              onClick={() => setFocusId(null)}
+              className="text-xs text-slate-500 hover:text-slate-800"
+            >
+              ✕ 닫기
+            </button>
+          </div>
+          {focused.isLoading && <p className="text-sm text-slate-500">불러오는 중…</p>}
+          {focused.isSuccess && !focused.data && (
+            <p className="text-sm text-slate-500">글을 찾을 수 없습니다 (삭제되었거나 존재하지 않음).</p>
+          )}
+          {focused.data && (
+            <ul>
+              <FeedCard item={focused.data} defaultOpenBody />
+            </ul>
+          )}
+        </section>
+      )}
+
       {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
       <div className="flex items-center gap-1">
         {([
@@ -211,15 +257,17 @@ function FeedCard({
   review,
   checked,
   onToggle,
+  defaultOpenBody,
 }: {
   item: FeedItem;
   review?: boolean;
   checked?: boolean;
   onToggle?: () => void;
+  defaultOpenBody?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
-  const [showBody, setShowBody] = useState(false);
+  const [showBody, setShowBody] = useState(!!defaultOpenBody);
   const qc = useQueryClient();
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["feed"] });
@@ -232,12 +280,14 @@ function FeedCard({
     <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
       <div className="flex items-start justify-between gap-3">
         <div className="flex min-w-0 items-start gap-2">
-          <input
-            type="checkbox"
-            checked={checked ?? false}
-            onChange={onToggle}
-            className="mt-1 h-4 w-4 shrink-0"
-          />
+          {onToggle && (
+            <input
+              type="checkbox"
+              checked={checked ?? false}
+              onChange={onToggle}
+              className="mt-1 h-4 w-4 shrink-0"
+            />
+          )}
           <div className="min-w-0">
           <a
             href={item.url ?? "#"}

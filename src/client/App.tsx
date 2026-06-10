@@ -7,6 +7,7 @@ import { FeedPage } from "./pages/FeedPage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
+import { OPEN_FEED_ARTICLE } from "./data/feedFocus.js";
 
 type Tab = "sources" | "analyze" | "feed" | "digest" | "settings" | "trash";
 
@@ -30,6 +31,12 @@ export function App() {
   useEffect(() => {
     localStorage.setItem(TAB_KEY, tab);
   }, [tab]);
+  // Digest "피드에서 원문 보기" (telegram) → jump to the Feed tab.
+  useEffect(() => {
+    const toFeed = () => setTab("feed");
+    window.addEventListener(OPEN_FEED_ARTICLE, toFeed);
+    return () => window.removeEventListener(OPEN_FEED_ARTICLE, toFeed);
+  }, []);
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 

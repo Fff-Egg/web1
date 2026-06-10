@@ -32,9 +32,11 @@ const DIGEST_SYSTEM = `너는 내 개인 투자 다이제스트 편집자다. �
 규칙: 제공된 정보에 없는 내용을 지어내지 말 것. 글 인용은 번호 [N]로만 하고(제목·링크 직접 작성 금지), 시스템이 각주로 출처·원문 링크를 붙인다.`;
 
 interface DigestItem {
+  id: number;
   title: string | null;
   url: string | null;
   source: string;
+  provider: string;
   impact: string | null;
   summary: string | null;
   body: string | null;
@@ -114,13 +116,25 @@ function linkifyRefs(md: string, rows: DigestItem[]): string {
 function sourceLinks(rows: DigestItem[]): string {
   const items = rows.map((it, i) => {
     const n = i + 1;
-    const url = safeUrl(it.url);
     const title = escHtml(it.title ?? "(제목없음)");
-    const titleHtml = url
-      ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
-      : title;
+    const src = escHtml(it.source);
+    let main: string;
+    if (it.provider === "telegram") {
+      // Telegram has no viewable original (private channels) or a members-only
+      // t.me link, so point to the Feed where the collected message body is
+      // stored and readable. (Client intercepts data-article to open it there.)
+      main =
+        `<a href="#" class="ref-feed" data-article="${it.id}">${title}</a>` +
+        ` <span class="ref-src">— 출처: ${src} · 피드에서 원문 보기</span>`;
+    } else {
+      const url = safeUrl(it.url);
+      const titleHtml = url
+        ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+        : title;
+      main = `${titleHtml} <span class="ref-src">— 출처: ${src}</span>`;
+    }
     const back = `<a href="#cite-${n}" class="ref-back" title="본문으로">↩</a>`;
-    return `  <li id="ref-${n}">${titleHtml} <span class="ref-src">— 출처: ${escHtml(it.source)}</span> ${back}</li>`;
+    return `  <li id="ref-${n}">${main} ${back}</li>`;
   });
   return `\n<h2>참조 원문</h2>\n<ol class="digest-refs">\n${items.join("\n")}\n</ol>\n`;
 }
@@ -153,9 +167,11 @@ export async function generateDigest(
 
   const rows: DigestItem[] = await db
     .select({
+      id: articles.id,
       title: articles.title,
       url: articles.url,
       source: sources.label,
+      provider: sources.provider,
       impact: analyses.impact,
       summary: analyses.summary,
       body: articles.body,

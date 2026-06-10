@@ -71,6 +71,28 @@ export const feedRouter = router({
         .limit(input?.limit ?? 100);
     }),
 
+  /** A single feed item by article id, any bucket. Used by the digest's
+   *  "피드에서 원문 보기" link (telegram has no viewable original). */
+  get: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input }) => {
+      if (!hasDb) return null;
+      const [row] = await db
+        .select(feedSelect)
+        .from(analyses)
+        .innerJoin(articles, eq(analyses.articleId, articles.id))
+        .innerJoin(sources, eq(articles.sourceId, sources.id))
+        .where(
+          and(
+            eq(articles.id, input.id),
+            eq(analyses.relevant, true),
+            isNull(articles.deletedAt),
+          ),
+        )
+        .limit(1);
+      return row ?? null;
+    }),
+
   /** Counts per bucket for the tab badges. */
   counts: publicProcedure.query(async () => {
     if (!hasDb) return { important: 0, low: 0, saved: 0 };

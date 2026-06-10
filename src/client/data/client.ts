@@ -81,6 +81,7 @@ export interface DataApi {
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
+  getFeedItem(id: number): Promise<FeedItem | null>;
   feedCounts(): Promise<{ important: number; low: number; saved: number }>;
   trashFeed(): Promise<FeedItem[]>;
   deleteFeedItem(id: number): Promise<void>;
@@ -181,6 +182,7 @@ function makeTrpcApi(): DataApi {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
+    getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
     feedCounts: () => client.feed.counts.query() as Promise<{ important: number; low: number; saved: number }>,
     trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
     deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
@@ -297,6 +299,9 @@ function makeStaticApi(): DataApi {
     async listFeed() {
       // Static demo: manually-saved analyses first, then example cards.
       return [...loadSavedFeed(), ...SAMPLE_FEED];
+    },
+    async getFeedItem(id) {
+      return [...loadSavedFeed(), ...SAMPLE_FEED].find((x) => x.id === id) ?? null;
     },
     async feedCounts() {
       return { important: 0, low: 0, saved: 0 };
