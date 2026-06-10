@@ -31,6 +31,20 @@ select {
 
 /* Footnote-style citations + numbered "참조 원문" list for the digest. */
 .prose-digest .cite a { @apply font-normal text-blue-600 no-underline hover:underline; }
+/* Hover tooltip on a citation [N]: shows the referenced article's title + source. */
+.prose-digest .cite[data-tip] { position: relative; }
+.prose-digest .cite[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  width: max-content;
+  max-width: 18rem;
+  white-space: normal;
+  pointer-events: none;
+  @apply rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal not-italic leading-snug text-slate-700 shadow-md;
+}
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }
 /* Brief highlight on the jumped-to footnote / citation (set via JS, see DigestPage). */

@@ -474,17 +474,17 @@ const SAMPLE_DIGEST: DigestFull = {
   markdown: `# 일일 다이제스트 (예시)
 
 ## 오늘의 핵심 3가지
-- AI 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" id="cite-1"><a href="#ref-1">[1]</a></sup> — 인프라 사이클 지속 신호.
-- 중앙은행 금리 동결 시그널 <sup class="cite" id="cite-2"><a href="#ref-2">[2]</a></sup> — 성장주 밸류에이션에 우호적.
+- AI 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" id="cite-1" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup> — 인프라 사이클 지속 신호.
+- 중앙은행 금리 동결 시그널 <sup class="cite" id="cite-2" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="#ref-2">[2]</a></sup> — 성장주 밸류에이션에 우호적.
 - 환율 변동성 확대 — 수출주 단기 변수.
 
 ## 종목·테마별 업데이트
-- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite"><a href="#ref-1">[1]</a></sup>.
-- **매크로·금리 (중립)**: 동결 기대 <sup class="cite"><a href="#ref-2">[2]</a></sup>.
+- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup>.
+- **매크로·금리 (중립)**: 동결 기대 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="#ref-2">[2]</a></sup>.
 
 ## 주목할 신규 글
-- 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 <sup class="cite"><a href="#ref-1">[1]</a></sup> (상승)
-- 금리 동결 시그널, 성장주에 우호적 <sup class="cite"><a href="#ref-2">[2]</a></sup> (중립)
+- 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="#ref-1">[1]</a></sup> (상승)
+- 금리 동결 시그널, 성장주에 우호적 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="#ref-2">[2]</a></sup> (중립)
 
 > 예시 데이터입니다. 숫자를 누르면 아래 '참조 원문'으로 이동하고, 거기서 원문 링크로 연결됩니다.
 

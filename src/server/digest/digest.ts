@@ -104,9 +104,11 @@ function linkifyRefs(md: string, rows: DigestItem[]): string {
     if (nums.length === 0) return m;
     return nums
       .map((n) => {
+        const it = rows[n - 1];
+        const tip = escHtml(`${it.title ?? "(제목없음)"} — 출처: ${it.source}`);
         const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
         seen.add(n);
-        return `<sup class="cite"${idAttr}><a href="#ref-${n}">[${n}]</a></sup>`;
+        return `<sup class="cite"${idAttr} data-tip="${tip}"><a href="#ref-${n}">[${n}]</a></sup>`;
       })
       .join("");
   });
