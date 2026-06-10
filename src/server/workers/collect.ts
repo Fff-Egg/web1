@@ -1,5 +1,5 @@
 import "dotenv/config";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { sources, articles } from "../db/schema.js";
 import type { Source } from "../db/schema.js";
@@ -49,6 +49,17 @@ export async function collectSource(source: Source): Promise<number> {
 
   let inserted = 0;
   for (const item of items) {
+    // Skip if a same-URL article already exists for this source — even if it was
+    // deleted. Prevents sources with unstable feed GUIDs (some RSS bridges) from
+    // re-creating (and thus resurrecting deleted) items on each collection.
+    if (item.url) {
+      const [existing] = await db
+        .select({ id: articles.id })
+        .from(articles)
+        .where(and(eq(articles.sourceId, source.id), eq(articles.url, item.url)))
+        .limit(1);
+      if (existing) continue;
+    }
     // insertIgnore-style: rely on the unique index to skip duplicates
     const res = await db
       .insert(articles)
