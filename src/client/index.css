@@ -28,3 +28,11 @@ select {
 .prose-digest a { @apply text-blue-600 hover:underline; }
 .prose-digest strong { @apply font-semibold text-slate-900; }
 .prose-digest blockquote { @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-500 text-sm; }
+
+/* Footnote-style citations + numbered "참조 원문" list for the digest. */
+.prose-digest .cite a { @apply font-normal text-blue-600 no-underline hover:underline; }
+.prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
+.prose-digest ol.digest-refs li { @apply scroll-mt-24; }
+.prose-digest ol.digest-refs li:target { @apply -mx-1 rounded bg-amber-100 px-1; }
+.prose-digest .ref-src { @apply text-slate-400; }
+.prose-digest .ref-back { @apply ml-1 text-slate-300 no-underline hover:text-blue-600; }

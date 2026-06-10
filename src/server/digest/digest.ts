@@ -27,9 +27,9 @@ const DIGEST_SYSTEM = `너는 내 개인 투자 다이제스트 편집자다. �
 - 종목/테마별로 묶어 정리하고 각 항목에 영향(상승/하락/중립)을 표시.
 
 ## 주목할 신규 글
-- 각 글을 \`- [제목](원문링크) — 출처: 소스명 (영향)\` 형식으로. **반드시 원문 링크와 출처를 포함**한다.
+- 각 글을 \`- 한 줄 요약 [N] (영향)\` 형식으로 한 줄씩. 제목·URL은 쓰지 말고 글 번호 [N]만 단다.
 
-규칙: 제공된 정보에 없는 내용을 지어내지 말 것. 모든 인용 글에는 출처와 원문 링크를 남길 것.`;
+규칙: 제공된 정보에 없는 내용을 지어내지 말 것. 글 인용은 번호 [N]로만 하고(제목·링크 직접 작성 금지), 시스템이 각주로 출처·원문 링크를 붙인다.`;
 
 interface DigestItem {
   title: string | null;
@@ -47,27 +47,51 @@ function clip(s: string | null | undefined, n: number): string {
   return s.length > n ? s.slice(0, n) + "…" : s;
 }
 
+/** Escape text for safe interpolation into raw HTML (digest renders via dangerouslySetInnerHTML). */
+function escHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/** Permit only http(s) links in rendered HTML; anything else → no link. */
+function safeUrl(u: string | null | undefined): string | null {
+  const t = u?.trim();
+  return t && /^https?:\/\//i.test(t) ? t : null;
+}
+
 /**
- * Replace numeric citations like [3] with a real markdown link [제목](원문링크)
- * to the matching input article. (?!\() avoids touching real markdown links.
+ * Turn numeric citations like [3] into footnote-style superscript links that
+ * jump to the matching entry in the "참조 원문" list (#ref-N). (?!\() avoids
+ * touching real markdown links; out-of-range numbers are left as plain text.
+ * The first occurrence of each number gets an id so its footnote can link back.
  */
 function linkifyRefs(md: string, rows: DigestItem[]): string {
-  return md.replace(/\[(\d+)\](?!\()/g, (m, num) => {
-    const it = rows[Number(num) - 1];
-    if (!it) return m;
-    const title = it.title ?? "(제목없음)";
-    return it.url ? `[${title}](${it.url})` : title;
+  const seen = new Set<number>();
+  return md.replace(/\[(\d+)\](?!\()/g, (m, numStr) => {
+    const n = Number(numStr);
+    if (n < 1 || n > rows.length) return m;
+    const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
+    seen.add(n);
+    return `<sup class="cite"${idAttr}><a href="#ref-${n}">[${n}]</a></sup>`;
   });
 }
 
-/** Deterministic "원문 모음" list so picked articles always carry their links. */
+/** Deterministic numbered "참조 원문" list — footnote targets carrying each pick's link. */
 function sourceLinks(rows: DigestItem[]): string {
-  const lines = ["", "## 원문 모음", ""];
-  for (const it of rows) {
-    const link = it.url ? `[${it.title ?? "(제목없음)"}](${it.url})` : it.title ?? "(제목없음)";
-    lines.push(`- ${link} — 출처: ${it.source}`);
-  }
-  return lines.join("\n");
+  const items = rows.map((it, i) => {
+    const n = i + 1;
+    const url = safeUrl(it.url);
+    const title = escHtml(it.title ?? "(제목없음)");
+    const titleHtml = url
+      ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>`
+      : title;
+    const back = `<a href="#cite-${n}" class="ref-back" title="본문으로">↩</a>`;
+    return `  <li id="ref-${n}">${titleHtml} <span class="ref-src">— 출처: ${escHtml(it.source)}</span> ${back}</li>`;
+  });
+  return `\n<h2>참조 원문</h2>\n<ol class="digest-refs">\n${items.join("\n")}\n</ol>\n`;
 }
 
 export interface GenerateDigestOpts {
@@ -142,8 +166,10 @@ export async function generateDigest(
     const system =
       "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
       (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
-      "\n\n[인용 규칙(필수)] 특정 글을 언급·추천(특히 '원문 정독 추천')할 때는 제목이나 링크를 직접 쓰지 말고, " +
-      "위 입력의 글 번호만 대괄호로 [3] 처럼 표기한다. 시스템이 그 번호를 자동으로 '[제목](원문링크)'로 바꾼다.";
+      "\n\n[인용·링크 규칙(필수)] 글을 언급·요약·추천(특히 '원문 정독 추천')할 때 제목 텍스트나 URL을 본문에 직접 쓰지 마라. " +
+      "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
+      "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
+      "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows
@@ -161,7 +187,7 @@ export async function generateDigest(
       user,
       maxTokens: Number(process.env.DIGEST_MAX_TOKENS ?? 4096),
     });
-    // Turn [N] citations into real links, then append the full source list.
+    // Turn [N] citations into footnote links, then append the numbered "참조 원문" list.
     markdown = `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
   } else {
     // No API key — build a simple deterministic digest so attribution still works.

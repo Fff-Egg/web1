@@ -469,19 +469,25 @@ const SAMPLE_DIGEST: DigestFull = {
   markdown: `# 일일 다이제스트 (예시)
 
 ## 오늘의 핵심 3가지
-- AI 데이터센터 GPU 수요 가이던스 상향 — 인프라 사이클 지속 신호.
-- 중앙은행 금리 동결 시그널 — 성장주 밸류에이션에 우호적.
+- AI 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" id="cite-1"><a href="#ref-1">[1]</a></sup> — 인프라 사이클 지속 신호.
+- 중앙은행 금리 동결 시그널 <sup class="cite" id="cite-2"><a href="#ref-2">[2]</a></sup> — 성장주 밸류에이션에 우호적.
 - 환율 변동성 확대 — 수출주 단기 변수.
 
 ## 종목·테마별 업데이트
-- **AI 반도체 (상승)**: 데이터센터 수요 강세.
-- **매크로·금리 (중립)**: 동결 기대.
+- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite"><a href="#ref-1">[1]</a></sup>.
+- **매크로·금리 (중립)**: 동결 기대 <sup class="cite"><a href="#ref-2">[2]</a></sup>.
 
 ## 주목할 신규 글
-- [엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향](https://example.com/sample-1) — 출처: 예시 소스 (상승)
-- [금리 동결 시그널, 성장주에 우호적](https://example.com/sample-2) — 출처: 한국경제 (중립)
+- 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 <sup class="cite"><a href="#ref-1">[1]</a></sup> (상승)
+- 금리 동결 시그널, 성장주에 우호적 <sup class="cite"><a href="#ref-2">[2]</a></sup> (중립)
 
-> 예시 데이터입니다. 실서버에서 ANTHROPIC_API_KEY로 분석이 돌면 실제 출처·링크가 채워집니다.`,
+> 예시 데이터입니다. 숫자를 누르면 아래 '참조 원문'으로 이동하고, 거기서 원문 링크로 연결됩니다.
+
+<h2>참조 원문</h2>
+<ol class="digest-refs">
+  <li id="ref-1"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향</a> <span class="ref-src">— 출처: 예시 소스</span> <a href="#cite-1" class="ref-back" title="본문으로">↩</a></li>
+  <li id="ref-2"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">금리 동결 시그널, 성장주에 우호적</a> <span class="ref-src">— 출처: 한국경제</span> <a href="#cite-2" class="ref-back" title="본문으로">↩</a></li>
+</ol>`,
 };
 
 function seedRows(): SourceRow[] {

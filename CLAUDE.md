@@ -23,7 +23,7 @@
 1. **수집**(`workers/collect.ts`): 소스별 어댑터 fetch → articles 저장. 같은 URL이면 재생성 안 함(삭제 부활 방지).
 2. **1차 분석**(`analysis/analyze.ts` `filterRelevant`): 1번 호출로 relevant·important·summary 동시. 한국어 강제(+중국어 시 재요약). DeepSeek 등.
 3. **Feed**: relevant 글. 버킷 = 중요 / 검토대상(lowPriority) / ⭐저장됨(saved). created_at(피드 진입 시각)순. 날짜 필터·소스 탭·다중선택 삭제·휴지통(soft delete) 있음.
-4. **다이제스트**(`digest/digest.ts`): 기간 내 중요 글 + 저장(saved) 글 종합. 2차 지침(`digestInstructions`) 사용. `[N]` 인용을 제목+원문링크로 자동 변환 + 하단 "원문 모음".
+4. **다이제스트**(`digest/digest.ts`): 기간 내 중요 글 + 저장(saved) 글 종합. 2차 지침(`digestInstructions`) 사용. `[N]` 인용을 **각주(윗첨자 번호) 링크**로 변환 → 하단 번호 매긴 "참조 원문" 목록으로 점프(거기서 원문 링크 연결, `↩`로 본문 복귀). 인라인 링크는 LLM 지침으로 금지.
 
 ## 지침(Settings, DB의 settings.analysis)
 - `relevanceCriteria`(1차 필터), `importanceCriteria`(중요/낮음 분리), `summaryInstructions`(요약), `digestInstructions`(2차 다이제스트), `instructions`(DEEP_ANALYSIS용), `filterModel`/`analysisModel`.
