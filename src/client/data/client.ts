@@ -10,6 +10,7 @@ export interface FeedFilter {
   impact?: Impact;
   ticker?: string;
   theme?: string;
+  priority?: "important" | "low";
 }
 
 export interface FeedItem {
@@ -27,6 +28,7 @@ export interface FeedItem {
   tickers: string[] | null;
   themes: string[] | null;
   impact: Impact | null;
+  lowPriority?: boolean;
 }
 
 /**
@@ -80,6 +82,7 @@ export interface DataApi {
   deleteFeedItem(id: number): Promise<void>;
   restoreFeedItem(id: number): Promise<void>;
   purgeFeedItem(id: number): Promise<void>;
+  promoteFeedItem(id: number): Promise<void>;
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
@@ -170,6 +173,7 @@ function makeTrpcApi(): DataApi {
     deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
     restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
     purgeFeedItem: async (id) => { await client.feed.purge.mutate({ id }); },
+    promoteFeedItem: async (id) => { await client.feed.promote.mutate({ id }); },
     listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
@@ -279,6 +283,7 @@ function makeStaticApi(): DataApi {
     async deleteFeedItem() {},
     async restoreFeedItem() {},
     async purgeFeedItem() {},
+    async promoteFeedItem() {},
     async listDigests() {
       return [
         {

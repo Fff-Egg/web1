@@ -100,6 +100,7 @@ export async function generateDigest(
     .where(
       and(
         eq(analyses.relevant, true),
+        eq(analyses.lowPriority, false),
         isNull(articles.deletedAt),
         gte(analyses.createdAt, start),
         lt(analyses.createdAt, end),

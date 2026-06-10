@@ -141,6 +141,8 @@ export const analyses = mysqlTable(
       .notNull()
       .references(() => articles.id, { onDelete: "cascade" }),
     relevant: boolean("relevant").notNull().default(false),
+    /** Low-importance / personal — sorted into a separate review bucket, off the main feed. */
+    lowPriority: boolean("low_priority").notNull().default(false),
     summary: text("summary"),
     implications: text("implications"),
     /** Full multi-section analysis report (markdown), per the user's framework. */
@@ -190,6 +192,8 @@ export const settings = mysqlTable("settings", {
 export interface AnalysisConfig {
   /** 1차 판단 지침: 어떤 글을 '관련 있음'으로 뽑을지. (cheap per-article filter) */
   relevanceCriteria?: string;
+  /** 중요도 판별: 어떤 글을 '낮은 중요도/개인적'으로 보고 검토 버킷으로 뺄지. */
+  importanceCriteria?: string;
   /** 요약 지침: 뽑힌 글을 Feed에 어떻게 요약해 보여줄지. */
   summaryInstructions?: string;
   /** 2차 다이제스트 지침: 하루 1회, 뽑힌 글들이 어떻게 연결되고 왜 중요한지 종합. */

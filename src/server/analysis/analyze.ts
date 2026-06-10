@@ -34,6 +34,8 @@ function analyzeEverything(criteria: string): boolean {
 
 export interface Classification {
   relevant: boolean;
+  /** Important enough for the main feed; low → sorted into the review bucket. */
+  important: boolean;
   /** Short summary of the article (shown in the Feed). Empty if not relevant. */
   summary: string;
 }
@@ -48,12 +50,17 @@ export async function filterRelevant(
 ): Promise<Classification> {
   const criteria = cfg.relevanceCriteria?.trim() || cfg.instructions;
   const summaryGuide = cfg.summaryInstructions?.trim() || "핵심 내용을 한국어 2~3문장으로 요약한다.";
+  const importanceGuide =
+    cfg.importanceCriteria?.trim() ||
+    "단순 잡담·인사·개인 일상·반복·광고는 낮음. 투자 판단·시황·실적·뉴스는 높음.";
   const forceAll = analyzeEverything(criteria);
   const system =
     `[관련성 판단 기준]\n${criteria}\n\n` +
+    `[중요도 판단 기준]\n${importanceGuide}\n\n` +
     `[요약 지침]\n${summaryGuide}\n\n` +
-    `위 [관련성 판단 기준]으로 이 글이 관련 있는지 판단하고, 관련 있으면 [요약 지침]에 따라 요약하라. ` +
-    `JSON 하나로만 답한다: {"relevant": true 또는 false, "summary": "요약 (관련 없으면 빈 문자열)"}`;
+    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
+    `(3) 관련 있으면 [요약 지침]대로 summary. ` +
+    `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "요약 (관련 없으면 빈 문자열)"}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
   const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
   const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
@@ -63,14 +70,16 @@ export async function filterRelevant(
     user,
     maxTokens: 600,
   });
-  const parsed = parseJsonLoose<{ relevant?: boolean; summary?: string }>(text);
+  const parsed = parseJsonLoose<{ relevant?: boolean; important?: boolean; summary?: string }>(text);
   const summary = typeof parsed?.summary === "string" ? parsed.summary : "";
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
   const relevant = forceAll || !parsed || parsed.relevant !== false;
+  // Important unless explicitly false (so nothing is hidden by accident).
+  const important = parsed?.important !== false;
   if (!parsed) {
     console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
   }
-  return { relevant, summary };
+  return { relevant, important, summary };
 }
 
 export interface DeepAnalysis {
@@ -153,7 +162,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
 
   for (const article of pending) {
     try {
-      const { relevant: isRelevant, summary } = await filterRelevant(article, cfg);
+      const { relevant: isRelevant, important, summary } = await filterRelevant(article, cfg);
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
@@ -168,6 +177,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
       await db.insert(analyses).values({
         articleId: article.id,
         relevant: true,
+        lowPriority: !important,
         summary: deep?.summary ?? summary,
         implications: deep?.implications,
         fullText: deep?.fullText,

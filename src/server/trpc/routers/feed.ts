@@ -20,6 +20,7 @@ const feedSelect = {
   tickers: analyses.tickers,
   themes: analyses.themes,
   impact: analyses.impact,
+  lowPriority: analyses.lowPriority,
 };
 
 /**
@@ -34,6 +35,7 @@ export const feedRouter = router({
           impact: z.enum(IMPACTS).optional(),
           ticker: z.string().optional(),
           theme: z.string().optional(),
+          priority: z.enum(["important", "low"]).default("important"),
           limit: z.number().min(1).max(2000).default(500),
         })
         .optional(),
@@ -41,6 +43,8 @@ export const feedRouter = router({
     .query(async ({ input }) => {
       if (!hasDb) return [];
       const conds = [eq(analyses.relevant, true), isNull(articles.deletedAt)];
+      // Main feed = important; "low" = the review bucket.
+      conds.push(eq(analyses.lowPriority, input?.priority === "low"));
       if (input?.impact) conds.push(eq(analyses.impact, input.impact));
       if (input?.ticker)
         conds.push(sql`JSON_CONTAINS(${analyses.tickers}, JSON_QUOTE(${input.ticker}))`);
@@ -94,6 +98,15 @@ export const feedRouter = router({
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
       await db.delete(articles).where(and(eq(articles.id, input.id), isNotNull(articles.deletedAt)));
+      return { ok: true };
+    }),
+
+  /** Promote a low-importance item into the main feed. */
+  promote: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      await db.update(analyses).set({ lowPriority: false }).where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
 });

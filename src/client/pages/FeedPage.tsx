@@ -30,8 +30,39 @@ export function FeedPage() {
     ? (feed.data ?? []).filter((i) => i.provider === provider)
     : feed.data ?? [];
 
+  const review = filter.priority === "low";
+
   return (
     <div className="space-y-4">
+      {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
+      <div className="flex items-center gap-1">
+        {([
+          ["important", "중요"],
+          ["low", "검토 대상 (낮은 중요도/개인적)"],
+        ] as const).map(([key, label]) => {
+          const on = (filter.priority ?? "important") === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : "low" }))}
+              className={
+                "rounded-full px-3 py-1 text-sm font-medium " +
+                (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {review && (
+        <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          낮은 중요도/개인적이라고 판별된 글입니다. 훑어보고 <strong>남기기</strong>(피드로) 또는{" "}
+          <strong>삭제</strong>하세요. 여긴 다이제스트에 포함되지 않습니다.
+        </p>
+      )}
+
       {/* filters */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-slate-500">impact:</span>
@@ -83,22 +114,21 @@ export function FeedPage() {
 
       <ul className="space-y-3">
         {items.map((item) => (
-          <FeedCard key={item.id} item={item} />
+          <FeedCard key={item.id} item={item} review={review} />
         ))}
       </ul>
     </div>
   );
 }
 
-function FeedCard({ item }: { item: FeedItem }) {
+function FeedCard({ item, review }: { item: FeedItem; review?: boolean }) {
   const [open, setOpen] = useState(false);
   const [showFull, setShowFull] = useState(false);
   const [showBody, setShowBody] = useState(false);
   const qc = useQueryClient();
-  const del = useMutation({
-    mutationFn: () => api.deleteFeedItem(item.id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["feed"] }),
-  });
+  const invalidate = () => qc.invalidateQueries({ queryKey: ["feed"] });
+  const del = useMutation({ mutationFn: () => api.deleteFeedItem(item.id), onSuccess: invalidate });
+  const promote = useMutation({ mutationFn: () => api.promoteFeedItem(item.id), onSuccess: invalidate });
   return (
     <li className="rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-start justify-between gap-3">
@@ -120,6 +150,16 @@ function FeedCard({ item }: { item: FeedItem }) {
             <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
               {IMPACT_LABEL[item.impact]}
             </span>
+          )}
+          {review && (
+            <button
+              onClick={() => promote.mutate()}
+              disabled={promote.isPending}
+              title="피드로 남기기"
+              className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white disabled:opacity-50"
+            >
+              남기기
+            </button>
           )}
           <button
             onClick={() => del.mutate()}

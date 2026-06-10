@@ -56,6 +56,23 @@ export function SettingsPage() {
 
         <label className="block">
           <span className="text-sm font-semibold text-slate-700">
+            중요도 판별 — 낮은 중요도/개인적인 글 골라내기
+          </span>
+          <p className="text-xs text-slate-400">
+            여기에 맞는 글은 Feed의 <strong>"검토 대상"</strong> 칸으로 따로 모입니다 (다이제스트 제외).
+            훑어보고 남길지 지울지 결정하세요.
+          </p>
+          <textarea
+            value={form.importanceCriteria ?? ""}
+            onChange={(e) => set({ importanceCriteria: e.target.value })}
+            rows={3}
+            placeholder="예: 단순 잡담·인사·개인 일상·반복·광고는 낮음. 매매 판단·시황·실적·뉴스는 높음."
+            className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+          />
+        </label>
+
+        <label className="block">
+          <span className="text-sm font-semibold text-slate-700">
             요약 지침 — 뽑힌 글을 Feed에 어떻게 요약할지
           </span>
           <p className="text-xs text-slate-400">
