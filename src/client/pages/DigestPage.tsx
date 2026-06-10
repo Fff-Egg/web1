@@ -1,9 +1,28 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
+
+/**
+ * In-page footnote jumps (citation [N] → #ref-N, back ↩ → #cite-N): scroll the
+ * target to the middle of the viewport instead of the very top, then flash it.
+ * External (http) links are left untouched so they still open in a new tab.
+ */
+function onDigestClick(e: MouseEvent<HTMLElement>) {
+  const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href^="#"]');
+  if (!link) return;
+  const id = decodeURIComponent((link.getAttribute("href") || "").slice(1));
+  if (!id) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  e.preventDefault();
+  el.scrollIntoView({ behavior: "smooth", block: "center" });
+  el.classList.remove("ref-flash");
+  void el.offsetWidth; // reflow so the flash animation restarts on repeat clicks
+  el.classList.add("ref-flash");
+}
 
 /**
  * Daily Digest — generate a synthesized report over a date range (with a name),
@@ -138,6 +157,7 @@ export function DigestPage() {
       {digest.data && (
         <article
           className="prose-digest rounded-lg border border-slate-200 bg-white p-5"
+          onClick={onDigestClick}
           dangerouslySetInnerHTML={{ __html: html as string }}
         />
       )}

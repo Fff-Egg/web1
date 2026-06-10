@@ -33,6 +33,11 @@ select {
 .prose-digest .cite a { @apply font-normal text-blue-600 no-underline hover:underline; }
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }
-.prose-digest ol.digest-refs li:target { @apply -mx-1 rounded bg-amber-100 px-1; }
+/* Brief highlight on the jumped-to footnote / citation (set via JS, see DigestPage). */
+.prose-digest .ref-flash { @apply rounded; animation: digest-flash 1.5s ease-out; }
+@keyframes digest-flash {
+  from { background-color: rgb(254 243 199); } /* amber-100 */
+  to { background-color: transparent; }
+}
 .prose-digest .ref-src { @apply text-slate-400; }
 .prose-digest .ref-back { @apply ml-1 text-slate-300 no-underline hover:text-blue-600; }
