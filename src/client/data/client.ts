@@ -11,6 +11,7 @@ export interface FeedFilter {
   ticker?: string;
   theme?: string;
   priority?: "important" | "low" | "saved";
+  date?: string;
 }
 
 export interface FeedItem {
@@ -19,6 +20,7 @@ export interface FeedItem {
   url: string | null;
   author: string | null;
   publishedAt: string | Date | null;
+  addedAt?: string | Date | null;
   sourceLabel: string | null;
   provider: string;
   body?: string | null;

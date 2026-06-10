@@ -17,6 +17,18 @@ const IMPACT_LABEL: Record<Impact, string> = {
   neutral: "중립",
 };
 
+/** When the item entered the feed (analysis time), in KST. */
+function fmtAdded(d?: string | Date | null): string {
+  if (!d) return "";
+  return new Date(d).toLocaleString("ko-KR", {
+    timeZone: "Asia/Seoul",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export function FeedPage() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<FeedFilter>({});
@@ -120,9 +132,16 @@ export function FeedPage() {
           placeholder="테마"
           className="rounded border border-slate-200 px-2 py-1 text-xs"
         />
-        {(filter.impact || filter.ticker || filter.theme) && (
+        <span className="text-xs text-slate-500">추가일:</span>
+        <input
+          type="date"
+          value={filter.date ?? ""}
+          onChange={(e) => setFilter((f) => ({ ...f, date: e.target.value || undefined }))}
+          className="rounded border border-slate-200 px-2 py-1 text-xs"
+        />
+        {(filter.impact || filter.ticker || filter.theme || filter.date) && (
           <button
-            onClick={() => setFilter({})}
+            onClick={() => setFilter((f) => ({ priority: f.priority }))}
             className="text-xs text-slate-400 underline"
           >
             필터 초기화
@@ -234,6 +253,11 @@ function FeedCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {item.addedAt && (
+            <span className="text-[10px] text-slate-400" title="피드에 추가된 시각">
+              {fmtAdded(item.addedAt)}
+            </span>
+          )}
           {item.impact && (
             <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
               {IMPACT_LABEL[item.impact]}

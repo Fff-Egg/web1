@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
@@ -12,6 +12,7 @@ const feedSelect = {
   body: sql<string | null>`CASE WHEN ${sources.provider} = 'telegram' THEN ${articles.body} ELSE NULL END`,
   author: articles.author,
   publishedAt: articles.publishedAt,
+  addedAt: analyses.createdAt,
   sourceLabel: sources.label,
   provider: sources.provider,
   summary: analyses.summary,
@@ -37,6 +38,8 @@ export const feedRouter = router({
           ticker: z.string().optional(),
           theme: z.string().optional(),
           priority: z.enum(["important", "low", "saved"]).default("important"),
+          /** Filter to items added to the feed on this KST date (YYYY-MM-DD). */
+          date: z.string().optional(),
           limit: z.number().min(1).max(2000).default(500),
         })
         .optional(),
@@ -52,6 +55,11 @@ export const feedRouter = router({
         conds.push(sql`JSON_CONTAINS(${analyses.tickers}, JSON_QUOTE(${input.ticker}))`);
       if (input?.theme)
         conds.push(sql`JSON_CONTAINS(${analyses.themes}, JSON_QUOTE(${input.theme}))`);
+      if (input?.date) {
+        const start = new Date(`${input.date}T00:00:00+09:00`);
+        const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+        conds.push(gte(analyses.createdAt, start), lt(analyses.createdAt, end));
+      }
 
       return db
         .select(feedSelect)
@@ -59,7 +67,7 @@ export const feedRouter = router({
         .innerJoin(articles, eq(analyses.articleId, articles.id))
         .innerJoin(sources, eq(articles.sourceId, sources.id))
         .where(and(...conds))
-        .orderBy(desc(articles.publishedAt))
+        .orderBy(desc(analyses.createdAt))
         .limit(input?.limit ?? 100);
     }),
 
