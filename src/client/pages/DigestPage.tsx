@@ -2,6 +2,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
+import type { DigestSummary } from "../data/client.js";
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
@@ -39,6 +40,7 @@ export function DigestPage() {
   const [start, setStart] = useState(todayStr());
   const [end, setEnd] = useState(todayStr());
   const [title, setTitle] = useState("");
+  const [fromDigests, setFromDigests] = useState(false);
 
   // Default to the newest saved digest once loaded.
   useEffect(() => {
@@ -53,7 +55,7 @@ export function DigestPage() {
   };
 
   const generate = useMutation({
-    mutationFn: () => api.generateDigest({ start, end, title: title || undefined }),
+    mutationFn: () => api.generateDigest({ start, end, title: title || undefined, fromDigests }),
     onSuccess: (res) => {
       invalidate();
       if (res?.id) setSelectedId(res.id);
@@ -74,6 +76,17 @@ export function DigestPage() {
   });
 
   const html = digest.data ? marked.parse(digest.data.markdown) : "";
+
+  const isAuto = (d: DigestSummary) => Boolean((d.meta as { auto?: boolean } | null | undefined)?.auto);
+  const isCombined = (d: DigestSummary) =>
+    (d.meta as { source?: string } | null | undefined)?.source === "digests";
+  const optLabel = (d: DigestSummary) =>
+    `${d.title ?? d.periodStart ?? ""}` +
+    `${d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd ? ` (${d.periodStart}~${d.periodEnd})` : ""}` +
+    `${isCombined(d) ? " · 종합" : ""}`;
+  const autos = (list.data ?? []).filter(isAuto);
+  const manuals = (list.data ?? []).filter((d) => !isAuto(d));
+  const selected = list.data?.find((d) => d.id === selectedId);
 
   return (
     <div className="space-y-4">
@@ -108,6 +121,15 @@ export function DigestPage() {
               className="mt-0.5 block w-full rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </label>
+          <label className="flex items-center gap-1 text-xs text-slate-600">
+            <input
+              type="checkbox"
+              checked={fromDigests}
+              onChange={(e) => setFromDigests(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            저장 다이제스트로 종합(과거용)
+          </label>
           <button
             onClick={() => generate.mutate()}
             disabled={generate.isPending}
@@ -116,15 +138,19 @@ export function DigestPage() {
             {generate.isPending ? "생성 중…" : "생성"}
           </button>
         </div>
-        {generate.data && generate.data.itemCount === 0 && (
-          <p className="mt-2 text-xs text-amber-600">이 기간에 1차로 뽑힌 글이 없어 생성하지 못했습니다.</p>
+        <p className="mt-2 text-xs text-slate-400">
+          기간은 <strong>21시 기준</strong>입니다. 예) 6/11 → 6/10 21시 ~ 6/11 21시. 과거 날짜는 피드가 비어 있으면
+          그 기간의 저장된 다이제스트를 자동으로 종합합니다(위 체크로 강제 가능).
+        </p>
+        {generate.isSuccess && !generate.data && (
+          <p className="mt-2 text-xs text-amber-600">이 기간에 종합할 피드·저장 다이제스트가 없어 생성하지 못했습니다.</p>
         )}
         {generate.error && (
           <p className="mt-2 text-xs text-red-600">{(generate.error as Error).message}</p>
         )}
       </section>
 
-      {/* Saved digests */}
+      {/* Saved digests — auto (21시) and manual grouped separately */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-slate-500">저장된 다이제스트:</span>
         <select
@@ -133,12 +159,32 @@ export function DigestPage() {
           className="rounded border border-slate-300 px-2 py-1 text-sm"
         >
           {(!list.data || list.data.length === 0) && <option value="">(없음)</option>}
-          {list.data?.map((d) => (
-            <option key={d.id} value={d.id}>
-              {d.title ?? d.periodStart} {d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd ? `(${d.periodStart}~${d.periodEnd})` : ""}
-            </option>
-          ))}
+          {autos.length > 0 && (
+            <optgroup label="🤖 자동(21시)">
+              {autos.map((d) => (
+                <option key={d.id} value={d.id}>{optLabel(d)}</option>
+              ))}
+            </optgroup>
+          )}
+          {manuals.length > 0 && (
+            <optgroup label="✍️ 수동">
+              {manuals.map((d) => (
+                <option key={d.id} value={d.id}>{optLabel(d)}</option>
+              ))}
+            </optgroup>
+          )}
         </select>
+        {selected && (
+          <span
+            className={
+              "rounded-full px-2 py-0.5 text-xs font-medium " +
+              (isAuto(selected) ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600")
+            }
+          >
+            {isAuto(selected) ? "자동(21시)" : "수동"}
+            {isCombined(selected) ? " · 저장본 종합" : ""}
+          </span>
+        )}
         {selectedId !== undefined && (
           <button
             onClick={() => remove.mutate(selectedId)}

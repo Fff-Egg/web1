@@ -138,6 +138,8 @@ export interface GenerateDigestOpts {
   start?: string;
   end?: string;
   title?: string;
+  /** Synthesize from saved digests in range instead of the feed (past dates). */
+  fromDigests?: boolean;
 }
 export interface DigestSummary {
   id: number;
@@ -145,6 +147,8 @@ export interface DigestSummary {
   periodStart: string | null;
   periodEnd: string | null;
   createdAt: string | Date;
+  /** { auto, source: "feed"|"digests", model, ... } — drives grouping/badges. */
+  meta?: Record<string, unknown> | null;
 }
 export interface DigestFull {
   id: number;
@@ -329,6 +333,7 @@ function makeStaticApi(): DataApi {
           periodStart: SAMPLE_DIGEST.periodStart,
           periodEnd: SAMPLE_DIGEST.periodEnd,
           createdAt: new Date().toISOString(),
+          meta: { auto: true, source: "feed" },
         },
       ];
     },

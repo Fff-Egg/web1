@@ -11,6 +11,8 @@ const summarySelect = {
   periodStart: digests.periodStart,
   periodEnd: digests.periodEnd,
   createdAt: digests.createdAt,
+  // meta carries { auto, source, model, ... } so the UI can group/badge digests.
+  meta: digests.meta,
 };
 
 /** digest router — saved reports with custom period + name, plus trash. */
@@ -59,6 +61,8 @@ export const digestRouter = router({
           start: z.string().optional(),
           end: z.string().optional(),
           title: z.string().optional(),
+          /** Synthesize from saved digests in range instead of the feed (past dates). */
+          fromDigests: z.boolean().optional(),
         })
         .optional(),
     )

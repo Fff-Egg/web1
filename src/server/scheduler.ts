@@ -45,7 +45,9 @@ export function startSchedulers(): void {
   cron.schedule(
     `0 ${digestHour} * * *`,
     () => {
-      generateDigest()
+      // System auto-digest of the day that just closed (window [(today-1) HH, today HH)),
+      // then sweep that window's non-saved feed picks to trash.
+      generateDigest({ auto: true, trashFeedAfter: true })
         .then((r) => r && console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`))
         .catch((err) => console.error("[scheduler] digest failed:", err));
     },

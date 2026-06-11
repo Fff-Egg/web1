@@ -1,6 +1,7 @@
-import { and, or, gte, lt, eq, desc, isNull } from "drizzle-orm";
+import { and, or, gte, lt, lte, eq, desc, isNull, inArray } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
+import type { AnalysisConfig } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
 import { complete, hasLLM, ANALYSIS_MODEL } from "../analysis/anthropic.js";
 
@@ -9,11 +10,18 @@ export function kstToday(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 }
 
-/** [start, end) UTC instants bounding the KST days [startDate, endDate] inclusive. */
+/** Digest day boundary hour (KST). A "date" D = the window [(D-1) HH:00, D HH:00). */
+const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
+
+/**
+ * [start, end) UTC instants for the KST date range [startDate, endDate].
+ * Days run on the DIGEST_HOUR (default 21:00) boundary, so date D covers
+ * [(D-1) 21:00, D 21:00) KST → e.g. "11일" = 10일 21시 ~ 11일 21시.
+ */
 function kstRangeBounds(startDate: string, endDate: string): { start: Date; end: Date } {
-  const start = new Date(`${startDate}T00:00:00+09:00`);
-  // end is exclusive → midnight after the endDate
-  const end = new Date(new Date(`${endDate}T00:00:00+09:00`).getTime() + 24 * 60 * 60 * 1000);
+  const h = String(DIGEST_HOUR()).padStart(2, "0");
+  const start = new Date(new Date(`${startDate}T${h}:00:00+09:00`).getTime() - 24 * 60 * 60 * 1000);
+  const end = new Date(`${endDate}T${h}:00:00+09:00`);
   return { start, end };
 }
 
@@ -148,26 +156,19 @@ export interface GenerateDigestOpts {
   end?: string;
   /** Display name. Defaults to the period string. */
   title?: string;
+  /** Mark as a system-generated (evening cron) digest. */
+  auto?: boolean;
+  /** Synthesize from saved digests in range instead of the feed (past dates). */
+  fromDigests?: boolean;
+  /** After generating, sweep this window's (non-saved) feed picks to trash. */
+  trashFeedAfter?: boolean;
 }
 
-/**
- * Generate a saved digest over a KST date range. Gathers that period's relevant
- * (non-trashed) picks, synthesizes a markdown report (2차 지침) with source
- * links, and inserts a new `digests` row. Returns null if nothing to do.
- */
-export async function generateDigest(
-  opts: GenerateDigestOpts = {},
-): Promise<{ id: number; title: string; itemCount: number } | null> {
-  if (!hasDb) {
-    console.warn("[digest] no DATABASE_URL — skipping.");
-    return null;
-  }
-  const startDate = opts.start ?? kstToday();
-  const endDate = opts.end ?? startDate;
-  const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
-  const { start, end } = kstRangeBounds(startDate, endDate);
+const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 4096);
 
-  const rows: DigestItem[] = await db
+/** This window's relevant feed picks: period's important items + saved items (any time). */
+async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
+  return db
     .select({
       id: articles.id,
       title: articles.title,
@@ -187,7 +188,6 @@ export async function generateDigest(
       and(
         eq(analyses.relevant, true),
         isNull(articles.deletedAt),
-        // period's important picks, plus saved "read later" items from any time
         or(
           and(
             eq(analyses.lowPriority, false),
@@ -199,65 +199,196 @@ export async function generateDigest(
       ),
     )
     .orderBy(desc(articles.publishedAt))
-    .then((r) =>
-      r.map((x) => ({ ...x, source: x.source ?? "(출처 미상)" })),
-    );
+    .then((r) => r.map((x) => ({ ...x, source: x.source ?? "(출처 미상)" })));
+}
 
-  if (rows.length === 0) {
-    console.log(`[digest] ${title}: no relevant picks, skipping.`);
+interface SrcDigest {
+  id: number;
+  title: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  markdown: string;
+}
+
+/** Saved (non-trashed) digests whose period overlaps [startDate, endDate]. */
+async function fetchDigestsInRange(startDate: string, endDate: string): Promise<SrcDigest[]> {
+  return db
+    .select({
+      id: digests.id,
+      title: digests.title,
+      periodStart: digests.periodStart,
+      periodEnd: digests.periodEnd,
+      markdown: digests.markdown,
+    })
+    .from(digests)
+    .where(
+      and(
+        isNull(digests.deletedAt),
+        lte(digests.periodStart, endDate),
+        gte(digests.periodEnd, startDate),
+      ),
+    )
+    .orderBy(digests.periodStart);
+}
+
+/** Strip footnote citations + the "참조 원문" block so a digest's prose can feed another LLM pass. */
+function stripDigestHtml(md: string): string {
+  return md
+    .replace(/<sup class="cite"[^>]*>[\s\S]*?<\/sup>/g, "")
+    .replace(/\n*<h2>참조 원문<\/h2>[\s\S]*?<\/ol>\s*/g, "")
+    .trim();
+}
+
+/** LLM synthesis of this window's feed picks → markdown with footnote refs. */
+async function synthesizeFromFeed(
+  rows: DigestItem[],
+  startDate: string,
+  endDate: string,
+  title: string,
+  cfg: AnalysisConfig,
+  model: string,
+): Promise<string> {
+  if (!hasLLM()) return buildFallbackMarkdown(title, rows);
+  const system =
+    "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
+    (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+    "\n\n[인용·링크 규칙(필수)] 글을 언급·요약·추천(특히 '원문 정독 추천')할 때 제목 텍스트나 URL을 본문에 직접 쓰지 마라. " +
+    "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
+    "'나머지 한 줄 정리'·'기타' 같은 목록을 포함해 글을 가리키는 모든 항목에 번호를 빠짐없이 단다(누락 금지). " +
+    "한 줄에서 여러 글을 묶을 때는 글마다 번호를 단다: [3][5] 또는 [3, 5] 형식(범위 [3-5]도 가능). " +
+    "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
+    "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
+  const user =
+    `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
+    rows
+      .map(
+        (it, i) =>
+          `[${i + 1}] 제목: ${it.title ?? "(제목없음)"}\n` +
+          `출처: ${it.source}\n` +
+          `원문: ${it.url ?? "(링크없음)"}\n` +
+          `본문:\n${clip(it.body ?? it.summary, 1500)}`,
+      )
+      .join("\n\n---\n\n");
+  const report = await complete({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+  return `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
+}
+
+/** LLM synthesis of saved digests (past dates, when the feed is gone). No per-article refs. */
+async function synthesizeFromDigests(
+  src: SrcDigest[],
+  startDate: string,
+  endDate: string,
+  cfg: AnalysisConfig,
+  model: string,
+): Promise<string> {
+  const body = src
+    .map(
+      (d, i) =>
+        `### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n` +
+        clip(stripDigestHtml(d.markdown), 4000),
+    )
+    .join("\n\n---\n\n");
+  if (!hasLLM()) {
+    return `# ${startDate} ~ ${endDate} 종합 (저장 다이제스트 ${src.length}건)\n\n${body}`;
+  }
+  const system =
+    "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
+    (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+    "\n\n[소스 안내] 아래 입력은 이 기간에 이미 생성된 '다이제스트'들이다(원본 글이 아님). " +
+    "이들을 종합해 기간 전체를 관통하는 상위 요약을 만든다. 중복은 합치고 흐름·변화·반복 주제를 정리하라. " +
+    "원본 글 링크나 [N] 번호 인용은 쓰지 마라(소스가 다이제스트라 번호 매핑이 없다).";
+  const user = `종합 기간: ${startDate} ~ ${endDate}\n\n이미 생성된 다이제스트 ${src.length}건:\n\n${body}`;
+  const report = await complete({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+  return report.trim();
+}
+
+/** After the evening auto-digest, soft-delete this window's non-saved feed picks. */
+async function trashWindowFeed(start: Date, end: Date): Promise<number> {
+  const rows = await db
+    .select({ id: articles.id })
+    .from(analyses)
+    .innerJoin(articles, eq(analyses.articleId, articles.id))
+    .where(
+      and(
+        eq(analyses.relevant, true),
+        eq(analyses.saved, false),
+        isNull(articles.deletedAt),
+        gte(analyses.createdAt, start),
+        lt(analyses.createdAt, end),
+      ),
+    );
+  if (rows.length === 0) return 0;
+  await db
+    .update(articles)
+    .set({ deletedAt: new Date() })
+    .where(inArray(articles.id, rows.map((r) => r.id)));
+  return rows.length;
+}
+
+/**
+ * Generate a saved digest over a KST 21:00→21:00 window range. Normally
+ * synthesizes that window's feed picks; for past dates (or `fromDigests`) it
+ * synthesizes the saved digests overlapping the range instead. Inserts a
+ * `digests` row (meta marks auto/source). Returns null if nothing to do.
+ */
+export async function generateDigest(
+  opts: GenerateDigestOpts = {},
+): Promise<{ id: number; title: string; itemCount: number } | null> {
+  if (!hasDb) {
+    console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
   }
+  const startDate = opts.start ?? kstToday();
+  const endDate = opts.end ?? startDate;
+  const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
+  const { start, end } = kstRangeBounds(startDate, endDate);
+  const cfg = await settingsRepo.getAnalysisConfig();
+  const model = cfg.analysisModel || ANALYSIS_MODEL();
+
+  const rows = opts.fromDigests ? [] : await fetchFeedRows(start, end);
+  // Past dates: the window's feed was swept to trash, so fall back to saved
+  // digests. (The auto cron never falls back — it just skips an empty day.)
+  const useDigests = !!opts.fromDigests || (rows.length === 0 && !opts.auto);
 
   let markdown: string;
-  if (hasLLM()) {
-    const cfg = await settingsRepo.getAnalysisConfig();
-    // 2차 지침: how to synthesize the day's picks (user-editable in Settings).
-    const system =
-      "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
-      (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
-      "\n\n[인용·링크 규칙(필수)] 글을 언급·요약·추천(특히 '원문 정독 추천')할 때 제목 텍스트나 URL을 본문에 직접 쓰지 마라. " +
-      "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
-      "'나머지 한 줄 정리'·'기타' 같은 목록을 포함해 글을 가리키는 모든 항목에 번호를 빠짐없이 단다(누락 금지). " +
-      "한 줄에서 여러 글을 묶을 때는 글마다 번호를 단다: [3][5] 또는 [3, 5] 형식(범위 [3-5]도 가능). " +
-      "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
-      "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
-    const user =
-      `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
-      rows
-        .map(
-          (it, i) =>
-            `[${i + 1}] 제목: ${it.title ?? "(제목없음)"}\n` +
-            `출처: ${it.source}\n` +
-            `원문: ${it.url ?? "(링크없음)"}\n` +
-            `본문:\n${clip(it.body ?? it.summary, 1500)}`,
-        )
-        .join("\n\n---\n\n");
-    const report = await complete({
-      model: cfg.analysisModel || ANALYSIS_MODEL(),
-      system,
-      user,
-      maxTokens: Number(process.env.DIGEST_MAX_TOKENS ?? 4096),
-    });
-    // Turn [N] citations into footnote links, then append the numbered "참조 원문" list.
-    markdown = `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
+  let meta: Record<string, unknown>;
+  if (useDigests) {
+    const src = await fetchDigestsInRange(startDate, endDate);
+    if (src.length === 0) {
+      console.log(`[digest] ${title}: no feed picks and no saved digests in range, skipping.`);
+      return null;
+    }
+    markdown = await synthesizeFromDigests(src, startDate, endDate, cfg, model);
+    meta = {
+      itemCount: src.length,
+      model,
+      source: "digests",
+      sourceDigestIds: src.map((d) => d.id),
+      auto: !!opts.auto,
+    };
   } else {
-    // No API key — build a simple deterministic digest so attribution still works.
-    markdown = buildFallbackMarkdown(title, rows);
+    if (rows.length === 0) {
+      console.log(`[digest] ${title}: no relevant picks, skipping.`);
+      return null;
+    }
+    markdown = await synthesizeFromFeed(rows, startDate, endDate, title, cfg, model);
+    meta = { itemCount: rows.length, model, source: "feed", auto: !!opts.auto };
   }
 
   const [res] = await db
     .insert(digests)
-    .values({
-      title,
-      periodStart: startDate,
-      periodEnd: endDate,
-      markdown,
-      meta: { itemCount: rows.length },
-    })
+    .values({ title, periodStart: startDate, periodEnd: endDate, markdown, meta })
     .$returningId();
 
-  console.log(`[digest] "${title}": saved (${rows.length} items).`);
-  return { id: Number(res.id), title, itemCount: rows.length };
+  let trashed = 0;
+  if (opts.trashFeedAfter && !useDigests) {
+    trashed = await trashWindowFeed(start, end);
+  }
+  console.log(
+    `[digest] "${title}": saved (source=${String(meta.source)}, items=${Number(meta.itemCount)}` +
+      `${trashed ? `, trashed=${trashed}` : ""}).`,
+  );
+  return { id: Number(res.id), title, itemCount: Number(meta.itemCount) };
 }
 
 function buildFallbackMarkdown(title: string, rows: DigestItem[]): string {
