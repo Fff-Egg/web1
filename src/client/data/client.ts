@@ -100,6 +100,7 @@ export interface DataApi {
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
   generateDigest(opts?: GenerateDigestOpts): Promise<{ id: number; title: string; itemCount: number } | null>;
+  runEveningDigest(): Promise<{ date: string; digest: { id: number; title: string; itemCount: number; trashed: number } | null }>;
   deleteDigest(id: number): Promise<void>;
   restoreDigest(id: number): Promise<void>;
   purgeDigest(id: number): Promise<void>;
@@ -206,6 +207,8 @@ function makeTrpcApi(): DataApi {
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
     generateDigest: (opts) =>
       client.digest.generate.mutate(opts ?? {}) as Promise<{ id: number; title: string; itemCount: number } | null>,
+    runEveningDigest: () =>
+      client.digest.runEvening.mutate() as Promise<{ date: string; digest: { id: number; title: string; itemCount: number; trashed: number } | null }>,
     deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
     restoreDigest: async (id) => { await client.digest.restore.mutate({ id }); },
     purgeDigest: async (id) => { await client.digest.purge.mutate({ id }); },
@@ -345,6 +348,9 @@ function makeStaticApi(): DataApi {
     },
     async generateDigest() {
       return { id: SAMPLE_DIGEST.id, title: SAMPLE_DIGEST.title ?? "", itemCount: 0 };
+    },
+    async runEveningDigest() {
+      return { date: new Date().toLocaleDateString("en-CA"), digest: null };
     },
     async deleteDigest() {},
     async restoreDigest() {},

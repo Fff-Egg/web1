@@ -68,6 +68,16 @@ export function DigestPage() {
       setSelectedId(undefined);
     },
   });
+  // Run the 21시 routine now (auto-digest + that window's feed sweep + memo).
+  const runEvening = useMutation({
+    mutationFn: () => api.runEveningDigest(),
+    onSuccess: (res) => {
+      invalidate();
+      qc.invalidateQueries({ queryKey: ["feed"] });
+      qc.invalidateQueries({ queryKey: ["feedCounts"] });
+      if (res?.digest?.id) setSelectedId(res.digest.id);
+    },
+  });
 
   const digest = useQuery({
     queryKey: ["digest", selectedId],
@@ -148,6 +158,27 @@ export function DigestPage() {
         {generate.error && (
           <p className="mt-2 text-xs text-red-600">{(generate.error as Error).message}</p>
         )}
+
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <button
+            onClick={() => runEvening.mutate()}
+            disabled={runEvening.isPending}
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {runEvening.isPending ? "실행 중…" : "🕘 지금 21시 작업 실행"}
+          </button>
+          <span className="ml-2 text-xs text-slate-400">오늘 창(어제21시~오늘21시) 자동 다이제스트 + 그 구간 피드 정리</span>
+          {runEvening.data && (
+            <p className="mt-2 text-xs text-slate-600">
+              {runEvening.data.digest
+                ? `오늘(${runEvening.data.date}) 실행 완료: 다이제스트 “${runEvening.data.digest.title}” 생성(${runEvening.data.digest.itemCount}건) · 피드 ${runEvening.data.digest.trashed}건 휴지통으로.`
+                : `오늘(${runEvening.data.date}) 구간(어제21시~오늘21시)에 다이제스트/정리할 글이 없습니다.`}
+            </p>
+          )}
+          {runEvening.error && (
+            <p className="mt-2 text-xs text-red-600">{(runEvening.error as Error).message}</p>
+          )}
+        </div>
       </section>
 
       {/* Saved digests — auto (21시) and manual grouped separately */}

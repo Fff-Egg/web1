@@ -349,7 +349,7 @@ async function trashWindowFeed(start: Date, end: Date): Promise<number> {
  */
 export async function generateDigest(
   opts: GenerateDigestOpts = {},
-): Promise<{ id: number; title: string; itemCount: number } | null> {
+): Promise<{ id: number; title: string; itemCount: number; trashed: number } | null> {
   if (!hasDb) {
     console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
@@ -404,7 +404,7 @@ export async function generateDigest(
     `[digest] "${title}": saved (source=${String(meta.source)}, items=${Number(meta.itemCount)}` +
       `${trashed ? `, trashed=${trashed}` : ""}).`,
   );
-  return { id: Number(res.id), title, itemCount: Number(meta.itemCount) };
+  return { id: Number(res.id), title, itemCount: Number(meta.itemCount), trashed };
 }
 
 function buildFallbackMarkdown(title: string, rows: DigestItem[]): string {

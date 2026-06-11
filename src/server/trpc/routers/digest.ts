@@ -3,7 +3,8 @@ import { and, desc, eq, isNull, isNotNull, inArray } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests } from "../../db/schema.js";
-import { generateDigest } from "../../digest/digest.js";
+import { generateDigest, kstToday } from "../../digest/digest.js";
+import { feedbackRepo } from "../../repo/feedback.js";
 
 const summarySelect = {
   id: digests.id,
@@ -67,6 +68,13 @@ export const digestRouter = router({
         .optional(),
     )
     .mutation(async ({ input }) => generateDigest(input ?? {})),
+
+  /** Run the 21시 routine now for today (filter memo + auto-digest + that window's sweep). */
+  runEvening: publicProcedure.mutation(async () => {
+    await feedbackRepo.refreshGuidance();
+    const digest = await generateDigest({ auto: true, trashFeedAfter: true });
+    return { date: kstToday(), digest };
+  }),
 
   /** Move a digest to trash. */
   delete: publicProcedure
