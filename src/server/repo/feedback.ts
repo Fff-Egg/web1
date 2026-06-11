@@ -49,23 +49,6 @@ export const feedbackRepo = {
     }
   },
 
-  /** Append one explicit feedback row (e.g. rescue, where summary is a body snippet). */
-  async logOne(entry: {
-    articleId: number;
-    signal: Signal;
-    action: FeedbackAction;
-    title: string | null;
-    summary: string | null;
-    source: string | null;
-  }): Promise<void> {
-    if (!hasDb) return;
-    try {
-      await db.insert(filterFeedback).values(entry);
-    } catch (err) {
-      console.error("[feedback] logOne failed:", err instanceof Error ? err.message : err);
-    }
-  },
-
   /**
    * Fold NEW feedback (since the stored cursor) into the cumulative learned memo.
    * Runs once a day. The existing memo is carried forward and merged with the new

@@ -34,17 +34,6 @@ export interface FeedItem {
   saved?: boolean;
 }
 
-/** A "제외됨" item — filtered out by the 1st pass (relevant=false), never in the feed. */
-export interface ExcludedItem {
-  id: number;
-  title: string | null;
-  url: string | null;
-  sourceLabel: string | null;
-  provider: string;
-  addedAt?: string | Date | null;
-  snippet: string | null;
-}
-
 /**
  * Client data layer. The same dashboard runs in two modes:
  *  - tRPC mode (default): talks to the Express + tRPC backend.
@@ -93,8 +82,6 @@ export interface DataApi {
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   getFeedItem(id: number): Promise<FeedItem | null>;
-  listExcluded(): Promise<ExcludedItem[]>;
-  rescueExcluded(id: number): Promise<void>;
   feedCounts(): Promise<{ important: number; low: number; saved: number }>;
   trashFeed(): Promise<FeedItem[]>;
   deleteFeedItem(id: number): Promise<void>;
@@ -200,8 +187,6 @@ function makeTrpcApi(): DataApi {
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
-    listExcluded: () => client.feed.excluded.query() as Promise<ExcludedItem[]>,
-    rescueExcluded: async (id) => { await client.feed.rescue.mutate({ id }); },
     feedCounts: () => client.feed.counts.query() as Promise<{ important: number; low: number; saved: number }>,
     trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
     deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
@@ -322,10 +307,6 @@ function makeStaticApi(): DataApi {
     async getFeedItem(id) {
       return [...loadSavedFeed(), ...SAMPLE_FEED].find((x) => x.id === id) ?? null;
     },
-    async listExcluded() {
-      return [];
-    },
-    async rescueExcluded() {},
     async feedCounts() {
       return { important: 0, low: 0, saved: 0 };
     },

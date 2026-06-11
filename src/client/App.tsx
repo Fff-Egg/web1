@@ -7,16 +7,14 @@ import { FeedPage } from "./pages/FeedPage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
-import { ExcludedPage } from "./pages/ExcludedPage.js";
 
-type Tab = "sources" | "analyze" | "feed" | "digest" | "excluded" | "settings" | "trash";
+type Tab = "sources" | "analyze" | "feed" | "digest" | "settings" | "trash";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "sources", label: "Sources" },
   { id: "analyze", label: "분석(수동)" },
   { id: "feed", label: "Feed" },
   { id: "digest", label: "Daily Digest" },
-  { id: "excluded", label: "제외됨" },
   { id: "settings", label: "Settings" },
   { id: "trash", label: "휴지통" },
 ];
@@ -80,7 +78,6 @@ export function App() {
       {tab === "analyze" && <ManualPage />}
       {tab === "feed" && <FeedPage />}
       {tab === "digest" && <DigestPage />}
-      {tab === "excluded" && <ExcludedPage />}
       {tab === "settings" && <SettingsPage />}
       {tab === "trash" && <TrashPage />}
     </div>

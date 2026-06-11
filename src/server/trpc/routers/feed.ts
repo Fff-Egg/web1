@@ -166,59 +166,6 @@ export const feedRouter = router({
       return { ok: true };
     }),
 
-  /** "제외됨" — articles the filter dropped (relevant=false), never shown in the feed. */
-  excluded: publicProcedure
-    .input(z.object({ limit: z.number().min(1).max(500).default(100) }).optional())
-    .query(async ({ input }) => {
-      if (!hasDb) return [];
-      return db
-        .select({
-          id: articles.id,
-          title: articles.title,
-          url: articles.url,
-          sourceLabel: sources.label,
-          provider: sources.provider,
-          addedAt: analyses.createdAt,
-          snippet: sql<string | null>`SUBSTRING(${articles.body}, 1, 600)`,
-        })
-        .from(analyses)
-        .innerJoin(articles, eq(analyses.articleId, articles.id))
-        .innerJoin(sources, eq(articles.sourceId, sources.id))
-        .where(and(eq(analyses.relevant, false), isNull(articles.deletedAt)))
-        .orderBy(desc(analyses.createdAt))
-        .limit(input?.limit ?? 100);
-    }),
-
-  /** Rescue a wrongly-excluded article into the feed. Positive signal + seed a summary. */
-  rescue: publicProcedure
-    .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
-      if (!hasDb) throw new Error("DATABASE_URL required");
-      const [snap] = await db
-        .select({
-          title: articles.title,
-          source: sources.label,
-          body: sql<string | null>`SUBSTRING(${articles.body}, 1, 200)`,
-        })
-        .from(articles)
-        .leftJoin(sources, eq(articles.sourceId, sources.id))
-        .where(eq(articles.id, input.id))
-        .limit(1);
-      await feedbackRepo.logOne({
-        articleId: input.id,
-        signal: "positive",
-        action: "rescue",
-        title: snap?.title ?? null,
-        summary: snap?.body ?? null,
-        source: snap?.source ?? null,
-      });
-      await db
-        .update(analyses)
-        .set({ relevant: true, lowPriority: false, summary: snap?.body ?? "" })
-        .where(eq(analyses.articleId, input.id));
-      return { ok: true };
-    }),
-
   /** Toggle "saved / read later" on a feed item. */
   setSaved: publicProcedure
     .input(z.object({ id: z.number(), saved: z.boolean() }))

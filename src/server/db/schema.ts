@@ -179,13 +179,13 @@ export const digests = mysqlTable("digests", {
 
 /**
  * filter_feedback — user interactions used to tune the 1st-pass filter.
- * Negative = trashed/purged by the user; positive = promoted from review /
- * rescued from "제외됨". The auto 21:00 feed sweep does NOT write here, so
- * system cleanup never pollutes the learning signal. A daily job folds new rows
- * into a cumulative memo (settings key="filterGuidance"). No FK on article_id
- * so a row survives a permanent purge of its article.
+ * Negative = trashed by the user; positive = promoted from the review bucket.
+ * The auto 21:00 feed sweep does NOT write here, so system cleanup never
+ * pollutes the learning signal. A daily job folds new rows into a cumulative
+ * memo (settings key="filterGuidance"). No FK on article_id so a row survives a
+ * permanent purge of its article.
  */
-export type FeedbackAction = "trash" | "purge" | "promote" | "rescue";
+export type FeedbackAction = "trash" | "promote";
 
 export const filterFeedback = mysqlTable(
   "filter_feedback",
