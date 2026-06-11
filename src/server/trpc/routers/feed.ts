@@ -136,11 +136,12 @@ export const feedRouter = router({
       return { ok: true };
     }),
 
-  /** Restore from trash. */
+  /** Restore from trash. User positive signal (중요↑) — "I want this back". */
   restore: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
+      await feedbackRepo.logArticles([input.id], "positive", "restore");
       await db.update(articles).set({ deletedAt: null }).where(eq(articles.id, input.id));
       return { ok: true };
     }),
@@ -188,6 +189,7 @@ export const feedRouter = router({
     .input(z.object({ ids: z.array(z.number()) }))
     .mutation(async ({ input }) => {
       if (!hasDb || input.ids.length === 0) return { ok: true };
+      await feedbackRepo.logArticles(input.ids, "positive", "restore");
       await db.update(articles).set({ deletedAt: null }).where(inArray(articles.id, input.ids));
       return { ok: true };
     }),

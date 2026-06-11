@@ -5,8 +5,10 @@ import type { FeedbackAction } from "../db/schema.js";
 import { settingsRepo } from "./settings.js";
 import { complete, hasLLM, ANALYSIS_MODEL } from "../analysis/anthropic.js";
 
-/** Max new feedback rows folded into the memo per daily distill (bounds the LLM call). */
-const MAX_NEW = (): number => Number(process.env.FILTER_FEEDBACK_BATCH ?? 120);
+/** Overall cap on new rows scanned per daily distill (safety bound). */
+const MAX_NEW = (): number => Number(process.env.FILTER_FEEDBACK_BATCH ?? 300);
+/** Per-action-type cap for the LLM input (남기기 / 복원 / 휴지통 each). */
+const PER_TYPE = (): number => Number(process.env.FILTER_FEEDBACK_PER_TYPE ?? 15);
 
 type Signal = "positive" | "negative";
 
@@ -62,7 +64,7 @@ export const feedbackRepo = {
     const rows = await db
       .select({
         id: filterFeedback.id,
-        signal: filterFeedback.signal,
+        action: filterFeedback.action,
         title: filterFeedback.title,
         summary: filterFeedback.summary,
       })
@@ -82,8 +84,13 @@ export const feedbackRepo = {
 
     const fmt = (r: { title: string | null; summary: string | null }) =>
       `- ${(r.title ?? "").trim()}${r.summary ? ` · ${r.summary.trim().slice(0, 150)}` : ""}`;
-    const neg = rows.filter((r) => r.signal === "negative" && (r.title ?? "").trim());
-    const pos = rows.filter((r) => r.signal === "positive" && (r.title ?? "").trim());
+    // Most-recent N of each action type (bounds & balances the daily LLM input).
+    const per = PER_TYPE();
+    const recent = (action: FeedbackAction) =>
+      rows.filter((r) => r.action === action && (r.title ?? "").trim()).slice(-per);
+    const promote = recent("promote"); // 검토→남기기 (중요↑)
+    const restore = recent("restore"); // 휴지통→복원 (중요↑)
+    const trash = recent("trash"); //    휴지통으로 (중요↓)
 
     const cfg = await settingsRepo.getAnalysisConfig();
     const model = cfg.analysisModel || ANALYSIS_MODEL();
@@ -94,8 +101,9 @@ export const feedbackRepo = {
       "출력은 갱신된 메모 '본문만'(머리말·해설 없이). 형식: '## 중요로 볼 경향'과 '## 검토(낮음)로 내릴 경향' 두 섹션, 각 항목 한 줄 불릿. 전체 14줄·600자 이내로 간결히.";
     const user =
       `[기존 학습 메모]\n${prev.text?.trim() || "(아직 없음)"}\n\n` +
-      `[새 행동 — 남기기(중요로 올림)] ${pos.length}건\n${pos.map(fmt).join("\n") || "(없음)"}\n\n` +
-      `[새 행동 — 휴지통(중요에서 내림)] ${neg.length}건\n${neg.map(fmt).join("\n") || "(없음)"}\n\n` +
+      `[새 행동 — 남기기(중요로 올림)] ${promote.length}건\n${promote.map(fmt).join("\n") || "(없음)"}\n\n` +
+      `[새 행동 — 복원(휴지통에서 되살림 = 중요로)] ${restore.length}건\n${restore.map(fmt).join("\n") || "(없음)"}\n\n` +
+      `[새 행동 — 휴지통(중요에서 내림)] ${trash.length}건\n${trash.map(fmt).join("\n") || "(없음)"}\n\n` +
       `위를 누적 통합한 갱신 메모만 출력하라.`;
 
     let text = prev.text ?? "";
