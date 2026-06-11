@@ -79,6 +79,14 @@ export function DigestPage() {
       if (res?.digest?.id) setSelectedId(res.digest.id);
     },
   });
+  // Tidy a past range's feed (no digest, no feedback signal).
+  const sweep = useMutation({
+    mutationFn: () => api.sweepFeedRange(start, end),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["feed"] });
+      qc.invalidateQueries({ queryKey: ["feedCounts"] });
+    },
+  });
 
   const digest = useQuery({
     queryKey: ["digest", selectedId],
@@ -189,6 +197,25 @@ export function DigestPage() {
           {runEvening.error && (
             <p className="mt-2 text-xs text-red-600">{(runEvening.error as Error).message}</p>
           )}
+
+          <div className="mt-3">
+            <button
+              onClick={() => sweep.mutate()}
+              disabled={sweep.isPending}
+              className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+            >
+              {sweep.isPending ? "정리 중…" : "🧹 이 기간 피드 정리"}
+            </button>
+            <span className="ml-2 text-xs text-slate-400">
+              위 <strong>시작·종료일</strong> 구간 피드를 휴지통으로 (다이제스트 X · 학습신호 X · ⭐저장/텔레그램 유지)
+            </span>
+            {sweep.data && (
+              <p className="mt-1 text-xs text-slate-600">{sweep.data.swept}건 휴지통으로 정리했습니다.</p>
+            )}
+            {sweep.error && (
+              <p className="mt-1 text-xs text-red-600">{(sweep.error as Error).message}</p>
+            )}
+          </div>
         </div>
       </section>
 

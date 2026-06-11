@@ -342,6 +342,18 @@ async function trashWindowFeed(start: Date, end: Date): Promise<number> {
 }
 
 /**
+ * Sweep a KST date range's window to trash WITHOUT generating a digest or logging
+ * feedback — same soft-delete the 21시 cron does (saved & telegram kept). Lets the
+ * user tidy past days (whose digests already exist) without polluting the learning
+ * signal that a manual trash would create.
+ */
+export async function sweepWindow(startDate: string, endDate: string): Promise<number> {
+  if (!hasDb) return 0;
+  const { start, end } = kstRangeBounds(startDate, endDate);
+  return trashWindowFeed(start, end);
+}
+
+/**
  * Generate a saved digest over a KST 21:00→21:00 window range. Normally
  * synthesizes that window's feed picks; for past dates (or `fromDigests`) it
  * synthesizes the saved digests overlapping the range instead. Inserts a

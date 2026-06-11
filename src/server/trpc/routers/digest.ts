@@ -3,7 +3,7 @@ import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests, analyses, articles } from "../../db/schema.js";
-import { generateDigest, kstToday, kstRangeBounds } from "../../digest/digest.js";
+import { generateDigest, kstToday, kstRangeBounds, sweepWindow } from "../../digest/digest.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 
 const summarySelect = {
@@ -106,6 +106,14 @@ export const digestRouter = router({
       },
     };
   }),
+
+  /** Sweep a date range's feed to trash — no digest, no feedback signal (for tidying past days). */
+  sweepRange: publicProcedure
+    .input(z.object({ start: z.string(), end: z.string() }))
+    .mutation(async ({ input }) => {
+      const swept = await sweepWindow(input.start, input.end);
+      return { swept };
+    }),
 
   /** Move a digest to trash. */
   delete: publicProcedure

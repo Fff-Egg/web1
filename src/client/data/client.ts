@@ -111,6 +111,7 @@ export interface DataApi {
   deleteDigest(id: number): Promise<void>;
   restoreDigest(id: number): Promise<void>;
   purgeDigest(id: number): Promise<void>;
+  sweepFeedRange(start: string, end: string): Promise<{ swept: number }>;
   listSessions(): Promise<SessionInfo[]>;
   listPending(): Promise<PendingArticle[]>;
   saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
@@ -223,6 +224,7 @@ function makeTrpcApi(): DataApi {
     deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
     restoreDigest: async (id) => { await client.digest.restore.mutate({ id }); },
     purgeDigest: async (id) => { await client.digest.purge.mutate({ id }); },
+    sweepFeedRange: (start, end) => client.digest.sweepRange.mutate({ start, end }) as Promise<{ swept: number }>,
     listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
     listPending: () => client.manual.pending.query() as Promise<PendingArticle[]>,
     saveManualAnalysis: async (input) => {
@@ -376,6 +378,9 @@ function makeStaticApi(): DataApi {
     async deleteDigest() {},
     async restoreDigest() {},
     async purgeDigest() {},
+    async sweepFeedRange() {
+      return { swept: 0 };
+    },
     async listSessions() {
       // Static demo has no server-side sessions.
       return load().map((s) => ({ id: s.id, hasSession: false }));
