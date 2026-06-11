@@ -155,11 +155,79 @@ export function SettingsPage() {
         </div>
       </section>
 
+      <FilterMemoSection />
+
       <p className="text-xs text-slate-400">
         자동 분석/다이제스트를 실행하려면 MySQL과 LLM이 연결돼 있어야 합니다 — <code>ANTHROPIC_API_KEY</code>
         (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>). 다이제스트는
         매일 <code>DIGEST_HOUR</code>(KST)에 생성됩니다.
       </p>
     </div>
+  );
+}
+
+/**
+ * Learned memo — auto-distilled from feed interactions (휴지통/남기기/복원). Separate
+ * from importanceCriteria; injected into the 1st-pass filter's 중요/검토 judgment as a
+ * reference (explicit criteria still wins). Updated daily at 21시; editable/clearable here.
+ */
+function FilterMemoSection() {
+  const qc = useQueryClient();
+  const memo = useQuery({ queryKey: ["filterGuidance"], queryFn: () => api.getFilterGuidance() });
+  const save = useMutation({
+    mutationFn: (text: string) => api.setFilterGuidance(text),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["filterGuidance"] }),
+  });
+  const [text, setText] = useState<string | null>(null);
+  useEffect(() => {
+    if (memo.data && text === null) setText(memo.data.text);
+  }, [memo.data, text]);
+  if (text === null) return null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-3">
+      <div>
+        <h2 className="text-lg font-semibold">학습 메모 (자동)</h2>
+        <p className="mt-1 text-sm text-slate-500">
+          내 상호작용(<strong>휴지통=중요↓ / 남기기·복원=중요↑</strong>)으로 자동 학습되는 메모입니다. 위의{" "}
+          <strong>중요도 판별</strong> 기준과는 <strong>별개</strong>이며, 1차 필터의 중요/검토 판단에 참고용으로
+          함께 쓰입니다(명시 기준이 우선). 매일 21시에 새 상호작용을 누적 통합합니다. 여기서 직접 고치거나 비울 수 있어요.
+        </p>
+        <p className="mt-1 text-xs text-slate-400">
+          누적 {memo.data?.count ?? 0}건
+          {memo.data?.updatedAt
+            ? ` · 갱신 ${new Date(memo.data.updatedAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}`
+            : ""}
+        </p>
+      </div>
+      <textarea
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        rows={10}
+        placeholder="(아직 학습된 내용이 없습니다. 휴지통/남기기/복원으로 상호작용하면 21시에 채워집니다.)"
+        className="w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
+      />
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => save.mutate(text)}
+          disabled={save.isPending}
+          className="rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {save.isPending ? "저장 중…" : "메모 저장"}
+        </button>
+        <button
+          onClick={() => {
+            setText("");
+            save.mutate("");
+          }}
+          disabled={save.isPending}
+          className="text-sm text-slate-400 hover:text-red-600"
+        >
+          비우기
+        </button>
+        {save.isSuccess && <span className="text-sm text-green-600">저장됨 ✓</span>}
+        {save.error && <span className="text-sm text-red-600">{(save.error as Error).message}</span>}
+      </div>
+    </section>
   );
 }

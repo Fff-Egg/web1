@@ -28,6 +28,7 @@
 ## 지침(Settings, DB의 settings.analysis)
 - `relevanceCriteria`(1차 필터), `importanceCriteria`(중요/낮음 분리), `summaryInstructions`(요약), `digestInstructions`(2차 다이제스트), `instructions`(DEEP_ANALYSIS용), `filterModel`/`analysisModel`.
 - 기본값: `src/shared/analysis.ts`.
+- **학습 메모**(`settings.filterGuidance`, 별도 키): 피드백으로 자동 학습되는 중요도 메모. `importanceCriteria`와 **별개**(참고용 주입). Settings 탭 "학습 메모 (자동)"에서 보기·편집·비우기(`settings.getFilterGuidance`/`setFilterGuidance`).
 
 ## 소스 어댑터 (`src/server/adapters/`)
 generic_rss, naver_blog, hankyung, substack, x(브리지 RSS·로그인X), telegram(MTProto 세션·배치·비공개는 숫자ID -100…), naver_premium·fanding(로그인 필요·클라우드 미지원).

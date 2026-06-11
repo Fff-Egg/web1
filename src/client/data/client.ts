@@ -80,6 +80,8 @@ export interface DataApi {
   removeSource(id: number): Promise<void>;
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
+  getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
+  setFilterGuidance(text: string): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   getFeedItem(id: number): Promise<FeedItem | null>;
   feedCounts(): Promise<{ important: number; low: number; saved: number }>;
@@ -190,6 +192,11 @@ function makeTrpcApi(): DataApi {
     getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
+    },
+    getFilterGuidance: () =>
+      client.settings.getFilterGuidance.query() as Promise<{ text: string; count: number; updatedAt?: string }>,
+    setFilterGuidance: async (text) => {
+      await client.settings.setFilterGuidance.mutate({ text });
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
@@ -307,6 +314,10 @@ function makeStaticApi(): DataApi {
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
     },
+    async getFilterGuidance() {
+      return { text: "", count: 0 };
+    },
+    async setFilterGuidance() {},
     async listFeed() {
       // Static demo: manually-saved analyses first, then example cards.
       return [...loadSavedFeed(), ...SAMPLE_FEED];

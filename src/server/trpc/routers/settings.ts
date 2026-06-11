@@ -21,4 +21,15 @@ export const settingsRouter = router({
       await settingsRepo.setAnalysisConfig(input);
       return { ok: true };
     }),
+
+  /** The cumulative "learned memo" (auto-distilled from feedback; separate from importanceCriteria). */
+  getFilterGuidance: publicProcedure.query(() => settingsRepo.getFilterGuidance()),
+  /** Manually edit / clear the learned memo. Preserves the feedback cursor & count. */
+  setFilterGuidance: publicProcedure
+    .input(z.object({ text: z.string() }))
+    .mutation(async ({ input }) => {
+      const prev = await settingsRepo.getFilterGuidance();
+      await settingsRepo.setFilterGuidance({ ...prev, text: input.text, updatedAt: new Date().toISOString() });
+      return { ok: true };
+    }),
 });

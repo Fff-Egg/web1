@@ -75,6 +75,7 @@ export function DigestPage() {
       invalidate();
       qc.invalidateQueries({ queryKey: ["feed"] });
       qc.invalidateQueries({ queryKey: ["feedCounts"] });
+      qc.invalidateQueries({ queryKey: ["filterGuidance"] });
       if (res?.digest?.id) setSelectedId(res.digest.id);
     },
   });
