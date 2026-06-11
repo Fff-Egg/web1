@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { desc, eq, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
@@ -28,7 +28,7 @@ export const manualRouter = router({
         .from(articles)
         .innerJoin(sources, eq(articles.sourceId, sources.id))
         .leftJoin(analyses, eq(analyses.articleId, articles.id))
-        .where(isNull(analyses.id))
+        .where(and(isNull(analyses.id), isNull(articles.deletedAt)))
         .orderBy(desc(articles.publishedAt))
         .limit(input?.limit ?? 30);
     }),
@@ -40,7 +40,7 @@ export const manualRouter = router({
       .select({ n: sql<number>`count(*)` })
       .from(articles)
       .leftJoin(analyses, eq(analyses.articleId, articles.id))
-      .where(isNull(analyses.id));
+      .where(and(isNull(analyses.id), isNull(articles.deletedAt)));
     return Number(row?.n ?? 0);
   }),
 
