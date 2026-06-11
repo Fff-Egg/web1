@@ -1,10 +1,24 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedFilter, FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
+
+/**
+ * Optimistically drop articles from every cached feed list so trash/promote feel
+ * instant — no full refetch (which would re-pull up to 500 items). Returns a
+ * rollback to restore the snapshot if the mutation fails.
+ */
+async function dropFromFeedCache(qc: QueryClient, ids: Set<number>): Promise<() => void> {
+  await qc.cancelQueries({ queryKey: ["feed"] });
+  const prev = qc.getQueriesData<FeedItem[]>({ queryKey: ["feed"] });
+  qc.setQueriesData<FeedItem[]>({ queryKey: ["feed"] }, (old) =>
+    old ? old.filter((x) => !ids.has(x.id)) : old,
+  );
+  return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
+}
 
 const IMPACT_STYLE: Record<Impact, string> = {
   bullish: "bg-green-100 text-green-700",
@@ -74,17 +88,24 @@ export function FeedPage() {
   const review = filter.priority === "low";
 
   const clearSel = () => setSelected(new Set());
-  const onDone = () => {
-    qc.invalidateQueries({ queryKey: ["feed"] });
+  // Counts are a cheap aggregate; refresh them (and clear selection) after a bulk op.
+  const afterBulk = () => {
     qc.invalidateQueries({ queryKey: ["feedCounts"] });
     clearSel();
   };
-  const delMany = useMutation({ mutationFn: (ids: number[]) => api.feedDeleteMany(ids), onSuccess: onDone });
+  const delMany = useMutation({
+    mutationFn: (ids: number[]) => api.feedDeleteMany(ids),
+    onMutate: (ids: number[]) => dropFromFeedCache(qc, new Set(ids)),
+    onError: (_e, _v, rollback) => rollback?.(),
+    onSettled: afterBulk,
+  });
   const promoteMany = useMutation({
     mutationFn: async (ids: number[]) => {
       for (const id of ids) await api.promoteFeedItem(id);
     },
-    onSuccess: onDone,
+    onMutate: (ids: number[]) => dropFromFeedCache(qc, new Set(ids)),
+    onError: (_e, _v, rollback) => rollback?.(),
+    onSettled: afterBulk,
   });
   const toggleSel = (id: number) =>
     setSelected((s) => {
@@ -282,8 +303,19 @@ function FeedCard({
     qc.invalidateQueries({ queryKey: ["feed"] });
     qc.invalidateQueries({ queryKey: ["feedCounts"] });
   };
-  const del = useMutation({ mutationFn: () => api.deleteFeedItem(item.id), onSuccess: invalidate });
-  const promote = useMutation({ mutationFn: () => api.promoteFeedItem(item.id), onSuccess: invalidate });
+  // Trash/promote: drop from the cached list instantly (no full feed refetch).
+  const del = useMutation({
+    mutationFn: () => api.deleteFeedItem(item.id),
+    onMutate: () => dropFromFeedCache(qc, new Set([item.id])),
+    onError: (_e, _v, rollback) => rollback?.(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
+  });
+  const promote = useMutation({
+    mutationFn: () => api.promoteFeedItem(item.id),
+    onMutate: () => dropFromFeedCache(qc, new Set([item.id])),
+    onError: (_e, _v, rollback) => rollback?.(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
+  });
   const save = useMutation({ mutationFn: () => api.setSavedFeedItem(item.id, !item.saved), onSuccess: invalidate });
   return (
     <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
