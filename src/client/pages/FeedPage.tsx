@@ -21,21 +21,17 @@ async function dropFromFeedCache(qc: QueryClient, ids: Set<number>): Promise<() 
 }
 
 /**
- * Optimistically toggle `saved` on an article across cached feed lists (and drop
- * it from the ⭐저장 bucket when unsaved), so the star reacts instantly with no
- * full refetch. Returns a rollback.
+ * Optimistically toggle `saved` on an article across cached feed lists so the
+ * star reacts instantly with no full refetch. The card is left in place — even
+ * in the ⭐저장 bucket — so an accidental un-save is easy to undo; it only drops
+ * out of the saved bucket on the next refresh/refetch. Returns a rollback.
  */
 async function setSavedInFeedCache(qc: QueryClient, id: number, saved: boolean): Promise<() => void> {
   await qc.cancelQueries({ queryKey: ["feed"] });
   const prev = qc.getQueriesData<FeedItem[]>({ queryKey: ["feed"] });
-  for (const [key, data] of prev) {
-    if (!data) continue;
-    const inSavedBucket = (key[1] as FeedFilter | undefined)?.priority === "saved";
-    const next = data
-      .map((x) => (x.id === id ? { ...x, saved } : x))
-      .filter((x) => !(inSavedBucket && !saved && x.id === id));
-    qc.setQueryData(key, next);
-  }
+  qc.setQueriesData<FeedItem[]>({ queryKey: ["feed"] }, (old) =>
+    old ? old.map((x) => (x.id === id ? { ...x, saved } : x)) : old,
+  );
   return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
 }
 
