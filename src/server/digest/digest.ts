@@ -1,4 +1,4 @@
-import { and, or, gte, lt, lte, eq, desc, isNull, inArray } from "drizzle-orm";
+import { and, or, gte, lt, lte, ne, eq, desc, isNull, inArray } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
@@ -302,16 +302,23 @@ async function synthesizeFromDigests(
   return report.trim();
 }
 
-/** After the evening auto-digest, soft-delete this window's non-saved feed picks. */
+/**
+ * After the evening auto-digest, soft-delete this window's non-saved feed picks.
+ * Telegram is kept alive: its "original" has no URL and is read from the feed
+ * (via the digest's ?article deep link → feed.get, which needs a non-deleted row),
+ * so sweeping it would break past digests' "피드에서 원문 보기".
+ */
 async function trashWindowFeed(start: Date, end: Date): Promise<number> {
   const rows = await db
     .select({ id: articles.id })
     .from(analyses)
     .innerJoin(articles, eq(analyses.articleId, articles.id))
+    .innerJoin(sources, eq(articles.sourceId, sources.id))
     .where(
       and(
         eq(analyses.relevant, true),
         eq(analyses.saved, false),
+        ne(sources.provider, "telegram"),
         isNull(articles.deletedAt),
         gte(analyses.createdAt, start),
         lt(analyses.createdAt, end),
