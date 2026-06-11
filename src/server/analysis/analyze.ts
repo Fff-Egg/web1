@@ -45,11 +45,18 @@ export interface Classification {
   summary: string;
 }
 
-/** Cumulative memo learned from the user's trash/promote/rescue actions (참고용). */
+/**
+ * Cumulative memo learned from the user's feed interactions (남기기/휴지통).
+ * Scoped to the IMPORTANCE decision only (중요 vs 검토대상) — it must NOT change
+ * the relevance gate (제외 여부 stays driven by relevanceCriteria).
+ */
 function guidanceBlock(text?: string): string {
   const t = text?.trim();
   if (!t) return "";
-  return `\n[사용자 피드백 학습 메모 — 참고용. 위 명시 기준이 항상 우선한다.]\n${t}\n`;
+  return (
+    `\n[중요도 학습 메모 — 내 피드백(남기기/휴지통)으로 학습된 '중요 vs 검토' 경향. ` +
+    `important(중요/검토) 판단에만 참고하고 relevant(관련성·제외)에는 적용하지 마라. 위 명시 기준이 우선.]\n${t}\n`
+  );
 }
 
 /**
@@ -72,10 +79,10 @@ export async function filterRelevant(
     `★ 출력 언어(최우선 규칙): 모든 출력은 반드시 한국어로 작성한다. summary는 한국어 문장으로만 쓰며 ` +
     `중국어·일본어를 절대 사용하지 않는다. (영어 고유명사·종목 티커만 예외)\n\n` +
     `[관련성 판단 기준]\n${criteria}\n\n` +
-    `[중요도 판단 기준]\n${importanceGuide}\n\n` +
-    `[요약 지침]\n${summaryGuide}\n` +
+    `[중요도 판단 기준]\n${importanceGuide}\n` +
     guidanceBlock(guidance) +
-    `\n위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
+    `\n[요약 지침]\n${summaryGuide}\n\n` +
+    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
     `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
