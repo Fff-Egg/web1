@@ -46,13 +46,13 @@ export function startSchedulers(): void {
   cron.schedule(
     `0 ${digestHour} * * *`,
     async () => {
-      // 1) Distill the day's interactions into 1st-pass filter examples — BEFORE the
+      // 1) Fold the day's interactions into the cumulative filter memo — BEFORE the
       //    feed sweep, so the sweep never affects the learning signal.
       try {
-        const fx = await feedbackRepo.refreshExamples();
-        console.log(`[scheduler] filter examples refreshed (neg=${fx.negative}, pos=${fx.positive})`);
+        const fx = await feedbackRepo.refreshGuidance();
+        console.log(`[scheduler] filter memo: ${fx.updated ? "updated" : "no change"} (new=${fx.newCount}, total=${fx.total})`);
       } catch (err) {
-        console.error("[scheduler] filter example refresh failed:", err);
+        console.error("[scheduler] filter memo refresh failed:", err);
       }
       // 2) System auto-digest of the day that just closed (window [(today-1) HH, today HH)),
       //    then sweep that window's non-saved feed picks to trash.

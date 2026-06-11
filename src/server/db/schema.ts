@@ -181,8 +181,8 @@ export const digests = mysqlTable("digests", {
  * filter_feedback — user interactions used to tune the 1st-pass filter.
  * Negative = trashed/purged by the user; positive = promoted from review /
  * rescued from "제외됨". The auto 21:00 feed sweep does NOT write here, so
- * system cleanup never pollutes the learning signal. A daily job distills these
- * into few-shot examples (settings key="filterExamples"). No FK on article_id
+ * system cleanup never pollutes the learning signal. A daily job folds new rows
+ * into a cumulative memo (settings key="filterGuidance"). No FK on article_id
  * so a row survives a permanent purge of its article.
  */
 export type FeedbackAction = "trash" | "purge" | "promote" | "rescue";
@@ -270,14 +270,18 @@ export type NewDigest = typeof digests.$inferInsert;
 export type FilterFeedback = typeof filterFeedback.$inferSelect;
 export type NewFilterFeedback = typeof filterFeedback.$inferInsert;
 
-/** Few-shot examples distilled from feedback, stored under settings key="filterExamples". */
-export interface FilterExample {
-  title: string;
-  summary: string;
-}
-export interface FilterExamples {
-  negative: FilterExample[];
-  positive: FilterExample[];
+/**
+ * Cumulative "learned memo" distilled from feedback, stored under settings
+ * key="filterGuidance". The 21:00 job folds NEW feedback (id > lastFeedbackId)
+ * into `text` via the LLM, so learning accumulates across days instead of being
+ * rebuilt from scratch. Injected into the 1st-pass filter prompt.
+ */
+export interface FilterGuidance {
+  text: string;
+  /** Highest filter_feedback.id already folded into `text` (cursor). */
+  lastFeedbackId: number;
+  /** Total feedback rows folded in so far (for display). */
+  count: number;
   updatedAt?: string;
 }
 export type Setting = typeof settings.$inferSelect;

@@ -1,7 +1,7 @@
 import { sql, desc, and, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { articles, analyses } from "../db/schema.js";
-import type { Article, AnalysisConfig, Impact, FilterExample, FilterExamples } from "../db/schema.js";
+import type { Article, AnalysisConfig, Impact } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
 import {
   complete,
@@ -45,27 +45,22 @@ export interface Classification {
   summary: string;
 }
 
-/** Few-shot block learned from the user's trash/promote/rescue actions (참고용). */
-function fewShotBlock(ex?: FilterExamples): string {
-  const neg = ex?.negative ?? [];
-  const pos = ex?.positive ?? [];
-  if (neg.length === 0 && pos.length === 0) return "";
-  const fmt = (e: FilterExample) => `- ${e.title}${e.summary ? ` · ${e.summary}` : ""}`;
-  let s = "\n[사용자 피드백 학습 예시 — 참고용. 위 명시 기준이 항상 우선한다.]\n";
-  if (neg.length) s += `■ 사용자가 제외(휴지통/영구삭제)한 글 — 이와 비슷하면 관련성을 낮게 본다:\n${neg.map(fmt).join("\n")}\n`;
-  if (pos.length) s += `■ 사용자가 살린(검토→남기기/복구) 글 — 이와 비슷하면 관련·중요로 본다:\n${pos.map(fmt).join("\n")}\n`;
-  return s;
+/** Cumulative memo learned from the user's trash/promote/rescue actions (참고용). */
+function guidanceBlock(text?: string): string {
+  const t = text?.trim();
+  if (!t) return "";
+  return `\n[사용자 피드백 학습 메모 — 참고용. 위 명시 기준이 항상 우선한다.]\n${t}\n`;
 }
 
 /**
  * 1st pass — one cheap call that BOTH decides relevance AND summarizes, driven
  * by the user's 1차 지침 (relevanceCriteria: 무엇을 뽑을지 + 어떻게 요약할지).
- * `examples` are few-shot cases distilled from the user's feed interactions.
+ * `guidance` is the cumulative memo distilled from the user's feed interactions.
  */
 export async function filterRelevant(
   article: Article,
   cfg: AnalysisConfig,
-  examples?: FilterExamples,
+  guidance?: string,
 ): Promise<Classification> {
   const criteria = cfg.relevanceCriteria?.trim() || cfg.instructions;
   const summaryGuide = cfg.summaryInstructions?.trim() || "핵심 내용을 한국어 2~3문장으로 요약한다.";
@@ -79,7 +74,7 @@ export async function filterRelevant(
     `[관련성 판단 기준]\n${criteria}\n\n` +
     `[중요도 판단 기준]\n${importanceGuide}\n\n` +
     `[요약 지침]\n${summaryGuide}\n` +
-    fewShotBlock(examples) +
+    guidanceBlock(guidance) +
     `\n위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
     `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"}`;
@@ -173,8 +168,8 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
   }
 
   const cfg = await settingsRepo.getAnalysisConfig();
-  // Few-shot examples learned from the user's feed interactions (refreshed daily).
-  const examples = await settingsRepo.getFilterExamples();
+  // Cumulative memo learned from the user's feed interactions (refreshed daily).
+  const guidance = (await settingsRepo.getFilterGuidance()).text;
 
   // Articles with no analysis row yet — newest first, so fresh posts get
   // analyzed before an old backlog (and aren't starved by it).
@@ -200,7 +195,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
 
   for (const article of pending) {
     try {
-      const { relevant: isRelevant, important, summary } = await filterRelevant(article, cfg, examples);
+      const { relevant: isRelevant, important, summary } = await filterRelevant(article, cfg, guidance);
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
