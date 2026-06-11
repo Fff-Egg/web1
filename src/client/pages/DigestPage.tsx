@@ -174,6 +174,10 @@ export function DigestPage() {
                 {runEvening.data.digest
                   ? `오늘(${runEvening.data.date}) 실행 완료: 다이제스트 “${runEvening.data.digest.title}” 생성(${runEvening.data.digest.itemCount}건) · 피드 ${runEvening.data.digest.trashed}건 휴지통으로.`
                   : `오늘(${runEvening.data.date}) 구간(어제21시~오늘21시)에 다이제스트/정리할 글이 없습니다.`}
+                {" "}
+                학습 메모: {runEvening.data.memo.updated
+                  ? `갱신됨 (신규 ${runEvening.data.memo.newCount} · 누적 ${runEvening.data.memo.total})`
+                  : `변화 없음 (누적 ${runEvening.data.memo.total})`}.
               </p>
               <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
                 진단: 창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}

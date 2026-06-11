@@ -103,6 +103,7 @@ export interface DataApi {
   runEveningDigest(): Promise<{
     date: string;
     digest: { id: number; title: string; itemCount: number; trashed: number } | null;
+    memo: { updated: boolean; newCount: number; total: number };
     diag: { start: string; end: string; nowUtc: string; rawInWindow: number; latestCreatedAt: string | Date | null };
   }>;
   deleteDigest(id: number): Promise<void>;
@@ -357,6 +358,7 @@ function makeStaticApi(): DataApi {
       return {
         date: new Date().toLocaleDateString("en-CA"),
         digest: null,
+        memo: { updated: false, newCount: 0, total: 0 },
         diag: { start: now, end: now, nowUtc: now, rawInWindow: 0, latestCreatedAt: null },
       };
     },

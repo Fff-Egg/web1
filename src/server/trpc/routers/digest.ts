@@ -71,7 +71,7 @@ export const digestRouter = router({
 
   /** Run the 21시 routine now for today (filter memo + auto-digest + that window's sweep). */
   runEvening: publicProcedure.mutation(async () => {
-    await feedbackRepo.refreshGuidance();
+    const memo = await feedbackRepo.refreshGuidance();
     const digest = await generateDigest({ auto: true, trashFeedAfter: true });
     // Diagnostic: window bounds + raw in-window count + latest analysis time.
     const today = kstToday();
@@ -96,6 +96,7 @@ export const digestRouter = router({
     return {
       date: today,
       digest,
+      memo,
       diag: {
         start: start.toISOString(),
         end: end.toISOString(),
