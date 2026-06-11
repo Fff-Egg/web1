@@ -166,7 +166,7 @@ export interface GenerateDigestOpts {
 
 const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 4096);
 
-/** This window's relevant feed picks: period's important items + saved items (any time). */
+/** This window's relevant feed picks: period's important + saved items (both date-matched to the window). */
 async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
   return db
     .select({
@@ -188,13 +188,12 @@ async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
       and(
         eq(analyses.relevant, true),
         isNull(articles.deletedAt),
+        // window-bounded by feed-entry time, then important OR saved
+        gte(analyses.createdAt, start),
+        lt(analyses.createdAt, end),
         or(
-          and(
-            eq(analyses.lowPriority, false),
-            gte(analyses.createdAt, start),
-            lt(analyses.createdAt, end),
-          ),
-          eq(analyses.saved, true),
+          eq(analyses.lowPriority, false), // 중요
+          eq(analyses.saved, true), //        ⭐저장
         ),
       ),
     )
