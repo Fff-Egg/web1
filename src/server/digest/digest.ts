@@ -25,6 +25,16 @@ function kstRangeBounds(startDate: string, endDate: string): { start: Date; end:
   return { start, end };
 }
 
+/** True if an auto (evening-cron) digest already exists for this KST date. */
+export async function hasAutoDigestFor(date: string): Promise<boolean> {
+  if (!hasDb) return false;
+  const rows = await db
+    .select({ meta: digests.meta })
+    .from(digests)
+    .where(and(eq(digests.periodStart, date), eq(digests.periodEnd, date), isNull(digests.deletedAt)));
+  return rows.some((r) => (r.meta as { auto?: boolean } | null | undefined)?.auto === true);
+}
+
 const DIGEST_SYSTEM = `너는 내 개인 투자 다이제스트 편집자다. 아래는 오늘 분석된 글들의 목록이다.
 이를 바탕으로 한국어 마크다운 일일 리포트를 작성한다. 구성:
 

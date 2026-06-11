@@ -1,10 +1,48 @@
 import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
-import { generateDigest } from "./digest/digest.js";
+import { generateDigest, kstToday, hasAutoDigestFor } from "./digest/digest.js";
 import { feedbackRepo } from "./repo/feedback.js";
 import { hasDb } from "./db/client.js";
 import { hasLLM } from "./analysis/anthropic.js";
+
+/** Current hour (0–23) in KST. */
+function kstHour(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", hourCycle: "h23" }).format(new Date()),
+  );
+}
+
+/** Evening routine: fold the day's feedback into the filter memo, then generate
+ *  the system auto-digest and sweep that window's non-saved feed picks to trash. */
+async function runEveningRoutine(): Promise<void> {
+  try {
+    const fx = await feedbackRepo.refreshGuidance();
+    console.log(`[scheduler] filter memo: ${fx.updated ? "updated" : "no change"} (new=${fx.newCount}, total=${fx.total})`);
+  } catch (err) {
+    console.error("[scheduler] filter memo refresh failed:", err);
+  }
+  try {
+    const r = await generateDigest({ auto: true, trashFeedAfter: true });
+    if (r) console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`);
+  } catch (err) {
+    console.error("[scheduler] digest failed:", err);
+  }
+}
+
+/** node-cron can't replay a missed time; if today's evening run was skipped
+ *  (e.g. a deploy restarted the server after DIGEST_HOUR), run it once on boot.
+ *  Guarded so it never double-runs. */
+async function catchUpEveningRoutine(digestHour: number): Promise<void> {
+  try {
+    if (kstHour() < digestHour) return; // today's window hasn't closed yet
+    if (await hasAutoDigestFor(kstToday())) return; // already ran today
+    console.log(`[scheduler] catch-up: today's ${digestHour}:00 run was missed — running now.`);
+    await runEveningRoutine();
+  } catch (err) {
+    console.error("[scheduler] catch-up failed:", err);
+  }
+}
 
 /**
  * Background schedulers. Phase 1 wires the collection loop. The analysis
@@ -43,27 +81,8 @@ export function startSchedulers(): void {
 
   // Evening digest cron at DIGEST_HOUR (KST).
   const digestHour = Number(process.env.DIGEST_HOUR ?? 21);
-  cron.schedule(
-    `0 ${digestHour} * * *`,
-    async () => {
-      // 1) Fold the day's interactions into the cumulative filter memo — BEFORE the
-      //    feed sweep, so the sweep never affects the learning signal.
-      try {
-        const fx = await feedbackRepo.refreshGuidance();
-        console.log(`[scheduler] filter memo: ${fx.updated ? "updated" : "no change"} (new=${fx.newCount}, total=${fx.total})`);
-      } catch (err) {
-        console.error("[scheduler] filter memo refresh failed:", err);
-      }
-      // 2) System auto-digest of the day that just closed (window [(today-1) HH, today HH)),
-      //    then sweep that window's non-saved feed picks to trash.
-      try {
-        const r = await generateDigest({ auto: true, trashFeedAfter: true });
-        if (r) console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`);
-      } catch (err) {
-        console.error("[scheduler] digest failed:", err);
-      }
-    },
-    { timezone: "Asia/Seoul" },
-  );
+  cron.schedule(`0 ${digestHour} * * *`, () => void runEveningRoutine(), { timezone: "Asia/Seoul" });
   console.log(`[scheduler] digest cron at ${digestHour}:00 KST`);
+  // Self-heal a 21시 run missed by a restart (e.g. today's deploy landed after 21시).
+  void catchUpEveningRoutine(digestHour);
 }
