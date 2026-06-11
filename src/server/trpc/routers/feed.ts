@@ -146,14 +146,21 @@ export const feedRouter = router({
       return { ok: true };
     }),
 
-  /** Permanently delete (only from trash). No feedback logged here: trash holds
-   *  both user-trashed AND auto-swept items, so purging can't cleanly mean "reject".
-   *  The negative signal was already captured when the USER trashed it (feed.delete). */
+  /** Permanently delete (only from trash): drop the analysis + body, but keep a
+   *  tombstone row (its url) so collection won't re-create (revive) the item.
+   *  No feedback logged — trash mixes user-trashed and auto-swept items. */
   purge: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
-      await db.delete(articles).where(and(eq(articles.id, input.id), isNotNull(articles.deletedAt)));
+      const [a] = await db
+        .select({ id: articles.id })
+        .from(articles)
+        .where(and(eq(articles.id, input.id), isNotNull(articles.deletedAt)))
+        .limit(1);
+      if (!a) return { ok: true };
+      await db.delete(analyses).where(eq(analyses.articleId, input.id));
+      await db.update(articles).set({ body: null }).where(eq(articles.id, input.id));
       return { ok: true };
     }),
 
@@ -197,13 +204,24 @@ export const feedRouter = router({
     .input(z.object({ ids: z.array(z.number()) }))
     .mutation(async ({ input }) => {
       if (!hasDb || input.ids.length === 0) return { ok: true };
-      await db.delete(articles).where(and(inArray(articles.id, input.ids), isNotNull(articles.deletedAt)));
+      const rows = await db
+        .select({ id: articles.id })
+        .from(articles)
+        .where(and(inArray(articles.id, input.ids), isNotNull(articles.deletedAt)));
+      const ids = rows.map((r) => r.id);
+      if (ids.length === 0) return { ok: true };
+      await db.delete(analyses).where(inArray(analyses.articleId, ids));
+      await db.update(articles).set({ body: null }).where(inArray(articles.id, ids));
       return { ok: true };
     }),
-  /** Empty the feed trash. No logging — trash mixes user-trashed and auto-swept items. */
+  /** Empty the feed trash — tombstone each (drop analysis + body, keep the row for dedup). */
   purgeAll: publicProcedure.mutation(async () => {
     if (!hasDb) return { ok: true };
-    await db.delete(articles).where(isNotNull(articles.deletedAt));
+    const rows = await db.select({ id: articles.id }).from(articles).where(isNotNull(articles.deletedAt));
+    const ids = rows.map((r) => r.id);
+    if (ids.length === 0) return { ok: true };
+    await db.delete(analyses).where(inArray(analyses.articleId, ids));
+    await db.update(articles).set({ body: null }).where(isNotNull(articles.deletedAt));
     return { ok: true };
   }),
 });

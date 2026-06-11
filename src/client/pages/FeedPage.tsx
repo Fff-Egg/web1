@@ -20,6 +20,25 @@ async function dropFromFeedCache(qc: QueryClient, ids: Set<number>): Promise<() 
   return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
 }
 
+/**
+ * Optimistically toggle `saved` on an article across cached feed lists (and drop
+ * it from the ⭐저장 bucket when unsaved), so the star reacts instantly with no
+ * full refetch. Returns a rollback.
+ */
+async function setSavedInFeedCache(qc: QueryClient, id: number, saved: boolean): Promise<() => void> {
+  await qc.cancelQueries({ queryKey: ["feed"] });
+  const prev = qc.getQueriesData<FeedItem[]>({ queryKey: ["feed"] });
+  for (const [key, data] of prev) {
+    if (!data) continue;
+    const inSavedBucket = (key[1] as FeedFilter | undefined)?.priority === "saved";
+    const next = data
+      .map((x) => (x.id === id ? { ...x, saved } : x))
+      .filter((x) => !(inSavedBucket && !saved && x.id === id));
+    qc.setQueryData(key, next);
+  }
+  return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
+}
+
 const IMPACT_STYLE: Record<Impact, string> = {
   bullish: "bg-green-100 text-green-700",
   bearish: "bg-red-100 text-red-700",
@@ -299,11 +318,8 @@ function FeedCard({
   const [showFull, setShowFull] = useState(false);
   const [showBody, setShowBody] = useState(!!defaultOpenBody);
   const qc = useQueryClient();
-  const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ["feed"] });
-    qc.invalidateQueries({ queryKey: ["feedCounts"] });
-  };
-  // Trash/promote: drop from the cached list instantly (no full feed refetch).
+  // Trash/promote/star: update the cache instantly (no full feed refetch); refresh
+  // only the cheap bucket counts, and roll back if the mutation fails.
   const del = useMutation({
     mutationFn: () => api.deleteFeedItem(item.id),
     onMutate: () => dropFromFeedCache(qc, new Set([item.id])),
@@ -316,7 +332,12 @@ function FeedCard({
     onError: (_e, _v, rollback) => rollback?.(),
     onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
   });
-  const save = useMutation({ mutationFn: () => api.setSavedFeedItem(item.id, !item.saved), onSuccess: invalidate });
+  const save = useMutation({
+    mutationFn: () => api.setSavedFeedItem(item.id, !item.saved),
+    onMutate: () => setSavedInFeedCache(qc, item.id, !item.saved),
+    onError: (_e, _v, rollback) => rollback?.(),
+    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
+  });
   return (
     <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
       <div className="flex items-start justify-between gap-3">
