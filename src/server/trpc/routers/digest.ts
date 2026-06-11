@@ -1,9 +1,9 @@
 import { z } from "zod";
-import { and, desc, eq, isNull, isNotNull, inArray } from "drizzle-orm";
+import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
-import { digests } from "../../db/schema.js";
-import { generateDigest, kstToday } from "../../digest/digest.js";
+import { digests, analyses, articles } from "../../db/schema.js";
+import { generateDigest, kstToday, kstRangeBounds } from "../../digest/digest.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 
 const summarySelect = {
@@ -73,7 +73,37 @@ export const digestRouter = router({
   runEvening: publicProcedure.mutation(async () => {
     await feedbackRepo.refreshGuidance();
     const digest = await generateDigest({ auto: true, trashFeedAfter: true });
-    return { date: kstToday(), digest };
+    // Diagnostic: window bounds + raw in-window count + latest analysis time.
+    const today = kstToday();
+    const { start, end } = kstRangeBounds(today, today);
+    const [w] = hasDb
+      ? await db
+          .select({ n: sql<number>`count(*)` })
+          .from(analyses)
+          .innerJoin(articles, eq(analyses.articleId, articles.id))
+          .where(
+            and(
+              eq(analyses.relevant, true),
+              isNull(articles.deletedAt),
+              gte(analyses.createdAt, start),
+              lt(analyses.createdAt, end),
+            ),
+          )
+      : [{ n: 0 }];
+    const [latest] = hasDb
+      ? await db.select({ createdAt: analyses.createdAt }).from(analyses).orderBy(desc(analyses.createdAt)).limit(1)
+      : [{ createdAt: null }];
+    return {
+      date: today,
+      digest,
+      diag: {
+        start: start.toISOString(),
+        end: end.toISOString(),
+        nowUtc: new Date().toISOString(),
+        rawInWindow: Number(w?.n ?? 0),
+        latestCreatedAt: latest?.createdAt ?? null,
+      },
+    };
   }),
 
   /** Move a digest to trash. */

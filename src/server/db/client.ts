@@ -17,7 +17,13 @@ let _db: ReturnType<typeof drizzle> | null = null;
 let _pool: mysql.Pool | null = null;
 
 if (url) {
-  _pool = mysql.createPool({ uri: url, connectionLimit: 5 });
+  // Pin both sides to UTC: mysql2 serializes/parses dates as UTC (timezone:"Z")
+  // and each session's time_zone is UTC, so TIMESTAMP window comparisons
+  // (digest/feed date ranges) line up with the JS Date bounds we pass.
+  _pool = mysql.createPool({ uri: url, connectionLimit: 5, timezone: "Z" });
+  _pool.on("connection", (conn) => {
+    conn.query("SET time_zone = '+00:00'");
+  });
   _db = drizzle(_pool, { schema, mode: "default" });
 } else {
   console.warn(

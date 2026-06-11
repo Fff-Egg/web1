@@ -169,11 +169,17 @@ export function DigestPage() {
           </button>
           <span className="ml-2 text-xs text-slate-400">오늘 창(어제21시~오늘21시) 자동 다이제스트 + 그 구간 피드 정리</span>
           {runEvening.data && (
-            <p className="mt-2 text-xs text-slate-600">
-              {runEvening.data.digest
-                ? `오늘(${runEvening.data.date}) 실행 완료: 다이제스트 “${runEvening.data.digest.title}” 생성(${runEvening.data.digest.itemCount}건) · 피드 ${runEvening.data.digest.trashed}건 휴지통으로.`
-                : `오늘(${runEvening.data.date}) 구간(어제21시~오늘21시)에 다이제스트/정리할 글이 없습니다.`}
-            </p>
+            <>
+              <p className="mt-2 text-xs text-slate-600">
+                {runEvening.data.digest
+                  ? `오늘(${runEvening.data.date}) 실행 완료: 다이제스트 “${runEvening.data.digest.title}” 생성(${runEvening.data.digest.itemCount}건) · 피드 ${runEvening.data.digest.trashed}건 휴지통으로.`
+                  : `오늘(${runEvening.data.date}) 구간(어제21시~오늘21시)에 다이제스트/정리할 글이 없습니다.`}
+              </p>
+              <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
+                진단: 창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}
+                {String(runEvening.data.diag.latestCreatedAt)} · now {runEvening.data.diag.nowUtc}
+              </p>
+            </>
           )}
           {runEvening.error && (
             <p className="mt-2 text-xs text-red-600">{(runEvening.error as Error).message}</p>

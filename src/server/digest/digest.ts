@@ -18,7 +18,7 @@ const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
  * Days run on the DIGEST_HOUR (default 21:00) boundary, so date D covers
  * [(D-1) 21:00, D 21:00) KST → e.g. "11일" = 10일 21시 ~ 11일 21시.
  */
-function kstRangeBounds(startDate: string, endDate: string): { start: Date; end: Date } {
+export function kstRangeBounds(startDate: string, endDate: string): { start: Date; end: Date } {
   const h = String(DIGEST_HOUR()).padStart(2, "0");
   const start = new Date(new Date(`${startDate}T${h}:00:00+09:00`).getTime() - 24 * 60 * 60 * 1000);
   const end = new Date(`${endDate}T${h}:00:00+09:00`);
