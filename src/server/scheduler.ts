@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
 import { generateDigest } from "./digest/digest.js";
+import { feedbackRepo } from "./repo/feedback.js";
 import { hasDb } from "./db/client.js";
 import { hasLLM } from "./analysis/anthropic.js";
 
@@ -44,12 +45,23 @@ export function startSchedulers(): void {
   const digestHour = Number(process.env.DIGEST_HOUR ?? 21);
   cron.schedule(
     `0 ${digestHour} * * *`,
-    () => {
-      // System auto-digest of the day that just closed (window [(today-1) HH, today HH)),
-      // then sweep that window's non-saved feed picks to trash.
-      generateDigest({ auto: true, trashFeedAfter: true })
-        .then((r) => r && console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`))
-        .catch((err) => console.error("[scheduler] digest failed:", err));
+    async () => {
+      // 1) Distill the day's interactions into 1st-pass filter examples — BEFORE the
+      //    feed sweep, so the sweep never affects the learning signal.
+      try {
+        const fx = await feedbackRepo.refreshExamples();
+        console.log(`[scheduler] filter examples refreshed (neg=${fx.negative}, pos=${fx.positive})`);
+      } catch (err) {
+        console.error("[scheduler] filter example refresh failed:", err);
+      }
+      // 2) System auto-digest of the day that just closed (window [(today-1) HH, today HH)),
+      //    then sweep that window's non-saved feed picks to trash.
+      try {
+        const r = await generateDigest({ auto: true, trashFeedAfter: true });
+        if (r) console.log(`[scheduler] digest: "${r.title}" (${r.itemCount} items)`);
+      } catch (err) {
+        console.error("[scheduler] digest failed:", err);
+      }
     },
     { timezone: "Asia/Seoul" },
   );

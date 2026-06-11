@@ -3,6 +3,7 @@ import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
+import { feedbackRepo } from "../../repo/feedback.js";
 
 const feedSelect = {
   id: articles.id,
@@ -125,11 +126,12 @@ export const feedRouter = router({
       .limit(1000);
   }),
 
-  /** Move a feed item to trash (soft delete). */
+  /** Move a feed item to trash (soft delete). User negative signal for the filter. */
   delete: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
+      await feedbackRepo.logArticles([input.id], "negative", "trash");
       await db.update(articles).set({ deletedAt: new Date() }).where(eq(articles.id, input.id));
       return { ok: true };
     }),
@@ -143,7 +145,9 @@ export const feedRouter = router({
       return { ok: true };
     }),
 
-  /** Permanently delete (only from trash). Cascades the analysis row. */
+  /** Permanently delete (only from trash). No feedback logged here: trash holds
+   *  both user-trashed AND auto-swept items, so purging can't cleanly mean "reject".
+   *  The negative signal was already captured when the USER trashed it (feed.delete). */
   purge: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
@@ -152,12 +156,66 @@ export const feedRouter = router({
       return { ok: true };
     }),
 
-  /** Promote a low-importance item into the main feed. */
+  /** Promote a low-importance item into the main feed. User positive signal. */
   promote: publicProcedure
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
+      await feedbackRepo.logArticles([input.id], "positive", "promote");
       await db.update(analyses).set({ lowPriority: false }).where(eq(analyses.articleId, input.id));
+      return { ok: true };
+    }),
+
+  /** "제외됨" — articles the filter dropped (relevant=false), never shown in the feed. */
+  excluded: publicProcedure
+    .input(z.object({ limit: z.number().min(1).max(500).default(100) }).optional())
+    .query(async ({ input }) => {
+      if (!hasDb) return [];
+      return db
+        .select({
+          id: articles.id,
+          title: articles.title,
+          url: articles.url,
+          sourceLabel: sources.label,
+          provider: sources.provider,
+          addedAt: analyses.createdAt,
+          snippet: sql<string | null>`SUBSTRING(${articles.body}, 1, 600)`,
+        })
+        .from(analyses)
+        .innerJoin(articles, eq(analyses.articleId, articles.id))
+        .innerJoin(sources, eq(articles.sourceId, sources.id))
+        .where(and(eq(analyses.relevant, false), isNull(articles.deletedAt)))
+        .orderBy(desc(analyses.createdAt))
+        .limit(input?.limit ?? 100);
+    }),
+
+  /** Rescue a wrongly-excluded article into the feed. Positive signal + seed a summary. */
+  rescue: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }) => {
+      if (!hasDb) throw new Error("DATABASE_URL required");
+      const [snap] = await db
+        .select({
+          title: articles.title,
+          source: sources.label,
+          body: sql<string | null>`SUBSTRING(${articles.body}, 1, 200)`,
+        })
+        .from(articles)
+        .leftJoin(sources, eq(articles.sourceId, sources.id))
+        .where(eq(articles.id, input.id))
+        .limit(1);
+      await feedbackRepo.logOne({
+        articleId: input.id,
+        signal: "positive",
+        action: "rescue",
+        title: snap?.title ?? null,
+        summary: snap?.body ?? null,
+        source: snap?.source ?? null,
+      });
+      await db
+        .update(analyses)
+        .set({ relevant: true, lowPriority: false, summary: snap?.body ?? "" })
+        .where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
 
@@ -175,6 +233,7 @@ export const feedRouter = router({
     .input(z.object({ ids: z.array(z.number()) }))
     .mutation(async ({ input }) => {
       if (!hasDb || input.ids.length === 0) return { ok: true };
+      await feedbackRepo.logArticles(input.ids, "negative", "trash");
       await db.update(articles).set({ deletedAt: new Date() }).where(inArray(articles.id, input.ids));
       return { ok: true };
     }),
@@ -192,7 +251,7 @@ export const feedRouter = router({
       await db.delete(articles).where(and(inArray(articles.id, input.ids), isNotNull(articles.deletedAt)));
       return { ok: true };
     }),
-  /** Empty the feed trash (permanently delete all trashed feed items). */
+  /** Empty the feed trash. No logging — trash mixes user-trashed and auto-swept items. */
   purgeAll: publicProcedure.mutation(async () => {
     if (!hasDb) return { ok: true };
     await db.delete(articles).where(isNotNull(articles.deletedAt));

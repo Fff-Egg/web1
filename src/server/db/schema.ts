@@ -178,6 +178,33 @@ export const digests = mysqlTable("digests", {
 });
 
 /**
+ * filter_feedback — user interactions used to tune the 1st-pass filter.
+ * Negative = trashed/purged by the user; positive = promoted from review /
+ * rescued from "제외됨". The auto 21:00 feed sweep does NOT write here, so
+ * system cleanup never pollutes the learning signal. A daily job distills these
+ * into few-shot examples (settings key="filterExamples"). No FK on article_id
+ * so a row survives a permanent purge of its article.
+ */
+export type FeedbackAction = "trash" | "purge" | "promote" | "rescue";
+
+export const filterFeedback = mysqlTable(
+  "filter_feedback",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    articleId: bigint("article_id", { mode: "number", unsigned: true }),
+    signal: varchar("signal", { length: 8 }).$type<"positive" | "negative">().notNull(),
+    action: varchar("action", { length: 16 }).$type<FeedbackAction>().notNull(),
+    title: text("title"),
+    summary: text("summary"),
+    source: varchar("source", { length: 64 }),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    signalIdx: index("filter_feedback_signal_idx").on(t.signal, t.createdAt),
+  }),
+);
+
+/**
  * settings — singleton-ish key/value config edited from the dashboard.
  * The analysis instructions ("지침") live here under key="analysis" so the
  * user can change how articles are analyzed without touching code.
@@ -240,5 +267,18 @@ export type Analysis = typeof analyses.$inferSelect;
 export type NewAnalysis = typeof analyses.$inferInsert;
 export type Digest = typeof digests.$inferSelect;
 export type NewDigest = typeof digests.$inferInsert;
+export type FilterFeedback = typeof filterFeedback.$inferSelect;
+export type NewFilterFeedback = typeof filterFeedback.$inferInsert;
+
+/** Few-shot examples distilled from feedback, stored under settings key="filterExamples". */
+export interface FilterExample {
+  title: string;
+  summary: string;
+}
+export interface FilterExamples {
+  negative: FilterExample[];
+  positive: FilterExample[];
+  updatedAt?: string;
+}
 export type Setting = typeof settings.$inferSelect;
 export type NewSetting = typeof settings.$inferInsert;

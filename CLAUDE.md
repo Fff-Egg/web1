@@ -17,12 +17,12 @@
   - `TELEGRAM_API_ID/HASH/SESSION` (텔레그램 MTProto, 공개·비공개 채널 배치 수집)
   - `X_RSS_BRIDGE` (X용, 선택) / 소스별 `config.rssUrl`
   - `DIGEST_HOUR`(기본 21, KST), `COLLECT_INTERVAL_MIN`(기본 30, 현재 10), `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
-  - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`, `ANALYZE_ALL`
+  - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`, `ANALYZE_ALL`, `FILTER_FEWSHOT_MAX`(피드백 few-shot 클래스당 개수, 기본 20)
 
 ## 파이프라인
 1. **수집**(`workers/collect.ts`): 소스별 어댑터 fetch → articles 저장. 같은 URL이면 재생성 안 함(삭제 부활 방지).
 2. **1차 분석**(`analysis/analyze.ts` `filterRelevant`): 1번 호출로 relevant·important·summary 동시. 한국어 강제(+중국어 시 재요약). DeepSeek 등.
-3. **Feed**: relevant 글. 버킷 = 중요 / 검토대상(lowPriority) / ⭐저장됨(saved). created_at(피드 진입 시각)순. 날짜 필터·소스 탭·다중선택 삭제·휴지통(soft delete) 있음.
+3. **Feed**: relevant 글. 버킷 = 중요 / 검토대상(lowPriority) / ⭐저장됨(saved). created_at(피드 진입 시각)순. 날짜 필터·소스 탭·다중선택 삭제·휴지통(soft delete) 있음. **피드백 학습**: 사용자 액션을 `filter_feedback`에 기록 — **휴지통 이동(feed.delete)=음성**, 검토→남기기·제외됨→살리기=양성. **영구삭제(purge)·21시 자동 sweep은 기록 안 함**(휴지통엔 자동 정리 글이 섞여 있어 신호 오염 방지; 음성은 사용자가 직접 버리는 순간에만 잡음). 21시에 음성/양성 각 최대 20개(`FILTER_FEWSHOT_MAX`)를 few-shot으로 distill(settings `filterExamples`) → 1차 필터 프롬프트에 주입(`fewShotBlock`). **제외됨 탭**: relevant=false 글 검토(살리기=피드+양성 / 제외확정=휴지통+음성).
 4. **다이제스트**(`digest/digest.ts`): 기간 내 중요 글 + 저장(saved) 글 종합. 2차 지침(`digestInstructions`) 사용. `[N]` 인용을 **각주(윗첨자 번호) 링크**로 변환 → 하단 번호 매긴 "참조 원문" 목록으로 점프(거기서 원문 링크 연결, `↩`로 본문 복귀). 인라인 링크는 LLM 지침으로 금지. 묶음/범위 인용(`[3,5]`/`[3-5]`)도 각 번호로 펼침. **텔레그램 글은 원문 URL이 없어** 참조를 `?article=<id>` 딥링크(새 탭)로 → App이 Feed 탭으로 시작, FeedPage가 그 글만(전체 목록 X, 가벼움) 본문 펼쳐 표시; "전체 피드 보기"로 해제. 서버 `feed.get`. 각주 `[N]`엔 hover 툴팁(`data-tip`=제목·출처). **기간은 21시 경계**: date D = [(D-1)21시, D21시) KST(예: 11일=10일21시~11일21시). 21시 크론이 **자동 다이제스트**(`meta.auto`, analysisModel) 생성 후 그 구간 **비저장 피드를 휴지통으로**(soft delete). **과거 날짜**는 피드가 비었거나 `fromDigests`면 그 기간에 걸치는 **저장 다이제스트들을 종합**(`meta.source='digests'`, 번호 인용 없음). Digest 탭은 자동/수동 optgroup 분리 + 배지.
 
 ## 지침(Settings, DB의 settings.analysis)
@@ -35,7 +35,7 @@ generic_rss, naver_blog, hankyung, substack, x(브리지 RSS·로그인X), teleg
 ## 마이그레이션 (중요)
 - `drizzle-kit generate`는 **대화형이라 이 환경에서 막힘**. 마이그레이션은 **수동 작성**:
   `drizzle/00XX_name.sql` + `drizzle/meta/_journal.json`에 엔트리 추가(idx/tag/when). 컬럼 추가는 nullable 또는 default로(기존행 보호).
-- 현재 0000~0006 (0006: markdown/body/full_text → mediumtext).
+- 현재 0000~0007 (0006: markdown/body/full_text → mediumtext, 0007: `filter_feedback` 테이블).
 
 ## 검증·배포
 - `npm run typecheck` / `npm run build` 통과 후 커밋·푸시. 빌드는 client(vite)+server(tsc). gramjs(telegram)는 server 전용.
