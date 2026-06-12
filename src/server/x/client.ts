@@ -25,12 +25,14 @@ export async function getXScraper(): Promise<Scraper> {
     throw new Error("X 세션 미설정 — X_AUTH_TOKEN / X_CT0 환경변수가 필요합니다.");
   }
   const scraper = new Scraper();
-  // The internal API authenticates against twitter.com hosts; ct0 doubles as the
-  // CSRF token, so both cookies must be present.
-  await scraper.setCookies([
-    `auth_token=${authToken}; Domain=.twitter.com; Path=/; Secure; HttpOnly; SameSite=None`,
-    `ct0=${ct0}; Domain=.twitter.com; Path=/; Secure; SameSite=Lax`,
-  ]);
+  // The library calls api.x.com / x.com, so cookies MUST be on the .x.com domain
+  // (browser stores them there too) — otherwise the jar omits them → 401, and
+  // ct0 (the x-csrf-token source) is missing. Set .twitter.com too for safety.
+  const pair = (domain: string) => [
+    `auth_token=${authToken}; Domain=${domain}; Path=/; Secure; HttpOnly`,
+    `ct0=${ct0}; Domain=${domain}; Path=/; Secure`,
+  ];
+  await scraper.setCookies([...pair(".x.com"), ...pair(".twitter.com")]);
   _scraper = scraper;
   return scraper;
 }
