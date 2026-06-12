@@ -79,9 +79,15 @@ export const xAdapter: SourceAdapter = {
     const h = handle(source.identifier);
     const maxItems = source.config?.maxItems ?? 30;
     if (hasXSession()) return fetchDirect(h, maxItems);
-    const items = await fetchRss(feedUrlFor(source), { maxItems });
-    // Bridge feeds often omit an author; stamp the handle so the Feed/Manual UI
-    // groups and labels them clearly.
-    return items.map((it) => ({ ...it, author: it.author ?? `@${h}` }));
+    try {
+      const items = await fetchRss(feedUrlFor(source), { maxItems });
+      // Bridge feeds often omit an author; stamp the handle so the Feed/Manual UI
+      // groups and labels them clearly.
+      return items.map((it) => ({ ...it, author: it.author ?? `@${h}` }));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Make the active path obvious: this error means cookies are NOT set.
+      throw new Error(`[브리지 경로 — X_AUTH_TOKEN/X_CT0 미설정] ${msg}`);
+    }
   },
 };
