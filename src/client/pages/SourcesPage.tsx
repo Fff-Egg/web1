@@ -15,6 +15,7 @@ export function SourcesPage() {
 
   const sources = useQuery({ queryKey: ["sources"], queryFn: () => api.listSources() });
   const sessions = useQuery({ queryKey: ["sessions"], queryFn: () => api.listSessions() });
+  const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
   const create = useMutation({ mutationFn: api.createSource, onSuccess: invalidate });
   const toggle = useMutation({
     mutationFn: (v: { id: number; enabled: boolean }) => api.toggleSource(v.id, v.enabled),
@@ -137,6 +138,23 @@ export function SourcesPage() {
         <h2 className="mb-3 text-lg font-semibold">
           소스 목록 {sources.data ? `(${sources.data.length})` : ""}
         </h2>
+        {(sources.data ?? []).some((s) => s.provider === "x") && (
+          <div
+            className={
+              "mb-3 rounded border px-3 py-2 text-xs " +
+              (status.data?.xSession
+                ? "border-green-200 bg-green-50 text-green-700"
+                : "border-amber-200 bg-amber-50 text-amber-800")
+            }
+          >
+            {status.data?.xSession ? (
+              <>X 직접수집: <strong>켜짐 ✓</strong> (서버가 쿠키 인식). 이제 "지금 수집"이 직접 경로로 동작합니다.</>
+            ) : (
+              <>X 직접수집: <strong>꺼짐</strong> — 서버가 쿠키를 못 읽고 있습니다. Railway Variables에{" "}
+              <code>X_AUTH_TOKEN</code>·<code>X_CT0</code>를 추가하고 재배포되면 여기 "켜짐"으로 바뀝니다. (그 전엔 죽은 브리지로 폴백해 타임아웃)</>
+            )}
+          </div>
+        )}
         {sources.isLoading && <p className="text-slate-500">로딩…</p>}
         {sources.error && (
           <p className="text-red-600">불러오기 실패: {(sources.error as Error).message}</p>

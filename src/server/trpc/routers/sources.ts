@@ -8,6 +8,7 @@ import { sourcesRepo } from "../../repo/sources.js";
 import { db, hasDb } from "../../db/client.js";
 import { hasSession } from "../../auth/session.js";
 import { collectSource, handleSourceError } from "../../workers/collect.js";
+import { hasXSession } from "../../x/client.js";
 
 const providerEnum = z.enum(PROVIDERS);
 const fetchTypeEnum = z.enum(FETCH_TYPES);
@@ -29,7 +30,7 @@ const configSchema = z
  */
 export const sourcesRouter = router({
   /** Whether data is persisted (MySQL) or running in in-memory dev mode. */
-  status: publicProcedure.query(() => ({ persisted: hasDb })),
+  status: publicProcedure.query(() => ({ persisted: hasDb, xSession: hasXSession() })),
 
   list: publicProcedure.query(() => sourcesRepo.list()),
 

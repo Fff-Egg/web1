@@ -72,7 +72,7 @@ export interface UpdateInput {
 export interface DataApi {
   mode: "trpc" | "static";
   health(): Promise<{ ok: boolean; ts: number }>;
-  status(): Promise<{ persisted: boolean }>;
+  status(): Promise<{ persisted: boolean; xSession?: boolean }>;
   listSources(): Promise<SourceRow[]>;
   createSource(input: CreateInput): Promise<{ id: number }>;
   updateSource(input: UpdateInput): Promise<void>;
