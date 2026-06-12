@@ -10,8 +10,18 @@ export function kstToday(): string {
   return new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
 }
 
+/** Current hour (0–23) in KST. */
+export function kstHour(): number {
+  return Number(
+    new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", hourCycle: "h23" }).format(new Date()),
+  );
+}
+
 /** Digest day boundary hour (KST). A "date" D = the window [(D-1) HH:00, D HH:00). */
 const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
+
+/** Exported for the manual-run guards (buttons refuse to run before their hour). */
+export const digestHour = DIGEST_HOUR;
 
 /** Midday digest hour (KST) — the second daily run. Must sit inside the day
  *  window, i.e. strictly between 0 and DIGEST_HOUR; falls back to 14. */

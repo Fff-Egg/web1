@@ -3,7 +3,18 @@ import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests, analyses, articles } from "../../db/schema.js";
-import { generateDigest, kstToday, kstRangeBounds, sweepWindow, runDailyDigests } from "../../digest/digest.js";
+import {
+  generateDigest,
+  kstToday,
+  kstHour,
+  kstRangeBounds,
+  sweepWindow,
+  runDailyDigests,
+  runMiddayDigest,
+  hasAutoDigestFor,
+  middayHour,
+  digestHour,
+} from "../../digest/digest.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 
 const summarySelect = {
@@ -70,10 +81,10 @@ export const digestRouter = router({
     .mutation(async ({ input }) => generateDigest(input ?? {})),
 
   /** Run the 21시 routine now for today: filter memo + digests (낮분 backfill +
-   *  저녁분) + whole-day sweep. Slot guards make re-runs safe. */
+   *  저녁분) + whole-day sweep. Refused before 21시 — running early would close
+   *  the 저녁분 window with a partial day (tonight's cron then skips it, and
+   *  누른시각~21시 글은 어느 다이제스트에도 못 들어감) AND sweep too early. */
   runEvening: publicProcedure.mutation(async () => {
-    const memo = await feedbackRepo.refreshGuidance();
-    const run = await runDailyDigests();
     // Diagnostic: window bounds + raw in-window count + latest analysis time.
     const today = kstToday();
     const { start, end } = kstRangeBounds(today, today);
@@ -94,22 +105,51 @@ export const digestRouter = router({
     const [latest] = hasDb
       ? await db.select({ createdAt: analyses.createdAt }).from(analyses).orderBy(desc(analyses.createdAt)).limit(1)
       : [{ createdAt: null }];
+    const diag = {
+      start: start.toISOString(),
+      end: end.toISOString(),
+      nowUtc: new Date().toISOString(),
+      rawInWindow: Number(w?.n ?? 0),
+      latestCreatedAt: latest?.createdAt ?? null,
+    };
+    if (kstHour() < digestHour()) {
+      return {
+        date: today,
+        tooEarly: true,
+        midday: null,
+        evening: null,
+        middayExisted: false,
+        eveningExisted: false,
+        swept: 0,
+        memo: null,
+        diag,
+      };
+    }
+    const memo = await feedbackRepo.refreshGuidance();
+    const run = await runDailyDigests();
     return {
       date: today,
+      tooEarly: false,
       midday: run.midday,
       evening: run.evening,
       middayExisted: run.middayExisted,
       eveningExisted: run.eveningExisted,
       swept: run.swept,
       memo,
-      diag: {
-        start: start.toISOString(),
-        end: end.toISOString(),
-        nowUtc: new Date().toISOString(),
-        rawInWindow: Number(w?.n ?? 0),
-        latestCreatedAt: latest?.createdAt ?? null,
-      },
+      diag,
     };
+  }),
+
+  /** Run the 14시 작업 now: 낮분(어제21시~오늘14시) 다이제스트만 — NEVER sweeps.
+   *  Refused before 14시 for the same window-poisoning reason as runEvening. */
+  runMidday: publicProcedure.mutation(async () => {
+    const date = kstToday();
+    if (kstHour() < middayHour()) {
+      return { date, tooEarly: true, existed: false, digest: null };
+    }
+    const existed = await hasAutoDigestFor(date, "midday");
+    const digest = existed ? null : await runMiddayDigest(date);
+    return { date, tooEarly: false, existed, digest };
   }),
 
   /** Sweep a date range's feed to trash — no digest, no feedback signal (for tidying past days). */

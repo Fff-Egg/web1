@@ -56,6 +56,14 @@ export function DigestPage() {
       setSelectedId(undefined);
     },
   });
+  // Run the 14시 작업 now (낮분 다이제스트만 — sweep 없음). 14시 전엔 거부.
+  const runMidday = useMutation({
+    mutationFn: () => api.runMiddayDigest(),
+    onSuccess: (res) => {
+      invalidate();
+      if (res?.digest?.id) setSelectedId(res.digest.id);
+    },
+  });
   // Run the 21시 routine now (auto-digest + that window's feed sweep + memo).
   const runEvening = useMutation({
     mutationFn: () => api.runEveningDigest(),
@@ -211,6 +219,33 @@ export function DigestPage() {
 
         <div className="mt-3 border-t border-slate-100 pt-3">
           <button
+            onClick={() => runMidday.mutate()}
+            disabled={runMidday.isPending}
+            className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            {runMidday.isPending ? "실행 중…" : "🕑 지금 14시 작업 실행"}
+          </button>
+          <span className="ml-2 text-xs text-slate-400">
+            낮분(어제21시~오늘14시) 다이제스트만 생성 · 피드 정리 없음 · 14시 이후 보충용
+          </span>
+          {runMidday.data && (
+            <p className="mt-2 text-xs text-slate-600">
+              {runMidday.data.tooEarly
+                ? `아직 14시(KST) 전입니다 — 지금 실행하면 낮분 창이 일찍 닫혀 이후 글이 누락되므로 실행하지 않았습니다.`
+                : runMidday.data.digest
+                  ? `오늘(${runMidday.data.date}) 낮분 “${runMidday.data.digest.title}” 생성(${runMidday.data.digest.itemCount}건).`
+                  : runMidday.data.existed
+                    ? `오늘(${runMidday.data.date}) 낮분이 이미 있습니다.`
+                    : `오늘(${runMidday.data.date}) 낮분 구간에 새 글이 없습니다.`}
+            </p>
+          )}
+          {runMidday.error && (
+            <p className="mt-2 text-xs text-red-600">{(runMidday.error as Error).message}</p>
+          )}
+        </div>
+
+        <div className="mt-3 border-t border-slate-100 pt-3">
+          <button
             onClick={() => runEvening.mutate()}
             disabled={runEvening.isPending}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
@@ -218,13 +253,15 @@ export function DigestPage() {
             {runEvening.isPending ? "실행 중…" : "🕘 지금 21시 작업 실행"}
           </button>
           <span className="ml-2 text-xs text-slate-400">
-            낮분(어제21시~14시)·저녁분(14~21시) 다이제스트(누락분 보충) + 하루 창 전체 피드 정리
+            낮분 보충 + 저녁분(14~21시) 다이제스트 + 하루 창 전체 피드 정리 · 21시 이후 보충용
           </span>
           {runEvening.data && (
             <>
               <p className="mt-2 text-xs text-slate-600">
                 {(() => {
                   const r = runEvening.data;
+                  if (r.tooEarly)
+                    return `아직 21시(KST) 전입니다 — 지금 실행하면 저녁분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
                   const part = (
                     label: string,
                     gen: { title: string; itemCount: number } | null,
@@ -236,9 +273,12 @@ export function DigestPage() {
                   );
                 })()}
                 {" "}
-                학습 메모: {runEvening.data.memo.updated
-                  ? `갱신됨 (신규 ${runEvening.data.memo.newCount} · 누적 ${runEvening.data.memo.total})`
-                  : `변화 없음 (누적 ${runEvening.data.memo.total})`}.
+                {runEvening.data.memo &&
+                  `학습 메모: ${
+                    runEvening.data.memo.updated
+                      ? `갱신됨 (신규 ${runEvening.data.memo.newCount} · 누적 ${runEvening.data.memo.total})`
+                      : `변화 없음 (누적 ${runEvening.data.memo.total})`
+                  }.`}
               </p>
               <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
                 진단: 창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}

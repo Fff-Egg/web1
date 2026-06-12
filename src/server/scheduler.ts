@@ -1,17 +1,10 @@
 import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
-import { kstToday, hasAutoDigestFor, runMiddayDigest, runDailyDigests, middayHour } from "./digest/digest.js";
+import { kstToday, kstHour, hasAutoDigestFor, runMiddayDigest, runDailyDigests, middayHour } from "./digest/digest.js";
 import { feedbackRepo } from "./repo/feedback.js";
 import { hasDb } from "./db/client.js";
 import { hasLLM } from "./analysis/anthropic.js";
-
-/** Current hour (0–23) in KST. */
-function kstHour(): number {
-  return Number(
-    new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Seoul", hour: "2-digit", hourCycle: "h23" }).format(new Date()),
-  );
-}
 
 /** 14시 routine: midday digest (어제21시~오늘14시) ONLY — no sweep, no memo. */
 async function runMiddayRoutine(): Promise<void> {
