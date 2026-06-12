@@ -68,7 +68,10 @@ export const feedRouter = router({
         .innerJoin(articles, eq(analyses.articleId, articles.id))
         .innerJoin(sources, eq(articles.sourceId, sources.id))
         .where(and(...conds))
-        .orderBy(desc(analyses.createdAt))
+        // Read in original publish order (newest first). Fall back to feed-entry
+        // time when a source omits a date; analysis id breaks ties (whole-second
+        // publishedAt/createdAt collisions would otherwise come back arbitrarily).
+        .orderBy(sql`COALESCE(${articles.publishedAt}, ${analyses.createdAt}) DESC`, desc(analyses.id))
         .limit(input?.limit ?? 100);
     }),
 
