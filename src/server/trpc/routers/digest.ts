@@ -3,7 +3,7 @@ import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests, analyses, articles } from "../../db/schema.js";
-import { generateDigest, kstToday, kstRangeBounds, sweepWindow } from "../../digest/digest.js";
+import { generateDigest, kstToday, kstRangeBounds, sweepWindow, runDailyDigests } from "../../digest/digest.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 
 const summarySelect = {
@@ -69,10 +69,11 @@ export const digestRouter = router({
     )
     .mutation(async ({ input }) => generateDigest(input ?? {})),
 
-  /** Run the 21시 routine now for today (filter memo + auto-digest + that window's sweep). */
+  /** Run the 21시 routine now for today: filter memo + digests (낮분 backfill +
+   *  저녁분) + whole-day sweep. Slot guards make re-runs safe. */
   runEvening: publicProcedure.mutation(async () => {
     const memo = await feedbackRepo.refreshGuidance();
-    const digest = await generateDigest({ auto: true, trashFeedAfter: true });
+    const run = await runDailyDigests();
     // Diagnostic: window bounds + raw in-window count + latest analysis time.
     const today = kstToday();
     const { start, end } = kstRangeBounds(today, today);
@@ -95,7 +96,11 @@ export const digestRouter = router({
       : [{ createdAt: null }];
     return {
       date: today,
-      digest,
+      midday: run.midday,
+      evening: run.evening,
+      middayExisted: run.middayExisted,
+      eveningExisted: run.eveningExisted,
+      swept: run.swept,
       memo,
       diag: {
         start: start.toISOString(),

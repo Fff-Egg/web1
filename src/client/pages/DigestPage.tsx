@@ -64,7 +64,8 @@ export function DigestPage() {
       qc.invalidateQueries({ queryKey: ["feed"] });
       qc.invalidateQueries({ queryKey: ["feedCounts"] });
       qc.invalidateQueries({ queryKey: ["filterGuidance"] });
-      if (res?.digest?.id) setSelectedId(res.digest.id);
+      const id = res?.evening?.id ?? res?.midday?.id;
+      if (id) setSelectedId(id);
     },
   });
   // Tidy a past range's feed (no digest, no feedback signal).
@@ -135,8 +136,12 @@ export function DigestPage() {
   const isAuto = (d: DigestSummary) => Boolean((d.meta as { auto?: boolean } | null | undefined)?.auto);
   const isCombined = (d: DigestSummary) =>
     (d.meta as { source?: string } | null | undefined)?.source === "digests";
+  // Auto digests run twice a day; legacy autos (no slot in meta) were the 21시 run.
+  const slotLabel = (d: DigestSummary) =>
+    ((d.meta as { slot?: string } | null | undefined)?.slot === "midday" ? "14시" : "21시");
   const optLabel = (d: DigestSummary) =>
     `${d.title ?? d.periodStart ?? ""}` +
+    `${isAuto(d) ? ` · ${slotLabel(d)}` : ""}` +
     `${d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd ? ` (${d.periodStart}~${d.periodEnd})` : ""}` +
     `${isCombined(d) ? " · 종합" : ""}`;
   const autos = (list.data ?? []).filter(isAuto);
@@ -212,13 +217,24 @@ export function DigestPage() {
           >
             {runEvening.isPending ? "실행 중…" : "🕘 지금 21시 작업 실행"}
           </button>
-          <span className="ml-2 text-xs text-slate-400">오늘 창(어제21시~오늘21시) 자동 다이제스트 + 그 구간 피드 정리</span>
+          <span className="ml-2 text-xs text-slate-400">
+            낮분(어제21시~14시)·저녁분(14~21시) 다이제스트(누락분 보충) + 하루 창 전체 피드 정리
+          </span>
           {runEvening.data && (
             <>
               <p className="mt-2 text-xs text-slate-600">
-                {runEvening.data.digest
-                  ? `오늘(${runEvening.data.date}) 실행 완료: 다이제스트 “${runEvening.data.digest.title}” 생성(${runEvening.data.digest.itemCount}건) · 피드 ${runEvening.data.digest.trashed}건 휴지통으로.`
-                  : `오늘(${runEvening.data.date}) 구간(어제21시~오늘21시)에 다이제스트/정리할 글이 없습니다.`}
+                {(() => {
+                  const r = runEvening.data;
+                  const part = (
+                    label: string,
+                    gen: { title: string; itemCount: number } | null,
+                    existed: boolean,
+                  ) => (gen ? `${label} 생성(${gen.itemCount}건)` : existed ? `${label} 이미 있음` : `${label} 새 글 없음`);
+                  return (
+                    `오늘(${r.date}) 실행: ${part("낮분", r.midday, r.middayExisted)} · ` +
+                    `${part("저녁분", r.evening, r.eveningExisted)} · 피드 ${r.swept}건 휴지통으로.`
+                  );
+                })()}
                 {" "}
                 학습 메모: {runEvening.data.memo.updated
                   ? `갱신됨 (신규 ${runEvening.data.memo.newCount} · 누적 ${runEvening.data.memo.total})`
@@ -265,7 +281,7 @@ export function DigestPage() {
         >
           {(!list.data || list.data.length === 0) && <option value="">(없음)</option>}
           {autos.length > 0 && (
-            <optgroup label="🤖 자동(21시)">
+            <optgroup label="🤖 자동 (14시·21시)">
               {autos.map((d) => (
                 <option key={d.id} value={d.id}>{optLabel(d)}</option>
               ))}
@@ -286,7 +302,7 @@ export function DigestPage() {
               (isAuto(selected) ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600")
             }
           >
-            {isAuto(selected) ? "자동(21시)" : "수동"}
+            {isAuto(selected) ? `자동 · ${slotLabel(selected)}` : "수동"}
             {isCombined(selected) ? " · 저장본 종합" : ""}
           </span>
         )}

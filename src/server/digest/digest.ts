@@ -13,6 +13,13 @@ export function kstToday(): string {
 /** Digest day boundary hour (KST). A "date" D = the window [(D-1) HH:00, D HH:00). */
 const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
 
+/** Midday digest hour (KST) — the second daily run. Must sit inside the day
+ *  window, i.e. strictly between 0 and DIGEST_HOUR; falls back to 14. */
+export function middayHour(): number {
+  const h = Number(process.env.DIGEST_MIDDAY_HOUR ?? 14);
+  return Number.isFinite(h) && h > 0 && h < DIGEST_HOUR() ? h : 14;
+}
+
 /**
  * [start, end) UTC instants for the KST date range [startDate, endDate].
  * Days run on the DIGEST_HOUR (default 21:00) boundary, so date D covers
@@ -25,14 +32,29 @@ export function kstRangeBounds(startDate: string, endDate: string): { start: Dat
   return { start, end };
 }
 
-/** True if an auto (evening-cron) digest already exists for this KST date. */
-export async function hasAutoDigestFor(date: string): Promise<boolean> {
+/** The two daily auto-digest runs. They split date D's window at middayHour:
+ *  midday = [(D-1) 21시, D 14시), evening = [D 14시, D 21시) — no gap, no overlap. */
+export type DigestSlot = "midday" | "evening";
+
+export function slotBounds(date: string, slot: DigestSlot): { start: Date; end: Date } {
+  const day = kstRangeBounds(date, date);
+  const mid = new Date(`${date}T${String(middayHour()).padStart(2, "0")}:00:00+09:00`);
+  return slot === "midday" ? { start: day.start, end: mid } : { start: mid, end: day.end };
+}
+
+/** True if an auto digest already exists for this KST date — optionally for one
+ *  slot. Legacy auto digests (pre-slot) count as the 21시 (evening) run. */
+export async function hasAutoDigestFor(date: string, slot?: DigestSlot): Promise<boolean> {
   if (!hasDb) return false;
   const rows = await db
     .select({ meta: digests.meta })
     .from(digests)
     .where(and(eq(digests.periodStart, date), eq(digests.periodEnd, date), isNull(digests.deletedAt)));
-  return rows.some((r) => (r.meta as { auto?: boolean } | null | undefined)?.auto === true);
+  return rows.some((r) => {
+    const m = r.meta as { auto?: boolean; slot?: string } | null | undefined;
+    if (m?.auto !== true) return false;
+    return !slot || (m.slot ?? "evening") === slot;
+  });
 }
 
 const DIGEST_SYSTEM = `너는 내 개인 투자 다이제스트 편집자다. 아래는 오늘 분석된 글들의 목록이다.
@@ -166,15 +188,122 @@ export interface GenerateDigestOpts {
   end?: string;
   /** Display name. Defaults to the period string. */
   title?: string;
-  /** Mark as a system-generated (evening cron) digest. */
+  /** Mark as a system-generated (cron) digest. */
   auto?: boolean;
+  /** Auto-run slot: cover only that part of the day window (14시분/21시분). */
+  slot?: DigestSlot;
   /** Synthesize from saved digests in range instead of the feed (past dates). */
   fromDigests?: boolean;
   /** After generating, sweep this window's (non-saved) feed picks to trash. */
   trashFeedAfter?: boolean;
 }
 
-const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 4096);
+const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
+
+// ── Map-reduce synthesis (large windows) ────────────────────────────
+// Above DIGEST_MAP_ITEMS picks, the window is split into size-balanced chunks
+// (each ≤ ITEMS and ≤ CHARS of content) that are partial-summarized in parallel,
+// then one final call synthesizes the digest from those summaries. Keeps every
+// call small: no context overflow, no "lost in the middle" skipping.
+const MAP_MAX_ITEMS = (): number => Math.max(5, Number(process.env.DIGEST_MAP_ITEMS ?? 30));
+const MAP_MAX_CHARS = (): number => Math.max(10_000, Number(process.env.DIGEST_MAP_CHARS ?? 45_000));
+const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 3000);
+const MAP_CONCURRENCY = 3;
+const ITEM_BODY_CHARS = 1500;
+
+/** Content size of one item as packed into a map prompt. */
+function itemSize(it: Pick<DigestItem, "title" | "body" | "summary">): number {
+  const body = it.body ?? it.summary ?? "";
+  return (it.title?.length ?? 0) + Math.min(body.length, ITEM_BODY_CHARS) + 60; // + envelope
+}
+
+/** One item as presented to the LLM — [N] is the GLOBAL citation number. */
+function renderItem(it: DigestItem, n: number): string {
+  return (
+    `[${n}] 제목: ${it.title ?? "(제목없음)"}\n` +
+    `출처: ${it.source}\n` +
+    `원문: ${it.url ?? "(링크없음)"}\n` +
+    `본문:\n${clip(it.body ?? it.summary, ITEM_BODY_CHARS)}`
+  );
+}
+
+/**
+ * Split row indices into balanced chunks for the map stage. Greedy LPT: walk
+ * items largest-first, placing each into the lightest chunk that still has room
+ * (≤ MAX_ITEMS and ≤ MAX_CHARS) — so long reads and one-liners mix instead of
+ * count-only slicing putting 30 long articles in one chunk and 30 tweets in
+ * another. Chunk count starts at the minimum the caps allow, growing only if
+ * packing fails. Indices inside a chunk stay in feed order for readability.
+ */
+export function packChunks(rows: Pick<DigestItem, "title" | "body" | "summary">[]): number[][] {
+  const maxItems = MAP_MAX_ITEMS();
+  const maxChars = MAP_MAX_CHARS();
+  const sizes = rows.map(itemSize);
+  const total = sizes.reduce((a, b) => a + b, 0);
+  let k = Math.max(Math.ceil(rows.length / maxItems), Math.ceil(total / maxChars), 1);
+  for (; ; k++) {
+    const chunks: number[][] = Array.from({ length: k }, () => []);
+    const loads = new Array<number>(k).fill(0);
+    const order = rows.map((_, i) => i).sort((a, b) => sizes[b] - sizes[a]);
+    let ok = true;
+    for (const i of order) {
+      let best = -1;
+      for (let c = 0; c < k; c++) {
+        if (chunks[c].length >= maxItems) continue;
+        // An oversized lone item may exceed CHARS in its own chunk (can't split an article).
+        if (chunks[c].length > 0 && loads[c] + sizes[i] > maxChars) continue;
+        if (best === -1 || loads[c] < loads[best]) best = c;
+      }
+      if (best === -1) {
+        ok = false;
+        break;
+      }
+      chunks[best].push(i);
+      loads[best] += sizes[i];
+    }
+    if (ok) {
+      for (const c of chunks) c.sort((a, b) => a - b);
+      return chunks.filter((c) => c.length > 0);
+    }
+  }
+}
+
+/** complete() with one retry — a single flaky map call shouldn't kill the digest. */
+async function completeRetry(opts: Parameters<typeof complete>[0]): Promise<string> {
+  try {
+    return await complete(opts);
+  } catch (err) {
+    console.warn("[digest] LLM call failed, retrying once:", err instanceof Error ? err.message : err);
+    return complete(opts);
+  }
+}
+
+const MAP_SYSTEM =
+  "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
+  "너는 다이제스트 1단계 정리자다. 아래는 오늘 선별된 글 전체 중 일부 묶음이다. " +
+  "한 건도 빠짐없이, 글마다 `- [번호] 핵심 내용 1~3문장 (종목/테마, 영향: 상승/하락/중립)` 형식으로 압축한다. " +
+  "번호는 입력에 적힌 [N]을 그대로 쓴다(새로 매기지 마라). 제목·URL은 쓰지 않는다. " +
+  "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
+
+/** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
+async function mapStage(rows: DigestItem[], chunks: number[][], model: string): Promise<string[]> {
+  const partials = new Array<string>(chunks.length);
+  const runOne = async (ci: number) => {
+    const body = chunks[ci].map((i) => renderItem(rows[i], i + 1)).join("\n\n---\n\n");
+    partials[ci] = await completeRetry({
+      model,
+      system: MAP_SYSTEM,
+      user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
+      maxTokens: MAP_MAX_TOKENS(),
+    });
+  };
+  for (let i = 0; i < chunks.length; i += MAP_CONCURRENCY) {
+    await Promise.all(
+      chunks.slice(i, i + MAP_CONCURRENCY).map((_, j) => runOne(i + j)),
+    );
+  }
+  return partials;
+}
 
 /** This window's relevant feed picks: period's important + saved items (both date-matched to the window). */
 async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
@@ -248,7 +377,8 @@ function stripDigestHtml(md: string): string {
     .trim();
 }
 
-/** LLM synthesis of this window's feed picks → markdown with footnote refs. */
+/** LLM synthesis of this window's feed picks → markdown with footnote refs.
+ *  Small windows go in one call; large ones run map-reduce (see packChunks). */
 async function synthesizeFromFeed(
   rows: DigestItem[],
   startDate: string,
@@ -258,27 +388,35 @@ async function synthesizeFromFeed(
   model: string,
 ): Promise<string> {
   if (!hasLLM()) return buildFallbackMarkdown(title, rows);
-  const system =
-    "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
-    (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+  const citeRules =
     "\n\n[인용·링크 규칙(필수)] 글을 언급·요약·추천(특히 '원문 정독 추천')할 때 제목 텍스트나 URL을 본문에 직접 쓰지 마라. " +
     "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
     "'나머지 한 줄 정리'·'기타' 같은 목록을 포함해 글을 가리키는 모든 항목에 번호를 빠짐없이 단다(누락 금지). " +
     "한 줄에서 여러 글을 묶을 때는 글마다 번호를 단다: [3][5] 또는 [3, 5] 형식(범위 [3-5]도 가능). " +
     "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
     "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
-  const user =
-    `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
-    rows
-      .map(
-        (it, i) =>
-          `[${i + 1}] 제목: ${it.title ?? "(제목없음)"}\n` +
-          `출처: ${it.source}\n` +
-          `원문: ${it.url ?? "(링크없음)"}\n` +
-          `본문:\n${clip(it.body ?? it.summary, 1500)}`,
-      )
-      .join("\n\n---\n\n");
-  const report = await complete({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+  const system =
+    "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
+    (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+    citeRules;
+
+  let report: string;
+  if (rows.length <= MAP_MAX_ITEMS()) {
+    const user =
+      `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
+      rows.map((it, i) => renderItem(it, i + 1)).join("\n\n---\n\n");
+    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+  } else {
+    const chunks = packChunks(rows);
+    console.log(`[digest] map-reduce: ${rows.length}건 → ${chunks.length}청크 (≤${MAP_MAX_ITEMS()}건/청크)`);
+    const partials = await mapStage(rows, chunks, model);
+    const user =
+      `기간: ${startDate} ~ ${endDate}\n\n` +
+      `1차로 선별된 글 ${rows.length}건을 1단계에서 글별로 압축 정리했다(글마다 전역 번호 [N]). ` +
+      `아래 정리 목록을 원문 대신 읽고 종합하라. 인용 번호는 입력의 [N]을 그대로 사용한다:\n\n` +
+      partials.map((p, i) => `### 묶음 ${i + 1}\n${p.trim()}`).join("\n\n");
+    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+  }
   return `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
 }
 
@@ -367,9 +505,10 @@ export async function generateDigest(
     return null;
   }
   const startDate = opts.start ?? kstToday();
-  const endDate = opts.end ?? startDate;
+  // Slot runs are single-day by definition (they split one day's window).
+  const endDate = opts.slot ? startDate : opts.end ?? startDate;
   const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
-  const { start, end } = kstRangeBounds(startDate, endDate);
+  const { start, end } = opts.slot ? slotBounds(startDate, opts.slot) : kstRangeBounds(startDate, endDate);
   const cfg = await settingsRepo.getAnalysisConfig();
   const model = cfg.analysisModel || ANALYSIS_MODEL();
 
@@ -393,6 +532,7 @@ export async function generateDigest(
       source: "digests",
       sourceDigestIds: src.map((d) => d.id),
       auto: !!opts.auto,
+      ...(opts.slot ? { slot: opts.slot } : {}),
     };
   } else {
     if (rows.length === 0) {
@@ -400,7 +540,7 @@ export async function generateDigest(
       return null;
     }
     markdown = await synthesizeFromFeed(rows, startDate, endDate, title, cfg, model);
-    meta = { itemCount: rows.length, model, source: "feed", auto: !!opts.auto };
+    meta = { itemCount: rows.length, model, source: "feed", auto: !!opts.auto, ...(opts.slot ? { slot: opts.slot } : {}) };
   }
 
   const [res] = await db
@@ -417,6 +557,39 @@ export async function generateDigest(
       `${trashed ? `, trashed=${trashed}` : ""}).`,
   );
   return { id: Number(res.id), title, itemCount: Number(meta.itemCount), trashed };
+}
+
+type DigestRunResult = { id: number; title: string; itemCount: number; trashed: number } | null;
+
+/** 14시 cron: generate the midday digest (어제21시~오늘14시) if it doesn't exist
+ *  yet. NEVER sweeps and never touches the filter memo — that's the 21시 run. */
+export async function runMiddayDigest(date = kstToday()): Promise<DigestRunResult> {
+  if (await hasAutoDigestFor(date, "midday")) return null;
+  return generateDigest({ auto: true, slot: "midday", start: date });
+}
+
+/**
+ * 21시 routine (digest part): backfill a missed 14시분, generate the 21시분
+ * (오늘14시~21시), then sweep the WHOLE day window (어제21시~오늘21시) — but only
+ * if the day got at least one auto digest (an undigested day is never swept).
+ * Slot guards make this safe to re-run (boot catch-up, manual button).
+ */
+export async function runDailyDigests(date = kstToday()): Promise<{
+  midday: DigestRunResult;
+  evening: DigestRunResult;
+  middayExisted: boolean;
+  eveningExisted: boolean;
+  swept: number;
+}> {
+  const middayExisted = await hasAutoDigestFor(date, "midday");
+  const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: date });
+  const eveningExisted = await hasAutoDigestFor(date, "evening");
+  const evening = eveningExisted ? null : await generateDigest({ auto: true, slot: "evening", start: date });
+  let swept = 0;
+  if (middayExisted || eveningExisted || midday || evening) {
+    swept = await sweepWindow(date, date);
+  }
+  return { midday, evening, middayExisted, eveningExisted, swept };
 }
 
 function buildFallbackMarkdown(title: string, rows: DigestItem[]): string {
