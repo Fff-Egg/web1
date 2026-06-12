@@ -47,11 +47,15 @@ select {
 }
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }
-/* Brief highlight on the jumped-to footnote / citation (set via JS, see DigestPage). */
+/* Jumped-to footnote / citation (set via JS, see DigestPage): .ref-flash is a
+   brief attention pulse; .ref-active is the persistent marker that stays until
+   the NEXT jump — so after reading the original (or visiting another tab) you
+   can still see which [N] you were on. The pulse settles into the marker color. */
 .prose-digest .ref-flash { @apply rounded; animation: digest-flash 1.5s ease-out; }
+.prose-digest .ref-active { @apply rounded bg-amber-200 outline outline-2 outline-amber-300/70; }
 @keyframes digest-flash {
-  from { background-color: rgb(254 243 199); } /* amber-100 */
-  to { background-color: transparent; }
+  from { background-color: rgb(251 191 36); } /* amber-400 */
+  to { background-color: rgb(253 230 138); } /* amber-200 = .ref-active bg */
 }
 .prose-digest .ref-src { @apply text-slate-400; }
 .prose-digest .ref-back { @apply ml-1 text-slate-300 no-underline hover:text-blue-600; }

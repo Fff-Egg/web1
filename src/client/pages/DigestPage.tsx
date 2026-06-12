@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
@@ -6,26 +6,14 @@ import type { DigestSummary } from "../data/client.js";
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
-/**
- * In-page footnote jumps ([N] → #ref-N, back ↩ → #cite-N): scroll the target to
- * the middle of the viewport instead of the very top, then flash it. Other links
- * (external originals, and the telegram "?article=<id>" feed deep link) are left
- * untouched so they open normally — in a new tab.
- */
-function onDigestClick(e: MouseEvent<HTMLElement>) {
-  const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
-  if (!link) return;
-  const href = link.getAttribute("href") || "";
-  if (!href.startsWith("#")) return; // external / feed-deep-link open normally
-  const id = decodeURIComponent(href.slice(1));
-  if (!id) return;
-  const el = document.getElementById(id);
-  if (!el) return;
-  e.preventDefault();
-  el.scrollIntoView({ behavior: "smooth", block: "center" });
-  el.classList.remove("ref-flash");
-  void el.offsetWidth; // reflow so the flash animation restarts on repeat clicks
-  el.classList.add("ref-flash");
+/** sessionStorage slot remembering the last-jumped footnote (per digest), so the
+ *  highlight survives leaving this tab (Feed 등) and coming back. */
+const ACTIVE_REF_KEY = "digest-active-ref";
+
+/** Move the persistent highlight: only one .ref-active at a time per digest. */
+function markActiveRef(scope: HTMLElement, el: HTMLElement) {
+  scope.querySelectorAll(".ref-active").forEach((n) => n.classList.remove("ref-active"));
+  el.classList.add("ref-active");
 }
 
 /**
@@ -95,6 +83,54 @@ export function DigestPage() {
   });
 
   const html = digest.data ? marked.parse(digest.data.markdown) : "";
+
+  const articleRef = useRef<HTMLElement | null>(null);
+
+  /**
+   * In-page footnote jumps ([N] → #ref-N, back ↩ → #cite-N): scroll the target
+   * to the middle of the viewport, pulse it, and keep it marked (.ref-active)
+   * until the next jump — "내가 몇 번이었지?"를 잃지 않게. Other links (external
+   * originals, telegram "?article=<id>" deep link) open normally in a new tab.
+   */
+  const onDigestClick = (e: MouseEvent<HTMLElement>) => {
+    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("#")) return; // external / feed-deep-link open normally
+    const id = decodeURIComponent(href.slice(1));
+    if (!id) return;
+    const el = document.getElementById(id);
+    if (!el) return;
+    e.preventDefault();
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    markActiveRef(e.currentTarget, el);
+    if (selectedId !== undefined) {
+      try {
+        sessionStorage.setItem(ACTIVE_REF_KEY, JSON.stringify({ digestId: selectedId, anchor: id }));
+      } catch {
+        /* storage unavailable — highlight just won't survive a remount */
+      }
+    }
+    el.classList.remove("ref-flash");
+    void el.offsetWidth; // reflow so the pulse animation restarts on repeat clicks
+    el.classList.add("ref-flash");
+  };
+
+  // Coming back to this tab (or reselecting the digest) remounts the article —
+  // re-apply the saved highlight so the last-jumped [N] is still marked.
+  useEffect(() => {
+    const scope = articleRef.current;
+    if (!scope || !digest.data || selectedId === undefined) return;
+    try {
+      const raw = sessionStorage.getItem(ACTIVE_REF_KEY);
+      const saved = raw ? (JSON.parse(raw) as { digestId?: number; anchor?: string }) : null;
+      if (!saved?.anchor || saved.digestId !== selectedId) return;
+      const el = document.getElementById(saved.anchor);
+      if (el && scope.contains(el)) markActiveRef(scope, el);
+    } catch {
+      /* corrupt/unavailable storage — skip */
+    }
+  }, [digest.data, selectedId]);
 
   const isAuto = (d: DigestSummary) => Boolean((d.meta as { auto?: boolean } | null | undefined)?.auto);
   const isCombined = (d: DigestSummary) =>
@@ -274,6 +310,7 @@ export function DigestPage() {
 
       {digest.data && (
         <article
+          ref={articleRef}
           className="prose-digest rounded-lg border border-slate-200 bg-white p-5"
           onClick={onDigestClick}
           dangerouslySetInnerHTML={{ __html: html as string }}
