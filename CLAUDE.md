@@ -9,20 +9,25 @@
 - 개발 브랜치: **`claude/focused-planck-m3wgbz`** (여기에만 커밋·푸시). 푸시하면 Railway가 자동 재배포.
 - 푸시는 GitHub MCP가 아니라 일반 `git push -u origin <branch>` 사용.
 
+## 현재 상태 / 바로 이어서
+- **X 직접수집 설정 마무리 중**: Railway Variables에 `X_AUTH_TOKEN`·`X_CT0`(끝자리 **숫자 0**, 영문 O 아님!) 추가함. 재배포 후 **Sources 탭 상단 배너 "X 직접수집: 켜짐✓"** 뜨는지 확인 → X 소스에서 **'지금 수집'** 눌러 `✓ N건` 확인하면 종결. "꺼짐"이면 변수명(특히 CT0의 0)/재배포 확인. (그 전엔 죽은 RSS 브리지로 폴백해 `Request timed out 20000ms`)
+- `DIGEST_HOUR`는 Railway에 **21**이어야 함 — 과거 **13**으로 잘못 설정돼 21시 창이 13시 경계로 어긋났던 적 있음(고침).
+
 ## 실행 환경 (Railway)
 - 앱(web1) + MySQL. `start` = `db:migrate && tsx src/server/index.ts`.
 - 주요 환경변수:
   - `DATABASE_URL` (MySQL public URL)
   - 분석 LLM = **DeepSeek**: `LLM_BASE_URL=https://api.deepseek.com/v1`, `LLM_API_KEY`, `LLM_MODEL=deepseek-v4-flash` (OpenAI 호환)
   - `TELEGRAM_API_ID/HASH/SESSION` (텔레그램 MTProto, 공개·비공개 채널 배치 수집)
-  - X: `X_AUTH_TOKEN`+`X_CT0`(내 계정 쿠키로 직접 수집, 권장·브라우저 불필요) > 소스별 `config.rssUrl` > `X_RSS_BRIDGE`(브리지 템플릿). 쿠키 만료 시 갱신 필요
+  - X: `X_AUTH_TOKEN`+`X_CT0`(끝 **숫자 0**, 내 계정 쿠키로 직접 수집, 권장·브라우저 불필요) > 소스별 `config.rssUrl` > `X_RSS_BRIDGE`(브리지 템플릿). 쿠키 만료/로그아웃 시 갱신 필요
+  - DB 커넥션은 **UTC 고정**(`db/client.ts`: `timezone:"Z"` + 세션 `SET time_zone='+00:00'`) — 21시 창(`createdAt`) 비교가 시간대로 어긋나지 않게 (이전에 이것 때문에 sweep 0건 버그 있었음)
   - `DIGEST_HOUR`(기본 21, KST), `COLLECT_INTERVAL_MIN`(기본 30, 현재 10), `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
   - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`, `ANALYZE_ALL`, `FILTER_FEEDBACK_PER_TYPE`(하루 distill에 넣을 액션 타입별 새 피드백 수, 기본 15)
 
 ## 파이프라인
 1. **수집**(`workers/collect.ts`): 소스별 어댑터 fetch → articles 저장. 같은 (source,url) 글이 있으면 재생성 안 함(삭제 부활 방지). **영구삭제(purge)도 행 자체는 안 지우고 묘비(tombstone: analysis·body 제거, url만 유지)로 남겨** 재수집 시 부활 차단.
 2. **1차 분석**(`analysis/analyze.ts` `filterRelevant`): 1번 호출로 relevant·important·summary 동시. 한국어 강제(+중국어 시 재요약). DeepSeek 등.
-3. **Feed**: relevant 글. 버킷 = 중요 / 검토대상(lowPriority) / ⭐저장됨(saved). created_at(피드 진입 시각)순. 날짜 필터·소스 탭·다중선택 삭제·휴지통(soft delete) 있음. **피드백 학습**: 사용자 액션을 `filter_feedback`에 기록(`action`=trash/promote/restore) — **휴지통 이동=음성(중요↓)**, **검토→남기기·휴지통→복원=양성(중요↑)**. **영구삭제(purge)·21시 자동 sweep은 기록 안 함**(휴지통엔 자동 정리 글이 섞여 있어 신호 오염 방지). 21시에 **새 피드백만**(커서 `lastFeedbackId`, 액션 타입별 최근 `FILTER_FEEDBACK_PER_TYPE`개=기본 15)을 기존 **'학습 메모'에 LLM으로 누적 통합**(distill 1회/일, settings `filterGuidance`) → 1차 필터의 **중요도(중요 vs 검토대상) 판단에만** `guidanceBlock`으로 주입. **관련성/제외 게이트(relevant)엔 영향 없음** — relevanceCriteria 그대로(사용자가 1차 필터는 손대지 말라고 함). **누적식**이라 과거 학습이 유지·복리되고, 상호작용 시엔 DB insert만(토큰 X).
+3. **Feed**: relevant 글. 버킷 = 중요 / 검토대상(lowPriority) / ⭐저장됨(saved). created_at(피드 진입 시각)순. 날짜 필터·소스 탭·다중선택 삭제·휴지통(soft delete) 있음. 삭제/남기기/별점은 **낙관적 업데이트**(캐시 즉시 반영, 전체 refetch 안 함 — 렉 방지). **피드백 학습**: 사용자 액션을 `filter_feedback`에 기록(`action`=trash/promote/restore) — **휴지통 이동=음성(중요↓)**, **검토→남기기·휴지통→복원=양성(중요↑)**. **영구삭제(purge)·21시 자동 sweep은 기록 안 함**(휴지통엔 자동 정리 글이 섞여 있어 신호 오염 방지). 21시에 **새 피드백만**(커서 `lastFeedbackId`, 액션 타입별 최근 `FILTER_FEEDBACK_PER_TYPE`개=기본 15)을 기존 **'학습 메모'에 LLM으로 누적 통합**(distill 1회/일, settings `filterGuidance`) → 1차 필터의 **중요도(중요 vs 검토대상) 판단에만** `guidanceBlock`으로 주입. **관련성/제외 게이트(relevant)엔 영향 없음** — relevanceCriteria 그대로(사용자가 1차 필터는 손대지 말라고 함). **누적식**이라 과거 학습이 유지·복리되고, 상호작용 시엔 DB insert만(토큰 X).
 4. **다이제스트**(`digest/digest.ts`): 기간 내 중요 글 + 저장(saved) 글 종합. 2차 지침(`digestInstructions`) 사용. `[N]` 인용을 **각주(윗첨자 번호) 링크**로 변환 → 하단 번호 매긴 "참조 원문" 목록으로 점프(거기서 원문 링크 연결, `↩`로 본문 복귀). 인라인 링크는 LLM 지침으로 금지. 묶음/범위 인용(`[3,5]`/`[3-5]`)도 각 번호로 펼침. **텔레그램 글은 원문 URL이 없어** 참조를 `?article=<id>` 딥링크(새 탭)로 → App이 Feed 탭으로 시작, FeedPage가 그 글만(전체 목록 X, 가벼움) 본문 펼쳐 표시; "전체 피드 보기"로 해제. 서버 `feed.get`. 각주 `[N]`엔 hover 툴팁(`data-tip`=제목·출처). **기간은 21시 경계**: date D = [(D-1)21시, D21시) KST(예: 11일=10일21시~11일21시). 21시 크론이 **자동 다이제스트**(`meta.auto`, analysisModel) 생성 후 그 구간 **비저장 피드를 휴지통으로**(soft delete). 크론은 in-process라 21시에 서버가 꺼져/재시작 중이면 놓침 → **부팅 시 catch-up**(오늘 21시 지났는데 오늘자 자동본 없으면 1회 실행, `hasAutoDigestFor`로 중복 방지). 수동: Digest 탭 **'지금 21시 작업 실행'**(`digest.runEvening`)으로 즉시 실행(생성·정리 건수 반환). **'이 기간 피드 정리'**(`digest.sweepRange`/`sweepWindow`)는 다이제스트·피드백 신호 없이 그 구간만 sweep(과거일 정리용). 단 **텔레그램은 sweep 제외**(원문이 피드에만 있어 살려둬야 과거 다이제스트의 `?article` 참조가 안 깨짐). **과거 날짜**는 피드가 비었거나 `fromDigests`면 그 기간에 걸치는 **저장 다이제스트들을 종합**(`meta.source='digests'`, 번호 인용 없음). Digest 탭은 자동/수동 optgroup 분리 + 배지.
 
 ## 지침(Settings, DB의 settings.analysis)
