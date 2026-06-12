@@ -14,7 +14,11 @@ import { ANALYSIS_OUTPUT_CONTRACT } from "../../shared/analysis.js";
 
 // Cap body length sent to the model (cuts token cost). Tune via env.
 const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
-const BATCH = 20; // max articles per analysis pass
+// Articles analyzed per pass, and how many LLM calls run concurrently within a
+// pass. Raise ANALYZE_BATCH (and/or ANALYZE_CONCURRENCY) to drain a backlog
+// faster; lower if the provider rate-limits. Throughput/hr ≈ BATCH × (60/COLLECT_INTERVAL_MIN).
+const BATCH = Number(process.env.ANALYZE_BATCH ?? 50);
+const CONCURRENCY = Math.max(1, Number(process.env.ANALYZE_CONCURRENCY ?? 3));
 
 /** Rate-limit / quota errors (e.g. Groq free-tier daily token cap). */
 function isRateLimit(msg: string): boolean {
@@ -195,12 +199,14 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
   let analyzed = 0;
   let relevant = 0;
   let errors = 0;
+  let rateLimited = false;
 
   // Per-article deep analysis is off by default — the daily digest does the
   // synthesis. Set DEEP_ANALYSIS=1 to also analyze each article individually.
   const deepPerArticle = process.env.DEEP_ANALYSIS === "1";
 
-  for (const article of pending) {
+  const processOne = async (article: Article): Promise<void> => {
+    if (rateLimited) return;
     try {
       const { relevant: isRelevant, important, summary } = await filterRelevant(article, cfg, guidance);
       if (!isRelevant) {
@@ -210,7 +216,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
           model: cfg.filterModel || FILTER_MODEL(),
         });
         analyzed++;
-        continue;
+        return;
       }
       // 1st-pass pick (with its summary). Deep analysis only when enabled.
       const deep = deepPerArticle ? await deepAnalyze(article, cfg) : null;
@@ -232,13 +238,19 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
       errors++;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[analyze] article ${article.id} failed:`, msg);
-      // Hit the provider's rate/quota limit — stop this cycle instead of
-      // hammering it with the rest of the batch (each call just re-fails).
+      // Hit the provider's rate/quota limit — stop scheduling more this cycle
+      // instead of hammering it (each call just re-fails).
       if (isRateLimit(msg)) {
+        rateLimited = true;
         console.warn("[analyze] rate/quota limit hit — pausing analysis until next cycle.");
-        break;
       }
     }
+  };
+
+  // Process the batch in bounded-concurrency chunks (much faster for a backlog),
+  // stopping early if the provider rate-limits.
+  for (let i = 0; i < pending.length && !rateLimited; i += CONCURRENCY) {
+    await Promise.all(pending.slice(i, i + CONCURRENCY).map(processOne));
   }
 
   return { analyzed, relevant, errors };
