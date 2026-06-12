@@ -80,7 +80,7 @@ export async function collectSource(source: Source): Promise<number> {
   return inserted;
 }
 
-async function handleSourceError(source: Source, err: unknown): Promise<void> {
+export async function handleSourceError(source: Source, err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err);
   console.error(`[collect] source ${source.id} (${source.provider}) failed:`, message);
 

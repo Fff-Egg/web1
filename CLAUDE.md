@@ -15,7 +15,7 @@
   - `DATABASE_URL` (MySQL public URL)
   - 분석 LLM = **DeepSeek**: `LLM_BASE_URL=https://api.deepseek.com/v1`, `LLM_API_KEY`, `LLM_MODEL=deepseek-v4-flash` (OpenAI 호환)
   - `TELEGRAM_API_ID/HASH/SESSION` (텔레그램 MTProto, 공개·비공개 채널 배치 수집)
-  - `X_RSS_BRIDGE` (X용, 선택) / 소스별 `config.rssUrl`
+  - X: `X_AUTH_TOKEN`+`X_CT0`(내 계정 쿠키로 직접 수집, 권장·브라우저 불필요) > 소스별 `config.rssUrl` > `X_RSS_BRIDGE`(브리지 템플릿). 쿠키 만료 시 갱신 필요
   - `DIGEST_HOUR`(기본 21, KST), `COLLECT_INTERVAL_MIN`(기본 30, 현재 10), `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
   - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`, `ANALYZE_ALL`, `FILTER_FEEDBACK_PER_TYPE`(하루 distill에 넣을 액션 타입별 새 피드백 수, 기본 15)
 
@@ -31,7 +31,7 @@
 - **학습 메모**(`settings.filterGuidance`, 별도 키): 피드백으로 자동 학습되는 중요도 메모. `importanceCriteria`와 **별개**(참고용 주입). Settings 탭 "학습 메모 (자동)"에서 보기·편집·비우기(`settings.getFilterGuidance`/`setFilterGuidance`).
 
 ## 소스 어댑터 (`src/server/adapters/`)
-generic_rss, naver_blog, hankyung, substack, x(브리지 RSS·로그인X), telegram(MTProto 세션·배치·비공개는 숫자ID -100…), naver_premium·fanding(로그인 필요·클라우드 미지원).
+generic_rss, naver_blog, hankyung, substack, x(쿠키 직접 수집 우선 `src/server/x/client.ts`+twitter-scraper, 폴백=브리지 RSS), telegram(MTProto 세션·배치·비공개는 숫자ID -100…), naver_premium·fanding(로그인 필요·클라우드 미지원). Sources 탭 소스별 **'지금 수집'**(`sources.collectNow`)으로 즉시 fetch 테스트(결과/에러 인라인).
 
 ## 마이그레이션 (중요)
 - `drizzle-kit generate`는 **대화형이라 이 환경에서 막힘**. 마이그레이션은 **수동 작성**:

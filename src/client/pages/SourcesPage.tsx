@@ -26,6 +26,19 @@ export function SourcesPage() {
   });
   const update = useMutation({ mutationFn: api.updateSource, onSuccess: invalidate });
 
+  // Per-source "fetch now" — verifies a bridge/cookie setup and shows the result inline.
+  const [collectMsg, setCollectMsg] = useState<Record<number, string>>({});
+  const collectNow = useMutation({
+    mutationFn: (id: number) => api.collectSourceNow(id),
+    onSuccess: (res, id) => {
+      setCollectMsg((m) => ({ ...m, [id]: res.ok ? `✓ ${res.inserted}건 수집됨` : `✗ ${res.error}` }));
+      invalidate();
+    },
+    onError: (e, id) => {
+      setCollectMsg((m) => ({ ...m, [id]: `✗ ${(e as Error).message}` }));
+    },
+  });
+
   const [provider, setProvider] = useState<Provider>("generic_rss");
   const [identifier, setIdentifier] = useState("");
   const [label, setLabel] = useState("");
@@ -161,9 +174,27 @@ export function SourcesPage() {
                     {s.lastError && (
                       <div className="truncate text-xs text-red-500">⚠ {s.lastError}</div>
                     )}
+                    {collectMsg[s.id] && (
+                      <div
+                        className={
+                          "truncate text-xs " +
+                          (collectMsg[s.id].startsWith("✓") ? "text-green-600" : "text-red-500")
+                        }
+                      >
+                        {collectMsg[s.id]}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => collectNow.mutate(s.id)}
+                      disabled={collectNow.isPending}
+                      title="이 소스만 즉시 수집해서 동작 확인"
+                      className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+                    >
+                      {collectNow.isPending && collectNow.variables === s.id ? "수집 중…" : "지금 수집"}
+                    </button>
                     <button
                       onClick={() => {
                         const next = window.prompt("라벨 수정", s.label ?? "");

@@ -78,6 +78,7 @@ export interface DataApi {
   updateSource(input: UpdateInput): Promise<void>;
   toggleSource(id: number, enabled: boolean): Promise<void>;
   removeSource(id: number): Promise<void>;
+  collectSourceNow(id: number): Promise<{ ok: boolean; inserted: number; error: string | null }>;
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
@@ -190,6 +191,8 @@ function makeTrpcApi(): DataApi {
     removeSource: async (id) => {
       await client.sources.remove.mutate({ id });
     },
+    collectSourceNow: (id) =>
+      client.sources.collectNow.mutate({ id }) as Promise<{ ok: boolean; inserted: number; error: string | null }>,
     getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
@@ -301,6 +304,9 @@ function makeStaticApi(): DataApi {
     },
     async removeSource(id) {
       save(load().filter((x) => x.id !== id));
+    },
+    async collectSourceNow() {
+      return { ok: false, inserted: 0, error: "데모 모드에선 수집할 수 없습니다" };
     },
     async getAnalysisConfig() {
       const raw = localStorage.getItem(CFG_KEY);

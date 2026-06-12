@@ -1,11 +1,13 @@
 import { z } from "zod";
+import { eq } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
-import { PROVIDERS, FETCH_TYPES } from "../../db/schema.js";
+import { PROVIDERS, FETCH_TYPES, sources } from "../../db/schema.js";
 import { listProviders } from "../../adapters/index.js";
 import { PROVIDER_LIST, PROVIDER_PRESETS } from "../../../shared/providers.js";
 import { sourcesRepo } from "../../repo/sources.js";
-import { hasDb } from "../../db/client.js";
+import { db, hasDb } from "../../db/client.js";
 import { hasSession } from "../../auth/session.js";
+import { collectSource, handleSourceError } from "../../workers/collect.js";
 
 const providerEnum = z.enum(PROVIDERS);
 const fetchTypeEnum = z.enum(FETCH_TYPES);
@@ -93,5 +95,26 @@ export const sourcesRouter = router({
     .mutation(async ({ input }) => {
       await sourcesRepo.remove(input.id);
       return { ok: true };
+    }),
+
+  /** Fetch one source right now — for verifying a new bridge/cookie setup.
+   *  Returns the inserted count or the error text (also persisted to lastError). */
+  collectNow: publicProcedure
+    .input(z.object({ id: z.number() }))
+    .mutation(async ({ input }): Promise<{ ok: boolean; inserted: number; error: string | null }> => {
+      if (!hasDb) return { ok: false, inserted: 0, error: "DATABASE_URL 필요 (데모 모드에선 수집 불가)" };
+      const [src] = await db.select().from(sources).where(eq(sources.id, input.id)).limit(1);
+      if (!src) return { ok: false, inserted: 0, error: "소스를 찾을 수 없습니다" };
+      try {
+        const inserted = await collectSource(src);
+        await db
+          .update(sources)
+          .set({ lastFetchedAt: new Date(), lastError: null })
+          .where(eq(sources.id, src.id));
+        return { ok: true, inserted, error: null };
+      } catch (err) {
+        await handleSourceError(src, err); // persists lastError (+ session flag)
+        return { ok: false, inserted: 0, error: err instanceof Error ? err.message : String(err) };
+      }
     }),
 });
