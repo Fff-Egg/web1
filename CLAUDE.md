@@ -9,9 +9,10 @@
 - 개발 브랜치: **`claude/focused-planck-m3wgbz`** (여기에만 커밋·푸시). 푸시하면 Railway가 자동 재배포.
 - 푸시는 GitHub MCP가 아니라 일반 `git push -u origin <branch>` 사용.
 
-## 현재 상태 / 바로 이어서
-- **X 직접수집 설정 마무리 중**: Railway Variables에 `X_AUTH_TOKEN`·`X_CT0`(끝자리 **숫자 0**, 영문 O 아님!) 추가함. 재배포 후 **Sources 탭 상단 배너 "X 직접수집: 켜짐✓"** 뜨는지 확인 → X 소스에서 **'지금 수집'** 눌러 `✓ N건` 확인하면 종결. "꺼짐"이면 변수명(특히 CT0의 0)/재배포 확인. (그 전엔 죽은 RSS 브리지로 폴백해 `Request timed out 20000ms`)
-- `DIGEST_HOUR`는 Railway에 **21**이어야 함 — 과거 **13**으로 잘못 설정돼 21시 창이 13시 경계로 어긋났던 적 있음(고침).
+## 현재 상태 / 핵심 메모
+- **X 직접수집 동작 확인됨 ✅** (무료, 브리지 불필요): Railway `X_AUTH_TOKEN`·`X_CT0`(끝자리 **숫자 0**, 영문 O 아님) = 내 X 계정 쿠키. **쿠키는 반드시 `.x.com` 도메인에 set**(`x/client.ts`) — 라이브러리가 `api.x.com`으로 요청해서 `.twitter.com`이면 쿠키 누락 → **401**. Sources 탭 배너 "X 직접수집: 켜짐✓" + 소스별 **'지금 수집'**으로 확인. 401 재발 시 쿠키 재복사(만료/로그아웃), 403·429는 일시 레이트리밋.
+- `DIGEST_HOUR`는 Railway에 **21**(과거 **13**으로 잘못 설정돼 21시 창이 13시 경계로 어긋났던 적 있음 — 고침).
+- 마지막 작업 브랜치 `claude/focused-planck-m3wgbz`(HEAD=최신). 새 세션은 위 ⚠️대로 reset 먼저.
 
 ## 실행 환경 (Railway)
 - 앱(web1) + MySQL. `start` = `db:migrate && tsx src/server/index.ts`.
