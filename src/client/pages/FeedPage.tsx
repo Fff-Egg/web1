@@ -66,27 +66,29 @@ export function FeedPage() {
   return (
     <div className="space-y-4">
       {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
-      <div className="flex items-center gap-1">
-        {([
-          ["important", "중요"],
-          ["low", "검토 대상"],
-        ] as const).map(([key, label]) => {
-          const on = (filter.priority ?? "important") === key;
-          const n = key === "important" ? bc.important : bc.low;
-          return (
-            <button
-              key={key}
-              onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : key }))}
-              className={
-                "rounded-full px-3 py-1 text-sm font-medium " +
-                (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
-              }
-            >
-              {label} <span className={on ? "text-slate-300" : "text-slate-400"}>{n}</span>
-            </button>
-          );
-        })}
-        <span className="ml-2 text-xs text-slate-400">⭐저장 · 지난 텔레그램은 “보관함” 탭</span>
+      <div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-1">
+          {([
+            ["important", "중요"],
+            ["low", "검토 대상"],
+          ] as const).map(([key, label]) => {
+            const on = (filter.priority ?? "important") === key;
+            const n = key === "important" ? bc.important : bc.low;
+            return (
+              <button
+                key={key}
+                onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : key }))}
+                className={
+                  "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium " +
+                  (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
+                }
+              >
+                {label} <span className={on ? "text-slate-300" : "text-slate-400"}>{n}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="text-xs text-slate-400">⭐저장 · 지난 텔레그램은 “보관함” 탭</p>
       </div>
 
       {review && (
