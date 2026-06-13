@@ -317,7 +317,7 @@ export function DigestPage() {
         <select
           value={selectedId ?? ""}
           onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : undefined)}
-          className="rounded border border-slate-300 px-2 py-1 text-sm"
+          className="min-w-0 max-w-full truncate rounded border border-slate-300 px-2 py-1 text-sm"
         >
           {(!list.data || list.data.length === 0) && <option value="">(없음)</option>}
           {autos.length > 0 && (

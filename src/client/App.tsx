@@ -61,8 +61,10 @@ export function App() {
       )}
 
       {/* Mobile: a horizontal scroll strip (7 tabs overflow a phone) instead of
-          spilling off-screen. -mx pulls it to the screen edges so chips aren't clipped. */}
-      <nav className="no-scrollbar mb-4 -mx-4 flex gap-1 overflow-x-auto border-b border-slate-200 px-4 sm:mx-0 sm:mb-6 sm:px-0">
+          spilling off-screen. -mx pulls it to the screen edges so chips aren't clipped.
+          overflow-y-hidden + touch-pan-x keep the swipe strictly horizontal (otherwise
+          overflow-x:auto promotes overflow-y to auto and the strip jiggles vertically). */}
+      <nav className="no-scrollbar mb-4 -mx-4 flex gap-1 overflow-x-auto overflow-y-hidden touch-pan-x border-b border-slate-200 px-4 sm:mx-0 sm:mb-6 sm:px-0">
         {TABS.map((t) => (
           <button
             key={t.id}
