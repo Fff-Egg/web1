@@ -23,6 +23,22 @@ const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
 /** Exported for the manual-run guards (buttons refuse to run before their hour). */
 export const digestHour = DIGEST_HOUR;
 
+/**
+ * Start of the day-window that currently contains "now" (the 21시→21시 window).
+ * Telegram uses this as its Feed↔보관함 boundary: items show in the Feed while
+ * their createdAt is ≥ this edge, then at 21시 the edge shifts forward and the
+ * day's telegram drops out of the Feed into 보관함 — no mutation, just the moving
+ * boundary (keeps telegram alive for digest `?article` links).
+ */
+export function currentWindowStart(): Date {
+  const h = DIGEST_HOUR();
+  const boundary = new Date(`${kstToday()}T${String(h).padStart(2, "0")}:00:00+09:00`);
+  // Before today's 21시 we're still in yesterday-21시→today-21시; after, the next window.
+  return Date.now() < boundary.getTime()
+    ? new Date(boundary.getTime() - 24 * 60 * 60 * 1000)
+    : boundary;
+}
+
 /** Midday digest hour (KST) — the second daily run. Must sit inside the day
  *  window, i.e. strictly between 0 and DIGEST_HOUR; falls back to 14. */
 export function middayHour(): number {

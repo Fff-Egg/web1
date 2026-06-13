@@ -104,14 +104,16 @@ export function ArchivePage() {
       <p className="rounded border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
         {bucket === "saved"
           ? "★로 저장한 글입니다. 21시 정리에서 제외되어 계속 쌓입니다. ★를 다시 누르면 저장 해제됩니다."
-          : "텔레그램 글입니다. 원문 링크가 없어 여기 모아 보관하며(21시 정리 제외), 다이제스트의 텔레그램 인용도 이 글로 연결됩니다."}
+          : "오늘(전일 21시~) 텔레그램은 Feed 탭에 있고, 21시를 넘겨 넘어온 지난 텔레그램을 여기 보관합니다(원문 링크가 없어 삭제하지 않음). 다이제스트의 텔레그램 인용도 이 글로 연결됩니다."}
       </p>
 
       {list.isLoading && <p className="text-slate-500">로딩…</p>}
       {list.error && <p className="text-red-600">{(list.error as Error).message}</p>}
       {list.data && items.length === 0 && (
         <p className="text-slate-500">
-          {bucket === "saved" ? "저장한 글이 없습니다. 피드에서 ★를 눌러 저장하세요." : "텔레그램 글이 없습니다."}
+          {bucket === "saved"
+            ? "저장한 글이 없습니다. 피드에서 ★를 눌러 저장하세요."
+            : "보관함으로 넘어온 지난 텔레그램이 없습니다. (오늘 텔레그램은 Feed 탭)"}
         </p>
       )}
 

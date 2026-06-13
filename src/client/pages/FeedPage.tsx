@@ -86,7 +86,7 @@ export function FeedPage() {
             </button>
           );
         })}
-        <span className="ml-2 text-xs text-slate-400">⭐저장·텔레그램은 “보관함” 탭에서</span>
+        <span className="ml-2 text-xs text-slate-400">⭐저장 · 지난 텔레그램은 “보관함” 탭</span>
       </div>
 
       {review && (

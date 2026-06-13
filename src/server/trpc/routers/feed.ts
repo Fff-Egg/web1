@@ -1,9 +1,10 @@
 import { z } from "zod";
-import { and, desc, eq, ne, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { and, or, desc, eq, ne, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
 import { feedbackRepo } from "../../repo/feedback.js";
+import { currentWindowStart } from "../../digest/digest.js";
 
 const feedSelect = {
   id: articles.id,
@@ -48,17 +49,22 @@ export const feedRouter = router({
     .query(async ({ input }) => {
       if (!hasDb) return [];
       const conds = [eq(analyses.relevant, true), isNull(articles.deletedAt)];
-      // 보관함 buckets (persist through the sweep): saved = read-later, telegram = all telegram.
+      const wStart = currentWindowStart();
       if (input?.priority === "saved") {
+        // ⭐저장 — read-later, any provider, survives the sweep.
         conds.push(eq(analyses.saved, true));
       } else if (input?.priority === "telegram") {
+        // 보관함 텔레그램 — telegram that has aged past the current day window
+        // (today's telegram still lives in the Feed until 21시 moves the edge).
         conds.push(eq(sources.provider, "telegram"));
+        conds.push(lt(analyses.createdAt, wStart));
       } else {
-        // 중요/검토 = the transient feed (exactly what the 21시 sweep clears):
-        // exclude the two persistent buckets — ⭐saved and telegram — which live in 보관함.
+        // 중요/검토 = the day's transient feed. Non-telegram shows until the 21시
+        // sweep clears it; telegram shows only while in the current window, then
+        // moves to 보관함 at 21시. ⭐saved is excluded either way (it's its own bucket).
         conds.push(eq(analyses.lowPriority, input?.priority === "low"));
         conds.push(eq(analyses.saved, false));
-        conds.push(ne(sources.provider, "telegram"));
+        conds.push(or(ne(sources.provider, "telegram"), gte(analyses.createdAt, wStart))!);
       }
       if (input?.impact) conds.push(eq(analyses.impact, input.impact));
       if (input?.ticker)
@@ -107,16 +113,19 @@ export const feedRouter = router({
     }),
 
   /** Counts per bucket for the tab badges. important/low mirror the Feed page
-   *  (exclude ⭐saved and telegram); saved/telegram are the 보관함 buckets. */
+   *  (⭐saved excluded; telegram only counts while in the current day window);
+   *  saved = ⭐ bucket, telegram = 보관함 (aged-out telegram). */
   counts: publicProcedure.query(async () => {
     if (!hasDb) return { important: 0, low: 0, saved: 0, telegram: 0 };
-    const transient = sql`${analyses.saved} = false AND ${sources.provider} <> 'telegram'`;
+    const wStart = currentWindowStart();
+    // In the Feed: not saved, and (non-telegram OR telegram still in this window).
+    const inFeed = sql`${analyses.saved} = false AND (${sources.provider} <> 'telegram' OR ${analyses.createdAt} >= ${wStart})`;
     const [row] = await db
       .select({
-        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false AND ${transient} THEN 1 ELSE 0 END)`,
-        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true AND ${transient} THEN 1 ELSE 0 END)`,
+        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false AND ${inFeed} THEN 1 ELSE 0 END)`,
+        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true AND ${inFeed} THEN 1 ELSE 0 END)`,
         saved: sql<number>`SUM(CASE WHEN ${analyses.saved} = true THEN 1 ELSE 0 END)`,
-        telegram: sql<number>`SUM(CASE WHEN ${sources.provider} = 'telegram' THEN 1 ELSE 0 END)`,
+        telegram: sql<number>`SUM(CASE WHEN ${sources.provider} = 'telegram' AND ${analyses.createdAt} < ${wStart} THEN 1 ELSE 0 END)`,
       })
       .from(analyses)
       .innerJoin(articles, eq(analyses.articleId, articles.id))
