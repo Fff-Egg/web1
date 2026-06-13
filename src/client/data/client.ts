@@ -10,7 +10,7 @@ export interface FeedFilter {
   impact?: Impact;
   ticker?: string;
   theme?: string;
-  priority?: "important" | "low" | "saved";
+  priority?: "important" | "low" | "saved" | "telegram";
   date?: string;
 }
 
@@ -85,7 +85,7 @@ export interface DataApi {
   setFilterGuidance(text: string): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   getFeedItem(id: number): Promise<FeedItem | null>;
-  feedCounts(): Promise<{ important: number; low: number; saved: number }>;
+  feedCounts(): Promise<{ important: number; low: number; saved: number; telegram: number }>;
   trashFeed(): Promise<FeedItem[]>;
   deleteFeedItem(id: number): Promise<void>;
   restoreFeedItem(id: number): Promise<void>;
@@ -222,7 +222,8 @@ function makeTrpcApi(): DataApi {
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
-    feedCounts: () => client.feed.counts.query() as Promise<{ important: number; low: number; saved: number }>,
+    feedCounts: () =>
+      client.feed.counts.query() as Promise<{ important: number; low: number; saved: number; telegram: number }>,
     trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
     deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
     restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
@@ -345,15 +346,26 @@ function makeStaticApi(): DataApi {
       return { text: "", count: 0 };
     },
     async setFilterGuidance() {},
-    async listFeed() {
+    async listFeed(filter) {
       // Static demo: manually-saved analyses first, then example cards.
-      return [...loadSavedFeed(), ...SAMPLE_FEED];
+      const all = [...loadSavedFeed(), ...SAMPLE_FEED];
+      if (filter?.priority === "saved") return all.filter((x) => x.saved);
+      if (filter?.priority === "telegram") return all.filter((x) => x.provider === "telegram");
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram");
+      return transient.filter((x) => !!x.lowPriority === (filter?.priority === "low"));
     },
     async getFeedItem(id) {
       return [...loadSavedFeed(), ...SAMPLE_FEED].find((x) => x.id === id) ?? null;
     },
     async feedCounts() {
-      return { important: 0, low: 0, saved: 0 };
+      const all = [...loadSavedFeed(), ...SAMPLE_FEED];
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram");
+      return {
+        important: transient.filter((x) => !x.lowPriority).length,
+        low: transient.filter((x) => !!x.lowPriority).length,
+        saved: all.filter((x) => x.saved).length,
+        telegram: all.filter((x) => x.provider === "telegram").length,
+      };
     },
     async trashFeed() {
       return [];

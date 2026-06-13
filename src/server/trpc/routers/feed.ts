@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { and, desc, eq, ne, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
@@ -38,7 +38,7 @@ export const feedRouter = router({
           impact: z.enum(IMPACTS).optional(),
           ticker: z.string().optional(),
           theme: z.string().optional(),
-          priority: z.enum(["important", "low", "saved"]).default("important"),
+          priority: z.enum(["important", "low", "saved", "telegram"]).default("important"),
           /** Filter to items added to the feed on this KST date (YYYY-MM-DD). */
           date: z.string().optional(),
           limit: z.number().min(1).max(2000).default(500),
@@ -48,9 +48,18 @@ export const feedRouter = router({
     .query(async ({ input }) => {
       if (!hasDb) return [];
       const conds = [eq(analyses.relevant, true), isNull(articles.deletedAt)];
-      // important = main feed, low = review bucket, saved = read-later bucket.
-      if (input?.priority === "saved") conds.push(eq(analyses.saved, true));
-      else conds.push(eq(analyses.lowPriority, input?.priority === "low"));
+      // 보관함 buckets (persist through the sweep): saved = read-later, telegram = all telegram.
+      if (input?.priority === "saved") {
+        conds.push(eq(analyses.saved, true));
+      } else if (input?.priority === "telegram") {
+        conds.push(eq(sources.provider, "telegram"));
+      } else {
+        // 중요/검토 = the transient feed (exactly what the 21시 sweep clears):
+        // exclude the two persistent buckets — ⭐saved and telegram — which live in 보관함.
+        conds.push(eq(analyses.lowPriority, input?.priority === "low"));
+        conds.push(eq(analyses.saved, false));
+        conds.push(ne(sources.provider, "telegram"));
+      }
       if (input?.impact) conds.push(eq(analyses.impact, input.impact));
       if (input?.ticker)
         conds.push(sql`JSON_CONTAINS(${analyses.tickers}, JSON_QUOTE(${input.ticker}))`);
@@ -97,22 +106,27 @@ export const feedRouter = router({
       return row ?? null;
     }),
 
-  /** Counts per bucket for the tab badges. */
+  /** Counts per bucket for the tab badges. important/low mirror the Feed page
+   *  (exclude ⭐saved and telegram); saved/telegram are the 보관함 buckets. */
   counts: publicProcedure.query(async () => {
-    if (!hasDb) return { important: 0, low: 0, saved: 0 };
+    if (!hasDb) return { important: 0, low: 0, saved: 0, telegram: 0 };
+    const transient = sql`${analyses.saved} = false AND ${sources.provider} <> 'telegram'`;
     const [row] = await db
       .select({
-        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false THEN 1 ELSE 0 END)`,
-        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true THEN 1 ELSE 0 END)`,
+        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false AND ${transient} THEN 1 ELSE 0 END)`,
+        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true AND ${transient} THEN 1 ELSE 0 END)`,
         saved: sql<number>`SUM(CASE WHEN ${analyses.saved} = true THEN 1 ELSE 0 END)`,
+        telegram: sql<number>`SUM(CASE WHEN ${sources.provider} = 'telegram' THEN 1 ELSE 0 END)`,
       })
       .from(analyses)
       .innerJoin(articles, eq(analyses.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
       .where(and(eq(analyses.relevant, true), isNull(articles.deletedAt)));
     return {
       important: Number(row?.important ?? 0),
       low: Number(row?.low ?? 0),
       saved: Number(row?.saved ?? 0),
+      telegram: Number(row?.telegram ?? 0),
     };
   }),
 

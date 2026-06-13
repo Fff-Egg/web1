@@ -4,16 +4,18 @@ import { api } from "./data/client.js";
 import { SourcesPage } from "./pages/SourcesPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 import { FeedPage } from "./pages/FeedPage.js";
+import { ArchivePage } from "./pages/ArchivePage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
 
-type Tab = "sources" | "analyze" | "feed" | "digest" | "settings" | "trash";
+type Tab = "sources" | "analyze" | "feed" | "archive" | "digest" | "settings" | "trash";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "sources", label: "Sources" },
   { id: "analyze", label: "분석(수동)" },
   { id: "feed", label: "Feed" },
+  { id: "archive", label: "보관함" },
   { id: "digest", label: "Daily Digest" },
   { id: "settings", label: "Settings" },
   { id: "trash", label: "휴지통" },
@@ -23,10 +25,11 @@ const TAB_KEY = "feedwatch.activeTab";
 
 export function App() {
   // Remember the last tab across refreshes; default to Feed. A digest deep link
-  // (?article=<id>, opened in a new tab) lands straight on the Feed.
+  // (?article=<id>, opened in a new tab) lands on 보관함, where telegram (and
+  // other saved originals) are read.
   const [tab, setTab] = useState<Tab>(() => {
     if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("article")) {
-      return "feed";
+      return "archive";
     }
     const saved = typeof localStorage !== "undefined" ? localStorage.getItem(TAB_KEY) : null;
     return saved && TABS.some((t) => t.id === saved) ? (saved as Tab) : "feed";
@@ -77,6 +80,7 @@ export function App() {
       {tab === "sources" && <SourcesPage />}
       {tab === "analyze" && <ManualPage />}
       {tab === "feed" && <FeedPage />}
+      {tab === "archive" && <ArchivePage />}
       {tab === "digest" && <DigestPage />}
       {tab === "settings" && <SettingsPage />}
       {tab === "trash" && <TrashPage />}

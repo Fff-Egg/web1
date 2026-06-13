@@ -1,99 +1,31 @@
 import { useMemo, useState } from "react";
-import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { marked } from "marked";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
-import type { FeedFilter, FeedItem } from "../data/client.js";
+import type { FeedFilter } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
+import { FeedCard, dropFromFeedCache, IMPACT_STYLE, IMPACT_LABEL } from "../components/FeedCard.js";
 
 /**
- * Optimistically drop articles from every cached feed list so trash/promote feel
- * instant — no full refetch (which would re-pull up to 500 items). Returns a
- * rollback to restore the snapshot if the mutation fails.
+ * Feed — the day's transient picks (중요 / 검토 대상). These are exactly what the
+ * 21시 sweep clears, so the page stays "today's churn". The two persistent buckets
+ * that survive the sweep — ⭐저장 and 텔레그램 — live in the 보관함 page instead.
  */
-async function dropFromFeedCache(qc: QueryClient, ids: Set<number>): Promise<() => void> {
-  await qc.cancelQueries({ queryKey: ["feed"] });
-  const prev = qc.getQueriesData<FeedItem[]>({ queryKey: ["feed"] });
-  qc.setQueriesData<FeedItem[]>({ queryKey: ["feed"] }, (old) =>
-    old ? old.filter((x) => !ids.has(x.id)) : old,
-  );
-  return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
-}
-
-/**
- * Optimistically toggle `saved` on an article across cached feed lists so the
- * star reacts instantly with no full refetch. The card is left in place — even
- * in the ⭐저장 bucket — so an accidental un-save is easy to undo; it only drops
- * out of the saved bucket on the next refresh/refetch. Returns a rollback.
- */
-async function setSavedInFeedCache(qc: QueryClient, id: number, saved: boolean): Promise<() => void> {
-  await qc.cancelQueries({ queryKey: ["feed"] });
-  const prev = qc.getQueriesData<FeedItem[]>({ queryKey: ["feed"] });
-  qc.setQueriesData<FeedItem[]>({ queryKey: ["feed"] }, (old) =>
-    old ? old.map((x) => (x.id === id ? { ...x, saved } : x)) : old,
-  );
-  return () => prev.forEach(([key, data]) => qc.setQueryData(key, data));
-}
-
-const IMPACT_STYLE: Record<Impact, string> = {
-  bullish: "bg-green-100 text-green-700",
-  bearish: "bg-red-100 text-red-700",
-  neutral: "bg-slate-100 text-slate-600",
-};
-const IMPACT_LABEL: Record<Impact, string> = {
-  bullish: "상승",
-  bearish: "하락",
-  neutral: "중립",
-};
-
-/** When the item entered the feed (analysis time), in KST. */
-function fmtAdded(d?: string | Date | null): string {
-  if (!d) return "";
-  return new Date(d).toLocaleString("ko-KR", {
-    timeZone: "Asia/Seoul",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
 export function FeedPage() {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<FeedFilter>({});
   const [provider, setProvider] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
 
-  // A single article opened from the digest's "피드에서 원문 보기" link (e.g.
-  // telegram, no viewable original) via ?article=<id>, usually in a new tab.
-  // While focused we render only that article — no full feed list, so it's light.
-  const [focusId, setFocusId] = useState<number | null>(() => {
-    const a = new URLSearchParams(window.location.search).get("article");
-    return a ? Number(a) : null;
-  });
-  const focused = useQuery({
-    queryKey: ["feedItem", focusId],
-    queryFn: () => api.getFeedItem(focusId as number),
-    enabled: focusId != null,
-  });
-  const clearFocus = () => {
-    setFocusId(null);
-    const u = new URL(window.location.href);
-    u.searchParams.delete("article");
-    window.history.replaceState(null, "", u.pathname + u.search + u.hash);
-  };
-
   const feed = useQuery({
     queryKey: ["feed", filter],
     queryFn: () => api.listFeed(filter),
-    enabled: focusId == null,
   });
   const bucketCounts = useQuery({
     queryKey: ["feedCounts"],
     queryFn: () => api.feedCounts(),
-    enabled: focusId == null,
   });
-  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0 };
+  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0, telegram: 0 };
 
   const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
   const items = provider
@@ -131,36 +63,6 @@ export function FeedPage() {
   const selectAll = () => setSelected(new Set(items.map((i) => i.id)));
   const ids = [...selected];
 
-  // Focused single-article view (opened from the digest) — light, no full list.
-  if (focusId != null) {
-    return (
-      <div className="space-y-4">
-        <section className="rounded-lg border border-amber-300 bg-amber-50 p-3">
-          <div className="mb-2 flex items-center justify-between gap-2">
-            <span className="text-sm font-medium text-amber-800">
-              📌 다이제스트에서 선택한 글 — 저장된 원문
-            </span>
-            <button
-              onClick={clearFocus}
-              className="text-xs font-medium text-blue-600 hover:underline"
-            >
-              전체 피드 보기 →
-            </button>
-          </div>
-          {focused.isLoading && <p className="text-sm text-slate-500">불러오는 중…</p>}
-          {focused.isSuccess && !focused.data && (
-            <p className="text-sm text-slate-500">글을 찾을 수 없습니다 (삭제되었거나 존재하지 않음).</p>
-          )}
-          {focused.data && (
-            <ul>
-              <FeedCard item={focused.data} defaultOpenBody />
-            </ul>
-          )}
-        </section>
-      </div>
-    );
-  }
-
   return (
     <div className="space-y-4">
       {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
@@ -168,10 +70,9 @@ export function FeedPage() {
         {([
           ["important", "중요"],
           ["low", "검토 대상"],
-          ["saved", "⭐ 저장됨"],
         ] as const).map(([key, label]) => {
           const on = (filter.priority ?? "important") === key;
-          const n = key === "important" ? bc.important : key === "low" ? bc.low : bc.saved;
+          const n = key === "important" ? bc.important : bc.low;
           return (
             <button
               key={key}
@@ -185,6 +86,7 @@ export function FeedPage() {
             </button>
           );
         })}
+        <span className="ml-2 text-xs text-slate-400">⭐저장·텔레그램은 “보관함” 탭에서</span>
       </div>
 
       {review && (
@@ -294,184 +196,5 @@ export function FeedPage() {
         ))}
       </ul>
     </div>
-  );
-}
-
-function FeedCard({
-  item,
-  review,
-  checked,
-  onToggle,
-  defaultOpenBody,
-}: {
-  item: FeedItem;
-  review?: boolean;
-  checked?: boolean;
-  onToggle?: () => void;
-  defaultOpenBody?: boolean;
-}) {
-  const [open, setOpen] = useState(false);
-  const [showFull, setShowFull] = useState(false);
-  const [showBody, setShowBody] = useState(!!defaultOpenBody);
-  const qc = useQueryClient();
-  // Trash/promote/star: update the cache instantly (no full feed refetch); refresh
-  // only the cheap bucket counts, and roll back if the mutation fails.
-  const del = useMutation({
-    mutationFn: () => api.deleteFeedItem(item.id),
-    onMutate: () => dropFromFeedCache(qc, new Set([item.id])),
-    onError: (_e, _v, rollback) => rollback?.(),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
-  });
-  const promote = useMutation({
-    mutationFn: () => api.promoteFeedItem(item.id),
-    onMutate: () => dropFromFeedCache(qc, new Set([item.id])),
-    onError: (_e, _v, rollback) => rollback?.(),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
-  });
-  const save = useMutation({
-    mutationFn: () => api.setSavedFeedItem(item.id, !item.saved),
-    onMutate: () => setSavedInFeedCache(qc, item.id, !item.saved),
-    onError: (_e, _v, rollback) => rollback?.(),
-    onSettled: () => qc.invalidateQueries({ queryKey: ["feedCounts"] }),
-  });
-  return (
-    <li className={"rounded-lg border bg-white p-4 " + (checked ? "border-blue-400 ring-1 ring-blue-200" : "border-slate-200")}>
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2">
-          {onToggle && (
-            <input
-              type="checkbox"
-              checked={checked ?? false}
-              onChange={onToggle}
-              className="mt-1 h-4 w-4 shrink-0"
-            />
-          )}
-          <div className="min-w-0">
-          <a
-            href={item.url ?? "#"}
-            target="_blank"
-            rel="noreferrer"
-            className="font-medium text-slate-900 hover:underline"
-          >
-            {item.title ?? "(제목 없음)"}
-          </a>
-          <div className="mt-0.5 text-xs text-slate-400">
-            {item.sourceLabel ?? item.provider}
-            {item.addedAt && <span className="text-slate-300"> · {fmtAdded(item.addedAt)}</span>}
-          </div>
-          </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {item.impact && (
-            <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
-              {IMPACT_LABEL[item.impact]}
-            </span>
-          )}
-          <button
-            onClick={() => save.mutate()}
-            disabled={save.isPending}
-            title={item.saved ? "저장 해제" : "나중에 보기 저장"}
-            className={"text-base disabled:opacity-50 " + (item.saved ? "text-amber-500" : "text-slate-300 hover:text-amber-500")}
-          >
-            {item.saved ? "★" : "☆"}
-          </button>
-          {review && (
-            <button
-              onClick={() => promote.mutate()}
-              disabled={promote.isPending}
-              title="피드로 남기기"
-              className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white disabled:opacity-50"
-            >
-              남기기
-            </button>
-          )}
-          <button
-            onClick={() => del.mutate()}
-            disabled={del.isPending}
-            title="휴지통으로"
-            className="text-slate-300 hover:text-red-600 disabled:opacity-50"
-          >
-            🗑
-          </button>
-        </div>
-      </div>
-
-      {item.summary && <p className="mt-2 text-sm text-slate-700">{item.summary}</p>}
-
-      <div className="mt-2 flex flex-wrap gap-1">
-        {item.tickers?.map((t) => (
-          <span key={t} className="rounded bg-slate-900 px-1.5 py-0.5 text-xs text-white">
-            {t}
-          </span>
-        ))}
-        {item.themes?.map((t) => (
-          <span key={t} className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-600">
-            #{t}
-          </span>
-        ))}
-      </div>
-
-      {item.implications && (
-        <div className="mt-2">
-          <button
-            onClick={() => setOpen((v) => !v)}
-            className="text-xs font-medium text-blue-600 hover:underline"
-          >
-            {open ? "▾ 왜 중요한지 접기" : "▸ 왜 중요한지"}
-          </button>
-          {open && (
-            <p className="mt-1 rounded bg-blue-50 p-2 text-sm text-slate-700">
-              {item.implications}
-            </p>
-          )}
-        </div>
-      )}
-
-      {item.body && (
-        <div className="mt-2">
-          <button
-            onClick={() => setShowBody((v) => !v)}
-            className="text-xs font-medium text-blue-600 hover:underline"
-          >
-            {showBody ? "▾ 원문 내용 접기" : "▸ 원문 내용 보기"}
-          </button>
-          {showBody && (
-            <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
-              {item.body}
-            </pre>
-          )}
-        </div>
-      )}
-
-      {item.fullText && (
-        <div className="mt-2">
-          <button
-            onClick={() => setShowFull((v) => !v)}
-            className="text-xs font-medium text-slate-700 hover:underline"
-          >
-            {showFull ? "▾ 전체 분석 접기" : "▸ 전체 분석 보기"}
-          </button>
-          {showFull && (
-            <div
-              className="prose-digest mt-1 rounded border border-slate-200 bg-slate-50 p-3 text-sm"
-              dangerouslySetInnerHTML={{ __html: marked.parse(item.fullText) as string }}
-            />
-          )}
-        </div>
-      )}
-
-      {item.url && (
-        <div className="mt-3 border-t border-slate-100 pt-2">
-          <a
-            href={item.url}
-            target="_blank"
-            rel="noreferrer"
-            className="text-xs font-medium text-blue-600 hover:underline"
-          >
-            원문 보기 ↗ <span className="text-slate-400">({item.sourceLabel ?? item.provider})</span>
-          </a>
-        </div>
-      )}
-    </li>
   );
 }
