@@ -11,6 +11,10 @@ body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
 
+/* Horizontal scroll strips (e.g. the mobile tab bar): scroll within, no visible bar. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 /* Keep inputs readable everywhere (esp. mobile dark mode). */
 input,
 textarea,

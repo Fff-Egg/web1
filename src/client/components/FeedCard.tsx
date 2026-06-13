@@ -111,7 +111,7 @@ export function FeedCard({
             href={item.url ?? "#"}
             target="_blank"
             rel="noreferrer"
-            className="font-medium text-slate-900 hover:underline"
+            className="break-words font-medium text-slate-900 hover:underline"
           >
             {item.title ?? "(제목 없음)"}
           </a>
