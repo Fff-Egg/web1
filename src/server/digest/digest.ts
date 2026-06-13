@@ -477,9 +477,11 @@ async function synthesizeFromDigests(
 
 /**
  * After the evening auto-digest, soft-delete this window's non-saved feed picks.
- * Telegram is kept alive: its "original" has no URL and is read from the feed
- * (via the digest's ?article deep link → feed.get, which needs a non-deleted row),
- * so sweeping it would break past digests' "피드에서 원문 보기".
+ * Only **important** telegram is kept alive (→ 보관함): its "original" has no URL
+ * and is read via the digest's ?article deep link → feed.get (needs a non-deleted
+ * row), so sweeping it would break past digests' "피드에서 원문 보기". But
+ * **low-priority** telegram (검토 only — a digest never cites it, since digests
+ * pull important OR saved) is swept like any other 검토 글.
  */
 async function trashWindowFeed(start: Date, end: Date): Promise<number> {
   const rows = await db
@@ -491,7 +493,8 @@ async function trashWindowFeed(start: Date, end: Date): Promise<number> {
       and(
         eq(analyses.relevant, true),
         eq(analyses.saved, false),
-        ne(sources.provider, "telegram"),
+        // keep alive only important telegram; trash everything else in window
+        or(ne(sources.provider, "telegram"), eq(analyses.lowPriority, true))!,
         isNull(articles.deletedAt),
         gte(analyses.createdAt, start),
         lt(analyses.createdAt, end),
@@ -507,9 +510,9 @@ async function trashWindowFeed(start: Date, end: Date): Promise<number> {
 
 /**
  * Sweep a KST date range's window to trash WITHOUT generating a digest or logging
- * feedback — same soft-delete the 21시 cron does (saved & telegram kept). Lets the
- * user tidy past days (whose digests already exist) without polluting the learning
- * signal that a manual trash would create.
+ * feedback — same soft-delete the 21시 cron does (saved & important-telegram kept).
+ * Lets the user tidy past days (whose digests already exist) without polluting the
+ * learning signal that a manual trash would create.
  */
 export async function sweepWindow(startDate: string, endDate: string): Promise<number> {
   if (!hasDb) return 0;
