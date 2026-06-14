@@ -94,28 +94,20 @@ export function DigestPage() {
   const html = digest.data ? marked.parse(digest.data.markdown) : "";
 
   const articleRef = useRef<HTMLElement | null>(null);
+  // Per-ref memory of WHICH [N] occurrence the user last clicked, so the footnote
+  // "↩" returns to that exact spot (the same [N] can appear many times; the stored
+  // HTML only ids the first). Element id, e.g. "cite-3" or "cite-3-2". Reset per digest.
+  const lastCite = useRef<Map<number, string>>(new Map());
 
-  /**
-   * In-page footnote jumps ([N] → #ref-N, back ↩ → #cite-N): scroll the target
-   * to the middle of the viewport, pulse it, and keep it marked (.ref-active)
-   * until the next jump — "내가 몇 번이었지?"를 잃지 않게. Other links (external
-   * originals, telegram "?article=<id>" deep link) open normally in a new tab.
-   */
-  const onDigestClick = (e: MouseEvent<HTMLElement>) => {
-    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
-    if (!link) return;
-    const href = link.getAttribute("href") || "";
-    if (!href.startsWith("#")) return; // external / feed-deep-link open normally
-    const id = decodeURIComponent(href.slice(1));
-    if (!id) return;
-    const el = document.getElementById(id);
+  /** Smooth-scroll to an element id, pulse it, keep it marked, remember it. */
+  const jumpTo = (scope: HTMLElement, targetId: string) => {
+    const el = document.getElementById(targetId);
     if (!el) return;
-    e.preventDefault();
     el.scrollIntoView({ behavior: "smooth", block: "center" });
-    markActiveRef(e.currentTarget, el);
+    markActiveRef(scope, el);
     if (selectedId !== undefined) {
       try {
-        sessionStorage.setItem(ACTIVE_REF_KEY, JSON.stringify({ digestId: selectedId, anchor: id }));
+        sessionStorage.setItem(ACTIVE_REF_KEY, JSON.stringify({ digestId: selectedId, anchor: targetId }));
       } catch {
         /* storage unavailable — highlight just won't survive a remount */
       }
@@ -125,11 +117,57 @@ export function DigestPage() {
     el.classList.add("ref-flash");
   };
 
-  // Coming back to this tab (or reselecting the digest) remounts the article —
-  // re-apply the saved highlight so the last-jumped [N] is still marked.
+  /**
+   * In-page footnote jumps: a citation [N] (#ref-N) scrolls down to the footnote
+   * AND records which occurrence was clicked; the footnote "↩" (#cite-N) scrolls
+   * back to that exact occurrence (not always the first). Other links (external
+   * originals, telegram "?article=<id>") open normally in a new tab.
+   */
+  const onDigestClick = (e: MouseEvent<HTMLElement>) => {
+    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
+    if (!link) return;
+    const href = link.getAttribute("href") || "";
+    if (!href.startsWith("#")) return; // external / feed-deep-link open normally
+    e.preventDefault();
+    const scope = e.currentTarget;
+    // Citation [N] → footnote, remembering the clicked occurrence's id.
+    const refM = href.match(/^#ref-(\d+)$/);
+    if (refM) {
+      const n = Number(refM[1]);
+      const sup = link.closest<HTMLElement>("sup.cite");
+      if (sup?.id) lastCite.current.set(n, sup.id);
+      jumpTo(scope, `ref-${n}`);
+      return;
+    }
+    // Back ↩ (#cite-N) → the exact occurrence clicked (fallback: first).
+    const citeM = href.match(/^#cite-(\d+)$/);
+    if (citeM) {
+      const n = Number(citeM[1]);
+      jumpTo(scope, lastCite.current.get(n) ?? `cite-${n}`);
+      return;
+    }
+    jumpTo(scope, decodeURIComponent(href.slice(1)));
+  };
+
+  // After a digest renders: (1) give every [N] occurrence a unique id so "↩" can
+  // return to the one clicked (stored HTML only ids the first), (2) re-apply the
+  // saved highlight so the last-jumped marker survives tab switches / remounts.
   useEffect(() => {
     const scope = articleRef.current;
     if (!scope || !digest.data || selectedId === undefined) return;
+    lastCite.current.clear();
+    const perN = new Map<number, number>();
+    scope.querySelectorAll<HTMLElement>("sup.cite").forEach((sup) => {
+      const m = sup
+        .querySelector('a[href^="#ref-"]')
+        ?.getAttribute("href")
+        ?.match(/^#ref-(\d+)$/);
+      if (!m) return;
+      const n = Number(m[1]);
+      const k = perN.get(n) ?? 0;
+      perN.set(n, k + 1);
+      sup.id = k === 0 ? `cite-${n}` : `cite-${n}-${k}`;
+    });
     try {
       const raw = sessionStorage.getItem(ACTIVE_REF_KEY);
       const saved = raw ? (JSON.parse(raw) as { digestId?: number; anchor?: string }) : null;
