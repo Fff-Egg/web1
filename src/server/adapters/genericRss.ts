@@ -13,6 +13,8 @@ export const genericRssAdapter: SourceAdapter = {
   async fetch(source: Source): Promise<NormalizedArticle[]> {
     const feedUrl = source.config?.rssUrl ?? source.identifier;
     if (!feedUrl) throw new Error(`Source ${source.id} has no RSS URL`);
-    return fetchRss(feedUrl, { maxItems: source.config?.maxItems ?? 50 });
+    // autodiscover: pasting the site homepage (HTML) instead of the feed URL is a
+    // common mistake — recover by reading the page's <link rel="alternate"> tag.
+    return fetchRss(feedUrl, { maxItems: source.config?.maxItems ?? 50, autodiscover: true });
   },
 };
