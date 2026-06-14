@@ -29,16 +29,48 @@ export function SourcesPage() {
 
   // Per-source "fetch now" — verifies a bridge/cookie setup and shows the result inline.
   const [collectMsg, setCollectMsg] = useState<Record<number, string>>({});
+  // A probed feed URL (generic_rss): suggested, never auto-applied (see collectNow).
+  const [suggested, setSuggested] = useState<Record<number, string>>({});
+  const dropSuggestion = (id: number) =>
+    setSuggested((s) => {
+      const n = { ...s };
+      delete n[id];
+      return n;
+    });
   const collectNow = useMutation({
     mutationFn: (id: number) => api.collectSourceNow(id),
     onSuccess: (res, id) => {
-      setCollectMsg((m) => ({ ...m, [id]: res.ok ? `✓ ${res.inserted}건 수집됨` : `✗ ${res.error}` }));
+      const msg = res.ok
+        ? `✓ ${res.inserted}건 수집됨`
+        : res.suggestedFeedUrl
+          ? "✗ 피드 주소가 아닌 것 같아요 — 아래 제안 확인"
+          : `✗ ${res.error}`;
+      setCollectMsg((m) => ({ ...m, [id]: msg }));
+      setSuggested((s) => {
+        const n = { ...s };
+        if (!res.ok && res.suggestedFeedUrl) n[id] = res.suggestedFeedUrl;
+        else delete n[id];
+        return n;
+      });
       invalidate();
     },
     onError: (e, id) => {
       setCollectMsg((m) => ({ ...m, [id]: `✗ ${(e as Error).message}` }));
     },
   });
+  // Accept a probed feed URL: save it as the source's address, then re-collect.
+  const applySuggestion = (id: number, url: string) => {
+    update.mutate(
+      { id, identifier: url },
+      {
+        onSuccess: () => {
+          dropSuggestion(id);
+          setCollectMsg((m) => ({ ...m, [id]: "주소 변경됨 — 다시 수집 중…" }));
+          collectNow.mutate(id);
+        },
+      },
+    );
+  };
 
   const [provider, setProvider] = useState<Provider>("generic_rss");
   const [identifier, setIdentifier] = useState("");
@@ -200,6 +232,29 @@ export function SourcesPage() {
                         }
                       >
                         {collectMsg[s.id]}
+                      </div>
+                    )}
+                    {suggested[s.id] && (
+                      <div className="mt-1 rounded border border-blue-200 bg-blue-50 px-2 py-1.5 text-xs text-blue-800">
+                        <div className="mb-1">
+                          피드를 찾았어요:{" "}
+                          <span className="break-all font-mono">{suggested[s.id]}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => applySuggestion(s.id, suggested[s.id])}
+                            disabled={update.isPending || collectNow.isPending}
+                            className="rounded bg-blue-600 px-2 py-0.5 font-medium text-white disabled:opacity-50"
+                          >
+                            이 주소로 저장하고 수집
+                          </button>
+                          <button
+                            onClick={() => dropSuggestion(s.id)}
+                            className="text-slate-400 underline"
+                          >
+                            무시
+                          </button>
+                        </div>
                       </div>
                     )}
                   </div>

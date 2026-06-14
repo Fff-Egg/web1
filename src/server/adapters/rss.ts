@@ -53,6 +53,52 @@ async function discoverFeedUrl(pageUrl: string): Promise<string | null> {
   return null;
 }
 
+/** Conventional feed locations to try when a homepage has no <link> autodiscovery.
+ *  Ordered by likelihood; the first that actually parses as a feed wins. */
+const COMMON_FEED_PATHS = ["feed/", "rss", "rss.xml", "atom.xml", "index.xml", "feed", "?feed=rss2"];
+
+/**
+ * Best-effort search for a site's feed when the pasted URL isn't one: first the
+ * page's own <link rel="alternate"> tag, then a few conventional paths
+ * (…/feed/, …/rss, …) validated by actually parsing them.
+ *
+ * MANUAL use only (the "지금 수집" suggestion) — NOT the background loop: guessing a
+ * path can pick the wrong feed (so we surface it for confirmation, never auto-use),
+ * and a genuinely feedless URL would otherwise re-probe every cycle.
+ */
+export async function probeFeedUrl(pageUrl: string): Promise<string | null> {
+  // 1) Authoritative: the page's own autodiscovery <link>.
+  const declared = await discoverFeedUrl(pageUrl).catch(() => null);
+  if (declared) return declared;
+
+  // 2) Guess conventional locations (WordPress-relative + origin-based).
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  const add = (u: string) => {
+    if (!seen.has(u)) {
+      seen.add(u);
+      candidates.push(u);
+    }
+  };
+  try {
+    const base = new URL(pageUrl);
+    const originRoot = `${base.protocol}//${base.host}/`;
+    add(new URL("feed/", pageUrl).toString()); // relative: root OR category (WordPress)
+    for (const p of COMMON_FEED_PATHS) add(new URL(p, originRoot).toString());
+  } catch {
+    return null;
+  }
+  for (const candidate of candidates) {
+    try {
+      await parser.parseURL(candidate); // throws unless it's a real feed
+      return candidate;
+    } catch {
+      /* not this one — keep trying */
+    }
+  }
+  return null;
+}
+
 /** Parse a feed URL; with autodiscover, recover when a homepage (HTML) was given. */
 async function loadFeed(
   feedUrl: string,

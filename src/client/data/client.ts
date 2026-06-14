@@ -78,7 +78,9 @@ export interface DataApi {
   updateSource(input: UpdateInput): Promise<void>;
   toggleSource(id: number, enabled: boolean): Promise<void>;
   removeSource(id: number): Promise<void>;
-  collectSourceNow(id: number): Promise<{ ok: boolean; inserted: number; error: string | null }>;
+  collectSourceNow(
+    id: number,
+  ): Promise<{ ok: boolean; inserted: number; error: string | null; suggestedFeedUrl?: string | null }>;
   getAnalysisConfig(): Promise<AnalysisConfig>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
@@ -210,7 +212,7 @@ function makeTrpcApi(): DataApi {
       await client.sources.remove.mutate({ id });
     },
     collectSourceNow: (id) =>
-      client.sources.collectNow.mutate({ id }) as Promise<{ ok: boolean; inserted: number; error: string | null }>,
+      client.sources.collectNow.mutate({ id }) as ReturnType<DataApi["collectSourceNow"]>,
     getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
