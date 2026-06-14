@@ -1,7 +1,16 @@
 import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
 import { runAnalysis } from "./analysis/analyze.js";
-import { kstToday, kstHour, hasAutoDigestFor, runMiddayDigest, runDailyDigests, middayHour } from "./digest/digest.js";
+import {
+  kstToday,
+  kstHour,
+  hasAutoDigestFor,
+  runMiddayDigest,
+  runDailyDigests,
+  middayHour,
+  currentWindowDate,
+  slotBounds,
+} from "./digest/digest.js";
 import { feedbackRepo } from "./repo/feedback.js";
 import { hasDb } from "./db/client.js";
 import { hasLLM } from "./analysis/anthropic.js";
@@ -38,19 +47,22 @@ async function runEveningRoutine(): Promise<void> {
   }
 }
 
-/** node-cron can't replay a missed time; if today's 14시/21시 run was skipped
+/** node-cron can't replay a missed time; if a boundary or midday run was skipped
  *  (e.g. a deploy restarted the server across that hour), run it once on boot.
- *  Slot guards in digest.ts make this double-run safe. */
-async function catchUpRoutines(midHour: number, digestHour: number): Promise<void> {
+ *  The two checks are independent (midday and boundary can fall on different
+ *  calendar days when the boundary is early, e.g. 07시). Slot guards in digest.ts
+ *  make these double-run safe. */
+async function catchUpRoutines(digestHour: number): Promise<void> {
   try {
-    const h = kstHour();
-    if (h >= digestHour) {
-      if (await hasAutoDigestFor(kstToday(), "evening")) return; // already ran today
-      console.log(`[scheduler] catch-up: today's ${digestHour}:00 run was missed — running now.`);
-      await runEveningRoutine(); // backfills the 14시분 too
-    } else if (h >= midHour) {
-      if (await hasAutoDigestFor(kstToday(), "midday")) return;
-      console.log(`[scheduler] catch-up: today's ${midHour}:00 run was missed — running now.`);
+    // Boundary (HH:00) run for the window that closed this morning.
+    if (kstHour() >= digestHour && !(await hasAutoDigestFor(kstToday(), "evening"))) {
+      console.log(`[scheduler] catch-up: ${digestHour}:00 boundary run was missed — running now.`);
+      await runEveningRoutine(); // backfills the midday분 too
+    }
+    // Midday run for the CURRENT window, if its midday split time has passed.
+    const wd = currentWindowDate();
+    if (Date.now() >= slotBounds(wd, "midday").end.getTime() && !(await hasAutoDigestFor(wd, "midday"))) {
+      console.log(`[scheduler] catch-up: midday run was missed — running now.`);
       await runMiddayRoutine();
     }
   } catch (err) {
@@ -94,11 +106,11 @@ export function startSchedulers(): void {
   setInterval(tick, intervalMin * 60_000);
 
   // Digest crons (KST): midday (digest only) + evening (digest + sweep + memo).
-  const digestHour = Number(process.env.DIGEST_HOUR ?? 21);
+  const digestHour = Number(process.env.DIGEST_HOUR ?? 7);
   const midHour = middayHour();
   cron.schedule(`0 ${midHour} * * *`, () => void runMiddayRoutine(), { timezone: "Asia/Seoul" });
   cron.schedule(`0 ${digestHour} * * *`, () => void runEveningRoutine(), { timezone: "Asia/Seoul" });
   console.log(`[scheduler] digest crons at ${midHour}:00 (낮) and ${digestHour}:00 (저녁+정리) KST`);
-  // Self-heal a run missed by a restart (e.g. today's deploy landed across 14시/21시).
-  void catchUpRoutines(midHour, digestHour);
+  // Self-heal a run missed by a restart (e.g. today's deploy landed across the cron hour).
+  void catchUpRoutines(digestHour);
 }

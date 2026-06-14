@@ -23,6 +23,12 @@ function markActiveRef(scope: HTMLElement, el: HTMLElement) {
 export function DigestPage() {
   const qc = useQueryClient();
   const list = useQuery({ queryKey: ["digests"], queryFn: () => api.listDigests() });
+  const schedule = useQuery({ queryKey: ["digestSchedule"], queryFn: () => api.digestSchedule() });
+  // Formatted run-hour labels ("07시" / "17시") from the server config — defaults
+  // match the code defaults so labels don't flash while loading.
+  const hh = (h: number) => `${String(h).padStart(2, "0")}시`;
+  const midH = hh(schedule.data?.middayHour ?? 17);
+  const evH = hh(schedule.data?.eveningHour ?? 7);
   const [selectedId, setSelectedId] = useState<number | undefined>(undefined);
 
   const [start, setStart] = useState(todayStr());
@@ -56,7 +62,7 @@ export function DigestPage() {
       setSelectedId(undefined);
     },
   });
-  // Run the 14시 작업 now (낮분 다이제스트만 — sweep 없음). 14시 전엔 거부.
+  // Run the midday 작업 now (낮분 다이제스트만 — sweep 없음). 슬롯 마감 전엔 거부.
   const runMidday = useMutation({
     mutationFn: () => api.runMiddayDigest(),
     onSuccess: (res) => {
@@ -64,7 +70,7 @@ export function DigestPage() {
       if (res?.digest?.id) setSelectedId(res.digest.id);
     },
   });
-  // Run the 21시 routine now (auto-digest + that window's feed sweep + memo).
+  // Run the boundary routine now (auto-digest + that window's feed sweep + memo).
   const runEvening = useMutation({
     mutationFn: () => api.runEveningDigest(),
     onSuccess: (res) => {
@@ -182,9 +188,9 @@ export function DigestPage() {
   const isAuto = (d: DigestSummary) => Boolean((d.meta as { auto?: boolean } | null | undefined)?.auto);
   const isCombined = (d: DigestSummary) =>
     (d.meta as { source?: string } | null | undefined)?.source === "digests";
-  // Auto digests run twice a day; legacy autos (no slot in meta) were the 21시 run.
+  // Auto digests run twice a day; legacy autos (no slot in meta) were the boundary (evening) run.
   const slotLabel = (d: DigestSummary) =>
-    ((d.meta as { slot?: string } | null | undefined)?.slot === "midday" ? "14시" : "21시");
+    (d.meta as { slot?: string } | null | undefined)?.slot === "midday" ? midH : evH;
   const optLabel = (d: DigestSummary) =>
     `${d.title ?? d.periodStart ?? ""}` +
     `${isAuto(d) ? ` · ${slotLabel(d)}` : ""}` +
@@ -245,7 +251,7 @@ export function DigestPage() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          기간은 <strong>21시 기준</strong>입니다. 예) 6/11 → 6/10 21시 ~ 6/11 21시. 과거 날짜는 피드가 비어 있으면
+          기간은 <strong>{evH} 기준</strong>입니다. 예) 6/11 → 6/10 {evH} ~ 6/11 {evH}. 과거 날짜는 피드가 비어 있으면
           그 기간의 저장된 다이제스트를 자동으로 종합합니다(위 체크로 강제 가능).
         </p>
         {generate.isSuccess && !generate.data && (
@@ -261,20 +267,20 @@ export function DigestPage() {
             disabled={runMidday.isPending}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {runMidday.isPending ? "실행 중…" : "🕑 지금 14시 작업 실행"}
+            {runMidday.isPending ? "실행 중…" : `🕑 지금 ${midH} 작업 실행`}
           </button>
           <span className="ml-2 text-xs text-slate-400">
-            낮분(어제21시~오늘14시) 다이제스트만 생성 · 피드 정리 없음 · 14시 이후 보충용
+            낮분({midH} 마감분) 다이제스트만 생성 · 피드 정리 없음 · {midH} 이후 보충용
           </span>
           {runMidday.data && (
             <p className="mt-2 text-xs text-slate-600">
               {runMidday.data.tooEarly
-                ? `아직 14시(KST) 전입니다 — 지금 실행하면 낮분 창이 일찍 닫혀 이후 글이 누락되므로 실행하지 않았습니다.`
+                ? `아직 ${midH}(KST)분이 다 안 모였습니다 — 지금 실행하면 낮분 창이 일찍 닫혀 이후 글이 누락되므로 실행하지 않았습니다.`
                 : runMidday.data.digest
-                  ? `오늘(${runMidday.data.date}) 낮분 “${runMidday.data.digest.title}” 생성(${runMidday.data.digest.itemCount}건).`
+                  ? `${runMidday.data.date} 낮분 “${runMidday.data.digest.title}” 생성(${runMidday.data.digest.itemCount}건).`
                   : runMidday.data.existed
-                    ? `오늘(${runMidday.data.date}) 낮분이 이미 있습니다.`
-                    : `오늘(${runMidday.data.date}) 낮분 구간에 새 글이 없습니다.`}
+                    ? `${runMidday.data.date} 낮분이 이미 있습니다.`
+                    : `${runMidday.data.date} 낮분 구간에 새 글이 없습니다.`}
             </p>
           )}
           {runMidday.error && (
@@ -288,10 +294,10 @@ export function DigestPage() {
             disabled={runEvening.isPending}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {runEvening.isPending ? "실행 중…" : "🕘 지금 21시 작업 실행"}
+            {runEvening.isPending ? "실행 중…" : `🕘 지금 ${evH} 작업 실행`}
           </button>
           <span className="ml-2 text-xs text-slate-400">
-            낮분 보충 + 저녁분(14~21시) 다이제스트 + 하루 창 전체 피드 정리 · 21시 이후 보충용
+            낮분 보충 + 저녁분({midH}~{evH}) 다이제스트 + 하루 창 전체 피드 정리 · {evH} 이후 보충용
           </span>
           {runEvening.data && (
             <>
@@ -299,7 +305,7 @@ export function DigestPage() {
                 {(() => {
                   const r = runEvening.data;
                   if (r.tooEarly)
-                    return `아직 21시(KST) 전입니다 — 지금 실행하면 저녁분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
+                    return `아직 ${evH}(KST) 전입니다 — 지금 실행하면 저녁분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
                   const part = (
                     label: string,
                     gen: { title: string; itemCount: number } | null,
@@ -349,7 +355,7 @@ export function DigestPage() {
         </div>
       </section>
 
-      {/* Saved digests — auto (21시) and manual grouped separately */}
+      {/* Saved digests — auto (boundary/midday) and manual grouped separately */}
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm text-slate-500">저장된 다이제스트:</span>
         <select
@@ -359,7 +365,7 @@ export function DigestPage() {
         >
           {(!list.data || list.data.length === 0) && <option value="">(없음)</option>}
           {autos.length > 0 && (
-            <optgroup label="🤖 자동 (14시·21시)">
+            <optgroup label={`🤖 자동 (${midH}·${evH})`}>
               {autos.map((d) => (
                 <option key={d.id} value={d.id}>{optLabel(d)}</option>
               ))}

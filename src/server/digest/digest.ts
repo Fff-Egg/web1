@@ -17,39 +17,53 @@ export function kstHour(): number {
   );
 }
 
+/** Add `days` to a KST date string (YYYY-MM-DD), returning a KST date string. */
+function addDaysKst(date: string, days: number): string {
+  const d = new Date(`${date}T12:00:00+09:00`); // noon: safely inside the day
+  d.setTime(d.getTime() + days * 24 * 60 * 60 * 1000);
+  return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+}
+
 /** Digest day boundary hour (KST). A "date" D = the window [(D-1) HH:00, D HH:00). */
-const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 21);
+const DIGEST_HOUR = (): number => Number(process.env.DIGEST_HOUR ?? 7);
 
 /** Exported for the manual-run guards (buttons refuse to run before their hour). */
 export const digestHour = DIGEST_HOUR;
 
 /**
- * Start of the day-window that currently contains "now" (the 21시→21시 window).
+ * Start of the day-window that currently contains "now" (the HH→HH window).
  * Telegram uses this as its Feed↔보관함 boundary: items show in the Feed while
- * their createdAt is ≥ this edge, then at 21시 the edge shifts forward and the
- * day's telegram drops out of the Feed into 보관함 — no mutation, just the moving
- * boundary (keeps telegram alive for digest `?article` links).
+ * their createdAt is ≥ this edge, then at the boundary hour the edge shifts
+ * forward and the day's telegram drops out of the Feed into 보관함 — no mutation,
+ * just the moving boundary (keeps telegram alive for digest `?article` links).
  */
 export function currentWindowStart(): Date {
   const h = DIGEST_HOUR();
   const boundary = new Date(`${kstToday()}T${String(h).padStart(2, "0")}:00:00+09:00`);
-  // Before today's 21시 we're still in yesterday-21시→today-21시; after, the next window.
+  // Before today's boundary we're still in yesterday→today; after, the next window.
   return Date.now() < boundary.getTime()
     ? new Date(boundary.getTime() - 24 * 60 * 60 * 1000)
     : boundary;
 }
 
-/** Midday digest hour (KST) — the second daily run. Must sit inside the day
- *  window, i.e. strictly between 0 and DIGEST_HOUR; falls back to 14. */
+/** Date label D of the window that currently contains "now" (window D ends at D HH:00). */
+export function currentWindowDate(): string {
+  return kstHour() < DIGEST_HOUR() ? kstToday() : addDaysKst(kstToday(), 1);
+}
+
+/** Midday digest hour (KST) — the second daily run, splitting the day window into
+ *  two slots. Any valid hour except the boundary hour (which would empty a slot);
+ *  may sit before OR after the boundary hour (e.g. boundary 07, midday 17). */
 export function middayHour(): number {
-  const h = Number(process.env.DIGEST_MIDDAY_HOUR ?? 14);
-  return Number.isFinite(h) && h > 0 && h < DIGEST_HOUR() ? h : 14;
+  const h = Number(process.env.DIGEST_MIDDAY_HOUR ?? 17);
+  const valid = Number.isFinite(h) && h >= 0 && h <= 23 && h !== DIGEST_HOUR();
+  return valid ? h : DIGEST_HOUR() === 17 ? 14 : 17;
 }
 
 /**
  * [start, end) UTC instants for the KST date range [startDate, endDate].
- * Days run on the DIGEST_HOUR (default 21:00) boundary, so date D covers
- * [(D-1) 21:00, D 21:00) KST → e.g. "11일" = 10일 21시 ~ 11일 21시.
+ * Days run on the DIGEST_HOUR (default 07:00) boundary, so date D covers
+ * [(D-1) HH:00, D HH:00) KST → e.g. (HH=07) "11일" = 10일 07시 ~ 11일 07시.
  */
 export function kstRangeBounds(startDate: string, endDate: string): { start: Date; end: Date } {
   const h = String(DIGEST_HOUR()).padStart(2, "0");
@@ -58,13 +72,17 @@ export function kstRangeBounds(startDate: string, endDate: string): { start: Dat
   return { start, end };
 }
 
-/** The two daily auto-digest runs. They split date D's window at middayHour:
- *  midday = [(D-1) 21시, D 14시), evening = [D 14시, D 21시) — no gap, no overlap. */
+/** The two daily auto-digest runs split date D's window [(D-1)H, D·H) at the
+ *  midday hour M. The M o'clock inside the window is on day D if M<H, else on day
+ *  D-1 (e.g. H=07,M=17 → split at (D-1) 17:00). No gap, no overlap. */
 export type DigestSlot = "midday" | "evening";
 
 export function slotBounds(date: string, slot: DigestSlot): { start: Date; end: Date } {
   const day = kstRangeBounds(date, date);
-  const mid = new Date(`${date}T${String(middayHour()).padStart(2, "0")}:00:00+09:00`);
+  const H = DIGEST_HOUR();
+  const M = middayHour();
+  const dAtM = new Date(`${date}T${String(M).padStart(2, "0")}:00:00+09:00`);
+  const mid = M < H ? dAtM : new Date(dAtM.getTime() - 24 * 60 * 60 * 1000);
   return slot === "midday" ? { start: day.start, end: mid } : { start: mid, end: day.end };
 }
 
@@ -592,7 +610,7 @@ type DigestRunResult = { id: number; title: string; itemCount: number; trashed: 
 
 /** 14시 cron: generate the midday digest (어제21시~오늘14시) if it doesn't exist
  *  yet. NEVER sweeps and never touches the filter memo — that's the 21시 run. */
-export async function runMiddayDigest(date = kstToday()): Promise<DigestRunResult> {
+export async function runMiddayDigest(date = currentWindowDate()): Promise<DigestRunResult> {
   if (await hasAutoDigestFor(date, "midday")) return null;
   return generateDigest({ auto: true, slot: "midday", start: date });
 }

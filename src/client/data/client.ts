@@ -101,6 +101,8 @@ export interface DataApi {
   digestRestoreMany(ids: number[]): Promise<void>;
   digestPurgeMany(ids: number[]): Promise<void>;
   digestPurgeAll(): Promise<void>;
+  /** Run hours (KST): midday (2nd run) + evening (boundary/sweep). For UI labels. */
+  digestSchedule(): Promise<{ middayHour: number; eveningHour: number }>;
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
@@ -239,6 +241,8 @@ function makeTrpcApi(): DataApi {
     digestRestoreMany: async (ids) => { await client.digest.restoreMany.mutate({ ids }); },
     digestPurgeMany: async (ids) => { await client.digest.purgeMany.mutate({ ids }); },
     digestPurgeAll: async () => { await client.digest.purgeAll.mutate(); },
+    digestSchedule: () =>
+      client.digest.schedule.query() as Promise<{ middayHour: number; eveningHour: number }>,
     listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
@@ -384,6 +388,9 @@ function makeStaticApi(): DataApi {
     async digestRestoreMany() {},
     async digestPurgeMany() {},
     async digestPurgeAll() {},
+    async digestSchedule() {
+      return { middayHour: 17, eveningHour: 7 };
+    },
     async listDigests() {
       return [
         {

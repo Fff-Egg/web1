@@ -14,6 +14,8 @@ import {
   hasAutoDigestFor,
   middayHour,
   digestHour,
+  currentWindowDate,
+  slotBounds,
 } from "../../digest/digest.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 
@@ -140,11 +142,15 @@ export const digestRouter = router({
     };
   }),
 
-  /** Run the 14시 작업 now: 낮분(어제21시~오늘14시) 다이제스트만 — NEVER sweeps.
-   *  Refused before 14시 for the same window-poisoning reason as runEvening. */
+  /** Schedule hours (KST) for the UI to label runs/slots. */
+  schedule: publicProcedure.query(() => ({ middayHour: middayHour(), eveningHour: digestHour() })),
+
+  /** Run the midday 작업 now: 낮분 다이제스트만 (current window's midday slot) — NEVER
+   *  sweeps. Refused before that slot's split time (running early would cut the slot
+   *  short and the cron would then skip it). */
   runMidday: publicProcedure.mutation(async () => {
-    const date = kstToday();
-    if (kstHour() < middayHour()) {
+    const date = currentWindowDate();
+    if (Date.now() < slotBounds(date, "midday").end.getTime()) {
       return { date, tooEarly: true, existed: false, digest: null };
     }
     const existed = await hasAutoDigestFor(date, "midday");
