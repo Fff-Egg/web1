@@ -34,37 +34,9 @@ select {
 .prose-digest blockquote { @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-500 text-sm; }
 
 /* Footnote-style citations + numbered "참조 원문" list for the digest. */
+/* Tapping a [N] opens a JS peek popover (title + source) clamped to the viewport —
+   see DigestPage. data-tip carries the text; styling for the popover is inline. */
 .prose-digest .cite a { @apply font-normal text-blue-600 no-underline hover:underline; }
-/* Hover tooltip on a citation [N]: shows the referenced article's title + source. */
-.prose-digest .cite[data-tip] { position: relative; }
-.prose-digest .cite[data-tip]:hover::after {
-  content: attr(data-tip);
-  position: absolute;
-  left: 0;
-  bottom: calc(100% + 4px);
-  z-index: 20;
-  width: max-content;
-  max-width: 18rem;
-  white-space: normal;
-  pointer-events: none;
-  @apply rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal not-italic leading-snug text-slate-700 shadow-md;
-}
-/* On phones the anchored tooltip runs off the right edge (it grows rightward from
-   the [N]). Pin it as a readable card spanning the viewport so the title/source is
-   never clipped, wherever the citation sits. */
-@media (max-width: 640px) {
-  .prose-digest .cite[data-tip]:hover::after {
-    position: fixed;
-    left: 0.75rem;
-    right: 0.75rem;
-    bottom: 1rem;
-    top: auto;
-    width: auto;
-    max-width: none;
-    z-index: 50;
-    @apply px-3 py-2 text-sm shadow-lg;
-  }
-}
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }
 /* Jumped-to footnote / citation (set via JS, see DigestPage): .ref-flash is a

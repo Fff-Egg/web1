@@ -105,6 +105,37 @@ export function DigestPage() {
   // HTML only ids the first). Element id, e.g. "cite-3" or "cite-3-2". Reset per digest.
   const lastCite = useRef<Map<number, string>>(new Map());
 
+  // Tap-to-peek popover for a citation [N] (its title + source). Anchored near the
+  // tapped [N] but CLAMPED to the viewport so it never runs off the right edge on a
+  // phone. "참조 원문으로" then jumps to the footnote like the old [N] tap did.
+  type Peek = {
+    text: string;
+    refId: string; // footnote target id, "ref-N"
+    citeId: string; // the tapped occurrence's id, so ↩ later returns to it
+    n: number;
+    left: number;
+    vert: { top: number } | { bottom: number };
+    maxW: number;
+  };
+  const [peek, setPeek] = useState<Peek | null>(null);
+
+  const openPeek = (cite: HTMLElement) => {
+    const text = cite.getAttribute("data-tip") || "";
+    const refId = cite.querySelector<HTMLAnchorElement>('a[href^="#ref-"]')?.getAttribute("href")?.slice(1) || "";
+    if (!text || !refId) return;
+    const rect = cite.getBoundingClientRect();
+    const margin = 8;
+    const maxW = Math.min(320, window.innerWidth - 2 * margin);
+    // Clamp left so the card stays fully on screen even when [N] is at the right edge.
+    const left = Math.max(margin, Math.min(rect.left, window.innerWidth - margin - maxW));
+    // Below the citation, unless it's low on the screen — then above it.
+    const vert =
+      rect.bottom < window.innerHeight * 0.55
+        ? { top: Math.round(rect.bottom + 6) }
+        : { bottom: Math.round(window.innerHeight - rect.top + 6) };
+    setPeek({ text, refId, citeId: cite.id, n: Number(refId.replace("ref-", "")), left: Math.round(left), vert, maxW });
+  };
+
   /** Smooth-scroll to an element id, pulse it, keep it marked, remember it. */
   const jumpTo = (scope: HTMLElement, targetId: string) => {
     const el = document.getElementById(targetId);
@@ -123,11 +154,20 @@ export function DigestPage() {
     el.classList.add("ref-flash");
   };
 
+  /** From the peek popover: remember this occurrence (for ↩) and jump to its footnote. */
+  const jumpFromPeek = () => {
+    if (!peek) return;
+    if (peek.citeId) lastCite.current.set(peek.n, peek.citeId);
+    if (articleRef.current) jumpTo(articleRef.current, peek.refId);
+    setPeek(null);
+  };
+
   /**
-   * In-page footnote jumps: a citation [N] (#ref-N) scrolls down to the footnote
-   * AND records which occurrence was clicked; the footnote "↩" (#cite-N) scrolls
-   * back to that exact occurrence (not always the first). Other links (external
-   * originals, telegram "?article=<id>") open normally in a new tab.
+   * In-page footnote interactions. A citation [N] (#ref-N) opens a peek popover
+   * (title/source) anchored to the tap — NOT an immediate jump — so you can see
+   * what [N] is without losing your place. The footnote "↩" (#cite-N) scrolls back
+   * to the exact occurrence you came from. Other links (external originals,
+   * telegram "?article=<id>") open normally in a new tab.
    */
   const onDigestClick = (e: MouseEvent<HTMLElement>) => {
     const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
@@ -136,13 +176,10 @@ export function DigestPage() {
     if (!href.startsWith("#")) return; // external / feed-deep-link open normally
     e.preventDefault();
     const scope = e.currentTarget;
-    // Citation [N] → footnote, remembering the clicked occurrence's id.
-    const refM = href.match(/^#ref-(\d+)$/);
-    if (refM) {
-      const n = Number(refM[1]);
+    // Citation [N] → peek popover near the tap (jump moves into the popover button).
+    if (/^#ref-\d+$/.test(href)) {
       const sup = link.closest<HTMLElement>("sup.cite");
-      if (sup?.id) lastCite.current.set(n, sup.id);
-      jumpTo(scope, `ref-${n}`);
+      if (sup) openPeek(sup);
       return;
     }
     // Back ↩ (#cite-N) → the exact occurrence clicked (fallback: first).
@@ -154,6 +191,29 @@ export function DigestPage() {
     }
     jumpTo(scope, decodeURIComponent(href.slice(1)));
   };
+
+  // Dismiss the peek popover on outside tap / scroll / Escape (a tap on another
+  // citation is left alone so onDigestClick can switch the popover to it).
+  useEffect(() => {
+    if (!peek) return;
+    const onDown = (e: Event) => {
+      const t = e.target as HTMLElement;
+      if (t.closest("[data-cite-peek]") || t.closest("sup.cite")) return;
+      setPeek(null);
+    };
+    const onScroll = () => setPeek(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPeek(null);
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    window.addEventListener("scroll", onScroll, true);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      window.removeEventListener("scroll", onScroll, true);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [peek]);
 
   // After a digest renders: (1) give every [N] occurrence a unique id so "↩" can
   // return to the one clicked (stored HTML only ids the first), (2) re-apply the
@@ -415,6 +475,38 @@ export function DigestPage() {
           onClick={onDigestClick}
           dangerouslySetInnerHTML={{ __html: html as string }}
         />
+      )}
+
+      {/* Citation peek — anchored near the tapped [N], clamped to the viewport. */}
+      {peek && (
+        <div
+          data-cite-peek
+          role="dialog"
+          style={{
+            position: "fixed",
+            left: peek.left,
+            ...("top" in peek.vert ? { top: peek.vert.top } : { bottom: peek.vert.bottom }),
+            maxWidth: peek.maxW,
+            zIndex: 50,
+          }}
+          className="rounded-lg border border-slate-300 bg-white p-3 text-sm not-italic leading-snug text-slate-700 shadow-lg"
+        >
+          <p>{peek.text}</p>
+          <div className="mt-2 flex items-center justify-between gap-4">
+            <button
+              onClick={jumpFromPeek}
+              className="text-xs font-medium text-blue-600 hover:underline"
+            >
+              참조 원문으로 ↓
+            </button>
+            <button
+              onClick={() => setPeek(null)}
+              className="text-xs text-slate-400 hover:text-slate-700"
+            >
+              닫기
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );
