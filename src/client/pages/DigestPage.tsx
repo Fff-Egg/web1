@@ -161,6 +161,14 @@ export function DigestPage() {
    * remembering which occurrence you came from so "↩" returns there. The footnote
    * "↩" (#cite-N) scrolls back. Other links open normally in a new tab.
    */
+  // Touch long-press detection: holding a [N] peeks (and the click that follows
+  // won't also jump). A quick tap jumps. (Mouse uses hover→peek, click→jump.)
+  const longPress = useRef<{ timer: number; fired: boolean }>({ timer: 0, fired: false });
+  const clearLongPress = () => {
+    window.clearTimeout(longPress.current.timer);
+    longPress.current.timer = 0;
+  };
+
   const onDigestClick = (e: MouseEvent<HTMLElement>) => {
     const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
     if (!link) return;
@@ -168,9 +176,13 @@ export function DigestPage() {
     if (!href.startsWith("#")) return; // external / feed-deep-link open normally
     e.preventDefault();
     const scope = articleRef.current ?? e.currentTarget;
-    // Citation [N] → jump to footnote, remembering the clicked occurrence.
     const refM = href.match(/^#ref-(\d+)$/);
     if (refM) {
+      // A long-press just peeked this [N] — consume the trailing click, don't jump.
+      if (longPress.current.fired) {
+        longPress.current.fired = false;
+        return;
+      }
       const n = Number(refM[1]);
       const sup = link.closest<HTMLElement>("sup.cite");
       if (sup?.id) lastCite.current.set(n, sup.id);
@@ -183,18 +195,36 @@ export function DigestPage() {
     setPeek(null); // after the jump's DOM marking, so no re-render races it
   };
 
-  // Hover (or first tap) over a [N] shows its peek; leaving it (mouse) hides it.
+  // Mouse: hovering a [N] peeks; leaving it hides. (Touch uses long-press below.)
   const onCitePointerOver = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.pointerType !== "mouse") return;
     const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
     if (!cite || !cite.id || peek?.citeId === cite.id) return;
     openPeek(cite);
   };
   const onCitePointerOut = (e: ReactPointerEvent<HTMLElement>) => {
-    if (e.pointerType !== "mouse") return; // touch: dismissed by click/scroll instead
+    if (e.pointerType !== "mouse") return;
     const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
     const to = e.relatedTarget as HTMLElement | null;
     if (!cite || (to && cite.contains(to))) return; // still within the same [N]
     setPeek(null);
+  };
+  // Touch: press-and-hold a [N] → peek (stays until dismissed). Quick tap → jump.
+  const onCitePointerDown = (e: ReactPointerEvent<HTMLElement>) => {
+    if (e.pointerType === "mouse") return;
+    const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
+    if (!cite || !cite.id) return;
+    longPress.current.fired = false;
+    clearLongPress();
+    longPress.current.timer = window.setTimeout(() => {
+      longPress.current.fired = true;
+      openPeek(cite);
+    }, 350);
+  };
+  const onCitePointerEnd = () => clearLongPress(); // finger lift / scroll-cancel ends the hold
+  // Block the browser's long-press link menu on a [N] (we peek instead).
+  const onCiteContextMenu = (e: MouseEvent<HTMLElement>) => {
+    if ((e.target as HTMLElement).closest("sup.cite")) e.preventDefault();
   };
 
   // Dismiss the peek on scroll / Escape / outside tap (mouse-leave handled above).
@@ -477,6 +507,10 @@ export function DigestPage() {
           onClick={onDigestClick}
           onPointerOver={onCitePointerOver}
           onPointerOut={onCitePointerOut}
+          onPointerDown={onCitePointerDown}
+          onPointerUp={onCitePointerEnd}
+          onPointerCancel={onCitePointerEnd}
+          onContextMenu={onCiteContextMenu}
           dangerouslySetInnerHTML={{ __html: html as string }}
         />
       )}

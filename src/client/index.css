@@ -36,7 +36,13 @@ select {
 /* Footnote-style citations + numbered "참조 원문" list for the digest. */
 /* Tapping a [N] opens a JS peek popover (title + source) clamped to the viewport —
    see DigestPage. data-tip carries the text; styling for the popover is inline. */
-.prose-digest .cite a { @apply font-normal text-blue-600 no-underline hover:underline; }
+.prose-digest .cite a {
+  @apply font-normal text-blue-600 no-underline hover:underline;
+  /* No long-press link callout / text selection on a [N] — we peek instead. */
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }
 /* Jumped-to footnote / citation (set via JS, see DigestPage): .ref-flash is a
