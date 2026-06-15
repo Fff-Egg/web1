@@ -163,7 +163,12 @@ export function DigestPage() {
    */
   // Touch long-press detection: holding a [N] peeks (and the click that follows
   // won't also jump). A quick tap jumps. (Mouse uses hover→peek, click→jump.)
-  const longPress = useRef<{ timer: number; fired: boolean }>({ timer: 0, fired: false });
+  const longPress = useRef<{ timer: number; fired: boolean; x: number; y: number }>({
+    timer: 0,
+    fired: false,
+    x: 0,
+    y: 0,
+  });
   const clearLongPress = () => {
     window.clearTimeout(longPress.current.timer);
     longPress.current.timer = 0;
@@ -215,13 +220,23 @@ export function DigestPage() {
     const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
     if (!cite || !cite.id) return;
     longPress.current.fired = false;
+    longPress.current.x = e.clientX;
+    longPress.current.y = e.clientY;
     clearLongPress();
     longPress.current.timer = window.setTimeout(() => {
       longPress.current.fired = true;
       openPeek(cite);
     }, 350);
   };
-  const onCitePointerEnd = () => clearLongPress(); // finger lift / scroll-cancel ends the hold
+  // Moving the finger (i.e. a scroll, not a hold) cancels the pending peek — else a
+  // scroll started on a [N] would fire the timer mid-scroll and pop the peek back up.
+  const onCitePointerMove = (e: ReactPointerEvent<HTMLElement>) => {
+    if (!longPress.current.timer) return;
+    const dx = e.clientX - longPress.current.x;
+    const dy = e.clientY - longPress.current.y;
+    if (dx * dx + dy * dy > 100) clearLongPress(); // >10px → it's a scroll
+  };
+  const onCitePointerEnd = () => clearLongPress(); // finger lift / cancel ends the hold
   // Block the browser's long-press link menu on a [N] (we peek instead).
   const onCiteContextMenu = (e: MouseEvent<HTMLElement>) => {
     if ((e.target as HTMLElement).closest("sup.cite")) e.preventDefault();
@@ -230,7 +245,10 @@ export function DigestPage() {
   // Dismiss the peek on scroll / Escape / outside tap (mouse-leave handled above).
   useEffect(() => {
     if (!peek) return;
-    const onScroll = () => setPeek(null);
+    const onScroll = () => {
+      clearLongPress(); // a pending peek must not pop up after a scroll dismiss
+      setPeek(null);
+    };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setPeek(null);
     };
@@ -508,6 +526,7 @@ export function DigestPage() {
           onPointerOver={onCitePointerOver}
           onPointerOut={onCitePointerOut}
           onPointerDown={onCitePointerDown}
+          onPointerMove={onCitePointerMove}
           onPointerUp={onCitePointerEnd}
           onPointerCancel={onCitePointerEnd}
           onContextMenu={onCiteContextMenu}
