@@ -128,11 +128,13 @@ export function DigestPage() {
     const maxW = Math.min(320, window.innerWidth - 2 * margin);
     // Clamp left so the card stays fully on screen even when [N] is at the right edge.
     const left = Math.max(margin, Math.min(rect.left, window.innerWidth - margin - maxW));
-    // Below the citation, unless it's low on the screen — then above it.
+    // Prefer ABOVE the tapped [N]; drop below only when it's too near the top of
+    // the screen to fit the card above it (so it never clips off the top).
+    const estH = 110; // approx card height
     const vert =
-      rect.bottom < window.innerHeight * 0.55
-        ? { top: Math.round(rect.bottom + 6) }
-        : { bottom: Math.round(window.innerHeight - rect.top + 6) };
+      rect.top >= estH + 8
+        ? { bottom: Math.round(window.innerHeight - rect.top + 6) }
+        : { top: Math.round(rect.bottom + 6) };
     setPeek({ text, refId, citeId: cite.id, n: Number(refId.replace("ref-", "")), left: Math.round(left), vert, maxW });
   };
 
