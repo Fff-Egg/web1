@@ -232,6 +232,22 @@ export function DigestPage() {
   const manuals = (list.data ?? []).filter((d) => !isAuto(d));
   const selected = list.data?.find((d) => d.id === selectedId);
 
+  // Show the ACTUAL time window the picked dates resolve to (date D = [(D-1) evH,
+  // D evH)), so the boundary-hour mapping is obvious instead of having to pick
+  // "tomorrow's" label for today's content.
+  const mdy = (iso: string) => {
+    const p = iso.split("-");
+    return p.length === 3 ? `${Number(p[1])}/${Number(p[2])}` : iso;
+  };
+  const prevDay = (iso: string) => {
+    const d = new Date(`${iso}T12:00:00+09:00`);
+    d.setDate(d.getDate() - 1);
+    return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  };
+  const winFrom = start ? `${mdy(prevDay(start))} ${evH}` : "";
+  const winTo = end ? `${mdy(end)} ${evH}` : "";
+  const isLiveWindow = start === end && start === schedule.data?.currentWindowDate;
+
   return (
     <div className="space-y-4">
       {/* Generate a new digest */}
@@ -282,10 +298,16 @@ export function DigestPage() {
             {generate.isPending ? "생성 중…" : "생성"}
           </button>
         </div>
+        {winFrom && winTo && (
+          <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+            🕒 실제 종합 기간: <strong>{winFrom} ~ {winTo}</strong>
+            {isLiveWindow && <span className="ml-1 font-medium text-emerald-600">· 지금 열린 창(오늘 라이브)</span>}
+          </p>
+        )}
         <p className="mt-2 text-xs text-slate-400">
-          기간은 <strong>{evH} 기준</strong>입니다. 예) 6/11 → 6/10 {evH} ~ 6/11 {evH}. 기본값은 <strong>지금 열린 창</strong>
-          (오늘 {evH}~지금)이라 “생성”하면 현재 라이브 피드를 종합합니다. 과거 날짜는 피드가 비어 있으면
-          그 기간의 저장된 다이제스트를 자동으로 종합합니다(위 체크로 강제 가능).
+          날짜는 <strong>{evH} 경계</strong> 기준이라 끝나는 날을 고릅니다(예: 6/17 선택 → 6/16 {evH} ~ 6/17 {evH}).
+          위 “실제 종합 기간”을 보고 고르세요. 과거 날짜는 피드가 비어 있으면 그 기간의 저장된 다이제스트를
+          자동으로 종합합니다(위 체크로 강제 가능).
         </p>
         {generate.isSuccess && !generate.data && (
           <p className="mt-2 text-xs text-amber-600">이 기간에 종합할 피드·저장 다이제스트가 없어 생성하지 못했습니다.</p>
