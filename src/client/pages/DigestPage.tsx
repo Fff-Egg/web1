@@ -43,6 +43,18 @@ export function DigestPage() {
     }
   }, [list.data, selectedId]);
 
+  // Default the make-digest dates to the currently-OPEN window (once, on load), so
+  // "생성" digests today's live feed (07시~지금) instead of the already-swept window
+  // that the calendar date maps to under the 07시 boundary.
+  const datedRef = useRef(false);
+  useEffect(() => {
+    const cur = schedule.data?.currentWindowDate;
+    if (datedRef.current || !cur) return;
+    datedRef.current = true;
+    setStart(cur);
+    setEnd(cur);
+  }, [schedule.data]);
+
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: ["digests"] });
     qc.invalidateQueries({ queryKey: ["digest"] });
@@ -271,7 +283,8 @@ export function DigestPage() {
           </button>
         </div>
         <p className="mt-2 text-xs text-slate-400">
-          기간은 <strong>{evH} 기준</strong>입니다. 예) 6/11 → 6/10 {evH} ~ 6/11 {evH}. 과거 날짜는 피드가 비어 있으면
+          기간은 <strong>{evH} 기준</strong>입니다. 예) 6/11 → 6/10 {evH} ~ 6/11 {evH}. 기본값은 <strong>지금 열린 창</strong>
+          (오늘 {evH}~지금)이라 “생성”하면 현재 라이브 피드를 종합합니다. 과거 날짜는 피드가 비어 있으면
           그 기간의 저장된 다이제스트를 자동으로 종합합니다(위 체크로 강제 가능).
         </p>
         {generate.isSuccess && !generate.data && (

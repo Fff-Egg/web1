@@ -142,8 +142,13 @@ export const digestRouter = router({
     };
   }),
 
-  /** Schedule hours (KST) for the UI to label runs/slots. */
-  schedule: publicProcedure.query(() => ({ middayHour: middayHour(), eveningHour: digestHour() })),
+  /** Schedule hours (KST) + the currently-open window's date, for the UI to label
+   *  runs and default the manual-digest form to "today's live window". */
+  schedule: publicProcedure.query(() => ({
+    middayHour: middayHour(),
+    eveningHour: digestHour(),
+    currentWindowDate: currentWindowDate(),
+  })),
 
   /** Run the midday 작업 now: 낮분 다이제스트만 (current window's midday slot) — NEVER
    *  sweeps. Refused before that slot's split time (running early would cut the slot
