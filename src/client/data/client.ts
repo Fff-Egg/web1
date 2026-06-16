@@ -107,7 +107,9 @@ export interface DataApi {
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
-  generateDigest(opts?: GenerateDigestOpts): Promise<{ id: number; title: string; itemCount: number } | null>;
+  /** Starts generation in the BACKGROUND (returns immediately); poll the digest
+   *  list for the result. (A full-day map-reduce outlasts the HTTP timeout.) */
+  generateDigest(opts?: GenerateDigestOpts): Promise<{ started: boolean }>;
   runEveningDigest(): Promise<{
     date: string;
     /** True = refused: pressed before 21시 (would close the 저녁분 window early + sweep early). */
@@ -248,7 +250,7 @@ function makeTrpcApi(): DataApi {
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
     generateDigest: (opts) =>
-      client.digest.generate.mutate(opts ?? {}) as Promise<{ id: number; title: string; itemCount: number } | null>,
+      client.digest.generate.mutate(opts ?? {}) as Promise<{ started: boolean }>,
     runEveningDigest: () => client.digest.runEvening.mutate() as ReturnType<DataApi["runEveningDigest"]>,
     runMiddayDigest: () => client.digest.runMidday.mutate() as ReturnType<DataApi["runMiddayDigest"]>,
     deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
@@ -411,7 +413,7 @@ function makeStaticApi(): DataApi {
       return SAMPLE_DIGEST;
     },
     async generateDigest() {
-      return { id: SAMPLE_DIGEST.id, title: SAMPLE_DIGEST.title ?? "", itemCount: 0 };
+      return { started: true };
     },
     async runEveningDigest() {
       const now = new Date().toISOString();

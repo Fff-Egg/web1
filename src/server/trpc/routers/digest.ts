@@ -67,7 +67,9 @@ export const digestRouter = router({
       return rows[0] ?? null;
     }),
 
-  /** Generate a new saved digest over a KST date range. */
+  /** Start generating a saved digest over a KST date range. Runs in the BACKGROUND
+   *  (a full-day map-reduce outlasts the HTTP/edge timeout → "upstream error"); the
+   *  client polls the digest list for the result. */
   generate: publicProcedure
     .input(
       z
@@ -80,7 +82,14 @@ export const digestRouter = router({
         })
         .optional(),
     )
-    .mutation(async ({ input }) => generateDigest(input ?? {})),
+    .mutation(({ input }) => {
+      void generateDigest(input ?? {})
+        .then((r) =>
+          console.log(`[digest] manual: ${r ? `"${r.title}" (${r.itemCount} items)` : "nothing to generate"}`),
+        )
+        .catch((e) => console.error("[digest] manual generate failed:", e));
+      return { started: true };
+    }),
 
   /** Run the 21시 routine now for today: filter memo + digests (낮분 backfill +
    *  저녁분) + whole-day sweep. Refused before 21시 — running early would close

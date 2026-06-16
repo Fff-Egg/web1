@@ -36,6 +36,11 @@ export function DigestPage() {
   const [title, setTitle] = useState("");
   const [fromDigests, setFromDigests] = useState(false);
 
+  // Manual generate runs in the background (long map-reduce > HTTP timeout); while
+  // pending we poll the list and grab the new digest when it appears.
+  const [genState, setGenState] = useState<"idle" | "pending" | "timeout">("idle");
+  const genSnapshot = useRef<Set<number>>(new Set());
+
   // Default to the newest saved digest once loaded.
   useEffect(() => {
     if (selectedId === undefined && list.data && list.data.length > 0) {
@@ -62,11 +67,33 @@ export function DigestPage() {
 
   const generate = useMutation({
     mutationFn: () => api.generateDigest({ start, end, title: title || undefined, fromDigests }),
-    onSuccess: (res) => {
-      invalidate();
-      if (res?.id) setSelectedId(res.id);
+    onMutate: () => {
+      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
+      setGenState("pending");
     },
+    onError: () => setGenState("idle"),
   });
+
+  // While a background generate is running, poll the list; when a digest we didn't
+  // have before appears, select it. Give up after a few minutes (still logs server-side).
+  useEffect(() => {
+    if (genState !== "pending") return;
+    qc.invalidateQueries({ queryKey: ["digests"] }); // check once right away (fast/small ones)
+    const poll = setInterval(() => qc.invalidateQueries({ queryKey: ["digests"] }), 4000);
+    const giveUp = setTimeout(() => setGenState("timeout"), 240_000);
+    return () => {
+      clearInterval(poll);
+      clearTimeout(giveUp);
+    };
+  }, [genState, qc]);
+  useEffect(() => {
+    if (genState !== "pending" || !list.data) return;
+    const fresh = list.data.find((d) => !genSnapshot.current.has(d.id));
+    if (fresh) {
+      setSelectedId(fresh.id);
+      setGenState("idle");
+    }
+  }, [list.data, genState]);
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteDigest(id),
     onSuccess: () => {
@@ -292,10 +319,10 @@ export function DigestPage() {
           </label>
           <button
             onClick={() => generate.mutate()}
-            disabled={generate.isPending}
+            disabled={generate.isPending || genState === "pending"}
             className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
-            {generate.isPending ? "생성 중…" : "생성"}
+            {genState === "pending" ? "생성 중…" : "생성"}
           </button>
         </div>
         {winFrom && winTo && (
@@ -309,8 +336,15 @@ export function DigestPage() {
           위 “실제 종합 기간”을 보고 고르세요. 과거 날짜는 피드가 비어 있으면 그 기간의 저장된 다이제스트를
           자동으로 종합합니다(위 체크로 강제 가능).
         </p>
-        {generate.isSuccess && !generate.data && (
-          <p className="mt-2 text-xs text-amber-600">이 기간에 종합할 피드·저장 다이제스트가 없어 생성하지 못했습니다.</p>
+        {genState === "pending" && (
+          <p className="mt-2 text-xs text-blue-600">
+            백그라운드에서 생성 중… 완성되면 자동으로 열립니다. (글이 많으면 1~2분 걸릴 수 있어요)
+          </p>
+        )}
+        {genState === "timeout" && (
+          <p className="mt-2 text-xs text-amber-600">
+            생성이 오래 걸리거나 종합할 글이 없었을 수 있어요. 잠시 후 “저장된 다이제스트” 목록을 확인하세요.
+          </p>
         )}
         {generate.error && (
           <p className="mt-2 text-xs text-red-600">{(generate.error as Error).message}</p>
