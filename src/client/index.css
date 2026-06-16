@@ -34,14 +34,26 @@ select {
 .prose-digest blockquote { @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-500 text-sm; }
 
 /* Footnote-style citations + numbered "참조 원문" list for the digest. */
-/* Tapping a [N] opens a JS peek popover (title + source) clamped to the viewport —
-   see DigestPage. data-tip carries the text; styling for the popover is inline. */
 .prose-digest .cite a {
   @apply font-normal text-blue-600 no-underline hover:underline;
-  /* No long-press link callout / text selection on a [N] — we peek instead. */
+  /* No long-press link callout on a [N] — we just want the peek tooltip. */
   -webkit-touch-callout: none;
-  -webkit-user-select: none;
-  user-select: none;
+}
+/* Hover (or a light tap on a phone) over a [N] shows its title + source. JS sets
+   --tip-shift / --tip-maxw per [N] (see DigestPage) so the tooltip is clamped fully
+   on-screen — it never runs off the right edge. */
+.prose-digest .cite[data-tip] { position: relative; }
+.prose-digest .cite[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: var(--tip-shift, 0px);
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  width: max-content;
+  max-width: var(--tip-maxw, 18rem);
+  white-space: normal;
+  pointer-events: none;
+  @apply rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal not-italic leading-snug text-slate-700 shadow-md;
 }
 .prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
 .prose-digest ol.digest-refs li { @apply scroll-mt-24; }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { marked } from "marked";
 import { api } from "../data/client.js";
@@ -97,8 +97,8 @@ export function DigestPage() {
     enabled: selectedId !== undefined,
   });
 
-  // Memoized so the article's innerHTML reference is stable: a re-render (e.g.
-  // closing the peek) must NOT re-set innerHTML, or it would wipe the yellow
+  // Memoized so the article's innerHTML reference is stable: a re-render (e.g. a
+  // mutation settling) must NOT re-set innerHTML, or it would wipe the yellow
   // marker we add to the footnote on jump.
   const html = useMemo(() => (digest.data ? (marked.parse(digest.data.markdown) as string) : ""), [digest.data]);
 
@@ -107,35 +107,6 @@ export function DigestPage() {
   // "↩" returns to that exact spot (the same [N] can appear many times; the stored
   // HTML only ids the first). Element id, e.g. "cite-3" or "cite-3-2". Reset per digest.
   const lastCite = useRef<Map<number, string>>(new Map());
-
-  // Hover/tap peek for a citation [N] (title + source). JS-positioned so it sits
-  // ABOVE the [N] and is CLAMPED to the viewport (never clipped at the right edge
-  // on a phone). Non-interactive tooltip — clicking the [N] still jumps (yellow).
-  type Peek = {
-    text: string;
-    citeId: string; // which occurrence it's showing for (dedupe repeat hovers)
-    left: number;
-    vert: { top: number } | { bottom: number };
-    maxW: number;
-  };
-  const [peek, setPeek] = useState<Peek | null>(null);
-
-  const openPeek = (cite: HTMLElement) => {
-    const text = cite.getAttribute("data-tip") || "";
-    if (!text) return;
-    const rect = cite.getBoundingClientRect();
-    const margin = 8;
-    const maxW = Math.min(320, window.innerWidth - 2 * margin);
-    // Clamp left so the card stays fully on screen even when [N] is at the right edge.
-    const left = Math.max(margin, Math.min(rect.left, window.innerWidth - margin - maxW));
-    // Above the [N]; drop below only when it's too near the top to fit above.
-    const estH = 110;
-    const vert =
-      rect.top >= estH + 8
-        ? { bottom: Math.round(window.innerHeight - rect.top + 6) }
-        : { top: Math.round(rect.bottom + 6) };
-    setPeek({ text, citeId: cite.id, left: Math.round(left), vert, maxW });
-  };
 
   /** Smooth-scroll to an element id, pulse it, keep it marked, remember it. */
   const jumpTo = (scope: HTMLElement, targetId: string) => {
@@ -156,24 +127,11 @@ export function DigestPage() {
   };
 
   /**
-   * Citation interactions. Hovering/tapping a [N] shows its peek (title/source) in
-   * place; CLICKING the [N] jumps to the footnote and leaves the yellow marker,
-   * remembering which occurrence you came from so "↩" returns there. The footnote
+   * Footnote interactions. Hovering a [N] shows its peek (CSS tooltip; a light tap
+   * shows it on a phone). CLICKING the [N] jumps to the footnote and leaves the
+   * yellow marker, remembering which occurrence so "↩" returns there. The footnote
    * "↩" (#cite-N) scrolls back. Other links open normally in a new tab.
    */
-  // Touch long-press detection: holding a [N] peeks (and the click that follows
-  // won't also jump). A quick tap jumps. (Mouse uses hover→peek, click→jump.)
-  const longPress = useRef<{ timer: number; fired: boolean; x: number; y: number }>({
-    timer: 0,
-    fired: false,
-    x: 0,
-    y: 0,
-  });
-  const clearLongPress = () => {
-    window.clearTimeout(longPress.current.timer);
-    longPress.current.timer = 0;
-  };
-
   const onDigestClick = (e: MouseEvent<HTMLElement>) => {
     const link = (e.target as HTMLElement).closest<HTMLAnchorElement>("a");
     if (!link) return;
@@ -183,87 +141,39 @@ export function DigestPage() {
     const scope = articleRef.current ?? e.currentTarget;
     const refM = href.match(/^#ref-(\d+)$/);
     if (refM) {
-      // A long-press just peeked this [N] — consume the trailing click, don't jump.
-      if (longPress.current.fired) {
-        longPress.current.fired = false;
-        return;
-      }
       const n = Number(refM[1]);
       const sup = link.closest<HTMLElement>("sup.cite");
       if (sup?.id) lastCite.current.set(n, sup.id);
       jumpTo(scope, `ref-${n}`);
-    } else {
-      // Back ↩ (#cite-N) → the exact occurrence clicked (fallback: first).
-      const citeM = href.match(/^#cite-(\d+)$/);
-      jumpTo(scope, citeM ? lastCite.current.get(Number(citeM[1])) ?? `cite-${citeM[1]}` : decodeURIComponent(href.slice(1)));
+      return;
     }
-    setPeek(null); // after the jump's DOM marking, so no re-render races it
+    // Back ↩ (#cite-N) → the exact occurrence clicked (fallback: first).
+    const citeM = href.match(/^#cite-(\d+)$/);
+    jumpTo(scope, citeM ? lastCite.current.get(Number(citeM[1])) ?? `cite-${citeM[1]}` : decodeURIComponent(href.slice(1)));
   };
 
-  // Mouse: hovering a [N] peeks; leaving it hides. (Touch uses long-press below.)
-  const onCitePointerOver = (e: ReactPointerEvent<HTMLElement>) => {
-    if (e.pointerType !== "mouse") return;
-    const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
-    if (!cite || !cite.id || peek?.citeId === cite.id) return;
-    openPeek(cite);
-  };
-  const onCitePointerOut = (e: ReactPointerEvent<HTMLElement>) => {
-    if (e.pointerType !== "mouse") return;
-    const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
-    const to = e.relatedTarget as HTMLElement | null;
-    if (!cite || (to && cite.contains(to))) return; // still within the same [N]
-    setPeek(null);
-  };
-  // Touch: press-and-hold a [N] → peek (stays until dismissed). Quick tap → jump.
-  const onCitePointerDown = (e: ReactPointerEvent<HTMLElement>) => {
-    if (e.pointerType === "mouse") return;
-    const cite = (e.target as HTMLElement).closest<HTMLElement>("sup.cite");
-    if (!cite || !cite.id) return;
-    longPress.current.fired = false;
-    longPress.current.x = e.clientX;
-    longPress.current.y = e.clientY;
-    clearLongPress();
-    longPress.current.timer = window.setTimeout(() => {
-      longPress.current.fired = true;
-      openPeek(cite);
-    }, 350);
-  };
-  // Moving the finger (i.e. a scroll, not a hold) cancels the pending peek — else a
-  // scroll started on a [N] would fire the timer mid-scroll and pop the peek back up.
-  const onCitePointerMove = (e: ReactPointerEvent<HTMLElement>) => {
-    if (!longPress.current.timer) return;
-    const dx = e.clientX - longPress.current.x;
-    const dy = e.clientY - longPress.current.y;
-    if (dx * dx + dy * dy > 100) clearLongPress(); // >10px → it's a scroll
-  };
-  const onCitePointerEnd = () => clearLongPress(); // finger lift / cancel ends the hold
-  // Block the browser's long-press link menu on a [N] (we peek instead).
-  const onCiteContextMenu = (e: MouseEvent<HTMLElement>) => {
-    if ((e.target as HTMLElement).closest("sup.cite")) e.preventDefault();
-  };
-
-  // Dismiss the peek on scroll / Escape / outside tap (mouse-leave handled above).
+  // Keep the CSS hover tooltip on-screen: per [N], set --tip-maxw (capped to the
+  // viewport) and --tip-shift (a horizontal offset that clamps the tooltip fully on
+  // screen, so a [N] near the right edge no longer clips). rect.left depends only on
+  // horizontal layout, so it stays valid across vertical scroll; re-run on resize.
   useEffect(() => {
-    if (!peek) return;
-    const onScroll = () => {
-      clearLongPress(); // a pending peek must not pop up after a scroll dismiss
-      setPeek(null);
+    const scope = articleRef.current;
+    if (!scope || !digest.data) return;
+    const place = () => {
+      const margin = 8;
+      const vw = window.innerWidth;
+      const maxW = Math.min(288, vw - 2 * margin); // 288px = 18rem
+      scope.querySelectorAll<HTMLElement>("sup.cite[data-tip]").forEach((cite) => {
+        const left = cite.getBoundingClientRect().left;
+        const target = Math.max(margin, Math.min(left, vw - margin - maxW));
+        cite.style.setProperty("--tip-maxw", `${maxW}px`);
+        cite.style.setProperty("--tip-shift", `${Math.round(target - left)}px`);
+      });
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setPeek(null);
-    };
-    const onDown = (e: Event) => {
-      if (!(e.target as HTMLElement).closest("sup.cite")) setPeek(null);
-    };
-    window.addEventListener("scroll", onScroll, true);
-    document.addEventListener("keydown", onKey);
-    document.addEventListener("pointerdown", onDown, true);
-    return () => {
-      window.removeEventListener("scroll", onScroll, true);
-      document.removeEventListener("keydown", onKey);
-      document.removeEventListener("pointerdown", onDown, true);
-    };
-  }, [peek]);
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [digest.data, selectedId]);
 
   // After a digest renders: (1) give every [N] occurrence a unique id so "↩" can
   // return to the one clicked (stored HTML only ids the first), (2) re-apply the
@@ -523,33 +433,8 @@ export function DigestPage() {
           ref={articleRef}
           className="prose-digest rounded-lg border border-slate-200 bg-white p-5"
           onClick={onDigestClick}
-          onPointerOver={onCitePointerOver}
-          onPointerOut={onCitePointerOut}
-          onPointerDown={onCitePointerDown}
-          onPointerMove={onCitePointerMove}
-          onPointerUp={onCitePointerEnd}
-          onPointerCancel={onCitePointerEnd}
-          onContextMenu={onCiteContextMenu}
           dangerouslySetInnerHTML={{ __html: html as string }}
         />
-      )}
-
-      {/* Citation peek — sits above the [N], clamped to the viewport. Non-interactive
-          (clicks pass through to the number, which jumps). */}
-      {peek && (
-        <div
-          style={{
-            position: "fixed",
-            left: peek.left,
-            ...("top" in peek.vert ? { top: peek.vert.top } : { bottom: peek.vert.bottom }),
-            maxWidth: peek.maxW,
-            zIndex: 50,
-            pointerEvents: "none",
-          }}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm not-italic leading-snug text-slate-700 shadow-lg"
-        >
-          {peek.text}
-        </div>
       )}
     </div>
   );
