@@ -47,6 +47,19 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 ## 검증·배포
 - `npm run typecheck` / `npm run build` 통과 후 커밋·푸시. 빌드는 client(vite)+server(tsc). gramjs(telegram)는 server 전용.
 
+## 알려진 버그 (디버깅 인계)
+- **다이제스트 각주 `↩`(원문 복귀)가 간헐적**(가끔 됨/안 됨). 본문 `[N]` 클릭→참조→`↩`가 보통은 누른
+  발생 위치로 돌아오나 **가끔 맨 위 첫 발생으로** 점프. 서버는 단일 ↩(`href="#cite-N"`, 첫 발생만
+  `id="cite-N"`)로 원복됨(커밋 8c7bfe7). 클라 `DigestPage.tsx`에 자동추적 있음: `lastCite`(Map
+  N→발생 sup.id)에 `[N]` 클릭 시 기억, `↩` 시 그 위치로 `jumpTo`. 발생별 id는 useEffect(deps
+  `[digest.data, selectedId]`)가 부여하며 시작에서 `lastCite.current.clear()`.
+  - **유력 원인**: react-query가 digest를 background refetch(window focus 등)하면 `digest.data`
+    새 객체 → id useEffect 재실행·`lastCite` clear → 클릭~↩ 사이 비워지면 ↩ 폴백(맨 위). 둘째로
+    id 부여 전 클릭 타이밍.
+  - **수정 방향**: `lastCite`를 `selectedId` 변경 때만 clear, 또는 클릭 시 발생 id를
+    sessionStorage/hash에 즉시 저장(맵 의존 제거), 또는 digest `useQuery`에
+    `refetchOnWindowFocus:false`+`staleTime`. 재현: 디제스트 열고 포커스 아웃→복귀 후 `[N]`→↩.
+
 ## 남은 아이디어 (사용자와 논의 중)
 - ~~다이제스트 하루 2~3회~~ → **17시·07시 2회 적용됨**(시각은 env로 조절). 남은 것: **텔레그램으로 전송**(대시보드 안 열게).
 - 다이제스트 지침을 "핵심 3~5 + 원문 정독 추천 + 나머지 한 줄(누락금지)" 편집장 스타일로.
