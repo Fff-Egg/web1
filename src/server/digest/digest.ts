@@ -178,28 +178,42 @@ function parseRefNums(inner: string, max: number): number[] {
  * Turn numeric citations into footnote-style superscript links to the matching
  * "참조 원문" entry (#ref-N). Handles single [3], grouped [3, 5] / [3,5], and
  * ranges [3-5]; (?!\() avoids real markdown links; out-of-range/non-numeric
- * brackets are left untouched. The first occurrence of each number gets an id
- * so its footnote can link back.
+ * brackets are left untouched. EVERY occurrence of a number gets a unique id
+ * (cite-N-K) so its footnote can link back to the exact spot that was clicked
+ * (not just the first). Returns the html plus per-number occurrence counts.
  */
-function linkifyRefs(md: string, rows: DigestItem[]): string {
-  const seen = new Set<number>();
-  return md.replace(/\[([\d, –-]+)\](?!\()/g, (m, inner) => {
+function linkifyRefs(md: string, rows: DigestItem[]): { html: string; occ: Map<number, number> } {
+  const occ = new Map<number, number>();
+  const html = md.replace(/\[([\d, –-]+)\](?!\()/g, (m, inner) => {
     const nums = parseRefNums(inner, rows.length);
     if (nums.length === 0) return m;
     return nums
       .map((n) => {
         const it = rows[n - 1];
         const tip = escHtml(`${it.title ?? "(제목없음)"} — 출처: ${it.source}`);
-        const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
-        seen.add(n);
-        return `<sup class="cite"${idAttr} data-tip="${tip}"><a href="#ref-${n}">[${n}]</a></sup>`;
+        const k = (occ.get(n) ?? 0) + 1;
+        occ.set(n, k);
+        return `<sup class="cite" id="cite-${n}-${k}" data-tip="${tip}"><a href="#ref-${n}">[${n}]</a></sup>`;
       })
       .join("");
   });
+  return { html, occ };
+}
+
+/** Back-link(s) from a reference to its citation(s): single ↩ when cited once,
+ *  numbered ↩ 1 2 … when cited multiple times (each returns to that exact spot). */
+function backLinks(n: number, count: number): string {
+  if (count <= 0) return "";
+  if (count === 1) return `<a href="#cite-${n}-1" class="ref-back" title="본문으로">↩</a>`;
+  const links = Array.from(
+    { length: count },
+    (_, j) => `<a href="#cite-${n}-${j + 1}" class="ref-back" title="본문 ${j + 1}로">${j + 1}</a>`,
+  ).join(" ");
+  return `<span class="ref-back">↩ ${links}</span>`;
 }
 
 /** Deterministic numbered "참조 원문" list — footnote targets carrying each pick's link. */
-function sourceLinks(rows: DigestItem[]): string {
+function sourceLinks(rows: DigestItem[], occ: Map<number, number>): string {
   const items = rows.map((it, i) => {
     const n = i + 1;
     const title = escHtml(it.title ?? "(제목없음)");
@@ -219,7 +233,7 @@ function sourceLinks(rows: DigestItem[]): string {
         : title;
       main = `${titleHtml} <span class="ref-src">— 출처: ${src}</span>`;
     }
-    const back = `<a href="#cite-${n}" class="ref-back" title="본문으로">↩</a>`;
+    const back = backLinks(n, occ.get(n) ?? 0);
     return `  <li id="ref-${n}">${main} ${back}</li>`;
   });
   return `\n<h2>참조 원문</h2>\n<ol class="digest-refs">\n${items.join("\n")}\n</ol>\n`;
@@ -461,7 +475,8 @@ async function synthesizeFromFeed(
       partials.map((p, i) => `### 묶음 ${i + 1}\n${p.trim()}`).join("\n\n");
     report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
   }
-  return `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
+  const { html, occ } = linkifyRefs(report.trim(), rows);
+  return `${html}\n${sourceLinks(rows, occ)}`;
 }
 
 /** LLM synthesis of saved digests (past dates, when the feed is gone). No per-article refs. */
