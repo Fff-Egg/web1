@@ -63,11 +63,12 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 ## 탭 구성 (`src/client/App.tsx`)
 순서(8개): **시황분석 / Daily Digest / Feed / 보관함 / 분석(수동) / Sources / 휴지통 / Settings**.
 - **시황분석**(신설, tab 1, `src/client/pages/MarketPage.tsx`): 시장 지표 대시보드. **현재 플레이스홀더**. 넣을 지표:
-  - **S5FI** — S&P500 종목 중 50일 이동평균선 위 비율(시장 폭/breadth). TradingView 심볼 `S5FI`(CBOE), StockCharts `$SPXA50R`. 무료 JSON API 부재.
-  - **NDFI** — 나스닥 종목 중 50일선 위 비율(breadth). 위와 동류, 무료 API 부재.
+  - **S5FI** — S&P500 종목 중 50일 이동평균선 위 비율(시장 폭/breadth). **출처 확정: TradingView**(심볼 `S5FI`; 스캐너 API `POST https://scanner.tradingview.com/america/scan` 등 비공식 엔드포인트로 close/change 취득 예정).
+  - **NDFI** — 나스닥 종목 중 50일선 위 비율(breadth). **출처 확정: TradingView**(심볼 `NDFI`, 위와 동일 방식).
   - **CNN Fear & Greed Index** — 비공식 JSON `https://production.dataviz.cnn.io/index/fearandgreed/graphdata` (브라우저 User-Agent 필요, UA 없으면 403/418).
-  - **ADR 코스피 / ADR 코스닥** — 등락비율(advance-decline ratio). 무료 API 부재(naver finance·KRX 스크레이프 또는 등락종목수로 계산).
-  - ⚠️ **데이터 소스 미정**: S5FI·NDFI·ADR 코스피·코스닥은 깔끔한 무료 API가 없어 사용자에게 출처 확인 중. 확정되면 서버 어댑터/엔드포인트 추가 후 MarketPage 구현.
+  - **ADR 코스피 / ADR 코스닥** — 등락비율(advance-decline ratio). **출처 확정: `http://adrinfo.kr/`** (HTML 구조 확인 후 스크레이프 예정).
+  - ✅ **데이터 소스 확정**(TradingView·CNN·adrinfo.kr). **네트워크 허용목록(egress) 설정 완료** — adrinfo.kr·*.tradingview.com·production.dataviz.cnn.io 추가됨(단 **새 세션부터 적용**; 기존 세션 컨테이너엔 미반영). 갱신 주기 미정.
+  - ▶ **다음 세션 할 일**: (1) 새 세션에서 세 소스 응답 구조를 curl로 직접 확인(샌드박스 egress 열림). (2) 서버 어댑터/엔드포인트 추가(`src/server/` — 캐싱 권장, 외부호출 잦지 않게). (3) `MarketPage.tsx`를 플레이스홀더에서 실제 대시보드로 구현. 갱신 주기는 사용자에게 재확인(하루 1회 vs 페이지 열 때 캐시 vs 실시간).
 
 ## 방향·다음 작업 (대화 요약 — 인계)
 **문제의식**: 현재 구조(피드에 글 쌓고 훑고 지움)가 "신경 끄기" 목표를 재현. 사용자는 **하루 2~3회 다이제스트만** 보고 끝내고 싶어함. 놓침 불안은 필터로 거르지 말고 **다이제스트 "누락금지 규칙"**으로 해결.
