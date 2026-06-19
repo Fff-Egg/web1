@@ -52,6 +52,23 @@ export interface AdrQuote {
   prevClose: number | null;
 }
 
+/** One point on a daily history line: timestamp (ms) + value. */
+export interface SeriesPoint {
+  /** Epoch milliseconds (UTC) of the trading day. */
+  t: number;
+  /** The metric's value that day. */
+  v: number;
+}
+
+/** ~1 year of daily history per metric, for the charts. */
+export interface MarketHistory {
+  fearGreed: SeriesPoint[];
+  s5fi: SeriesPoint[];
+  ndfi: SeriesPoint[];
+  kospiAdr: SeriesPoint[];
+  kosdaqAdr: SeriesPoint[];
+}
+
 export interface MarketSnapshot {
   /** When this snapshot was collected (ISO). */
   fetchedAt: string;
@@ -66,8 +83,16 @@ export interface MarketSnapshot {
     kospi: AdrQuote | null;
     kosdaq: AdrQuote | null;
   };
+  /** ~1 year of daily history for each metric (empty arrays if unavailable). */
+  history: MarketHistory;
   /** Human-readable notes about any source that failed (Korean). */
   errors: string[];
+}
+
+/** Keep only points within the last `days` (default ~1 year), ascending by time. */
+export function sliceLastYear(points: SeriesPoint[], days = 370): SeriesPoint[] {
+  const cutoff = Date.now() - days * 24 * 60 * 60_000;
+  return points.filter((p) => p.t >= cutoff).sort((a, b) => a.t - b.t);
 }
 
 /** Map a Fear & Greed score (0–100) to a Korean label. */

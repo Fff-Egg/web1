@@ -1,4 +1,5 @@
-import type { FearGreed } from "../../shared/market.js";
+import type { FearGreed, SeriesPoint } from "../../shared/market.js";
+import { sliceLastYear } from "../../shared/market.js";
 
 /**
  * CNN Fear & Greed Index via the unofficial dataviz JSON endpoint.
@@ -27,9 +28,17 @@ interface CnnPayload {
     previous_1_month?: number;
     previous_1_year?: number;
   };
+  fear_and_greed_historical?: {
+    data?: { x?: number; y?: number }[];
+  };
 }
 
-export async function fetchFearGreed(timeoutMs = 20_000): Promise<FearGreed> {
+export interface FearGreedResult {
+  current: FearGreed;
+  history: SeriesPoint[];
+}
+
+export async function fetchFearGreed(timeoutMs = 20_000): Promise<FearGreedResult> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -39,7 +48,7 @@ export async function fetchFearGreed(timeoutMs = 20_000): Promise<FearGreed> {
     const fg = json.fear_and_greed;
     if (!fg || typeof fg.score !== "number") throw new Error("CNN F&G: unexpected payload");
     const round = (n: number | undefined) => (typeof n === "number" ? Math.round(n * 10) / 10 : null);
-    return {
+    const current: FearGreed = {
       score: Math.round(fg.score * 10) / 10,
       rating: fg.rating ?? "",
       prevClose: round(fg.previous_close),
@@ -48,6 +57,13 @@ export async function fetchFearGreed(timeoutMs = 20_000): Promise<FearGreed> {
       year: round(fg.previous_1_year),
       asOf: fg.timestamp ?? null,
     };
+    const raw = json.fear_and_greed_historical?.data ?? [];
+    const history = sliceLastYear(
+      raw
+        .filter((p) => typeof p.x === "number" && typeof p.y === "number")
+        .map((p) => ({ t: p.x as number, v: Math.round((p.y as number) * 10) / 10 })),
+    );
+    return { current, history };
   } finally {
     clearTimeout(t);
   }

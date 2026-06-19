@@ -2,6 +2,9 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { MarketSnapshot } from "../data/client.js";
 import { fearGreedLabelKo } from "../../shared/market.js";
+import { MultiLineChart } from "./MarketChart.js";
+
+const COL = { s5fi: "#2563eb", ndfi: "#7c3aed", kospi: "#2563eb", kosdaq: "#d97706", fg: "#0ea5e9" };
 
 /**
  * 시황분석 (Market Analysis) — daily snapshot dashboard.
@@ -108,6 +111,14 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
             <Stat label="1달 전" value={fg.month} />
             <Stat label="1년 전" value={fg.year} />
           </dl>
+          <ChartBlock>
+            <MultiLineChart
+              series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
+              domain={[0, 100]}
+              baseline={50}
+              decimals={0}
+            />
+          </ChartBlock>
         </div>
       )}
     </Card>
@@ -121,10 +132,23 @@ function BreadthCard({ data }: { data: MarketSnapshot }) {
       {!s5fi && !ndfi ? (
         <Missing />
       ) : (
-        <div className="grid grid-cols-2 gap-3">
-          <BreadthItem label="S&P 500" sub="S5FI" q={s5fi} />
-          <BreadthItem label="나스닥 100" sub="NDFI" q={ndfi} />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <BreadthItem label="S&P 500" sub="S5FI" q={s5fi} />
+            <BreadthItem label="나스닥 100" sub="NDFI" q={ndfi} />
+          </div>
+          <ChartBlock legend={[{ label: "S&P 500", color: COL.s5fi }, { label: "나스닥 100", color: COL.ndfi }]}>
+            <MultiLineChart
+              series={[
+                { points: data.history.s5fi, color: COL.s5fi, label: "S&P 500" },
+                { points: data.history.ndfi, color: COL.ndfi, label: "나스닥 100" },
+              ]}
+              domain={[0, 100]}
+              baseline={50}
+              suffix="%"
+            />
+          </ChartBlock>
+        </>
       )}
     </Card>
   );
@@ -167,10 +191,22 @@ function AdrCard({ data }: { data: MarketSnapshot }) {
       {!kospi && !kosdaq ? (
         <Missing />
       ) : (
-        <div className="grid grid-cols-2 gap-3">
-          <AdrItem label="코스피" q={kospi} />
-          <AdrItem label="코스닥" q={kosdaq} />
-        </div>
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <AdrItem label="코스피" q={kospi} />
+            <AdrItem label="코스닥" q={kosdaq} />
+          </div>
+          <ChartBlock legend={[{ label: "코스피", color: COL.kospi }, { label: "코스닥", color: COL.kosdaq }]}>
+            <MultiLineChart
+              series={[
+                { points: data.history.kospiAdr, color: COL.kospi, label: "코스피" },
+                { points: data.history.kosdaqAdr, color: COL.kosdaq, label: "코스닥" },
+              ]}
+              baseline={100}
+              decimals={2}
+            />
+          </ChartBlock>
+        </>
       )}
     </Card>
   );
@@ -201,6 +237,33 @@ function AdrItem({ label, q }: { label: string; q: MarketSnapshot["adr"]["kospi"
 }
 
 // ─── Small helpers ──────────────────────────────────────────────────
+
+function ChartBlock({
+  children,
+  legend,
+}: {
+  children: React.ReactNode;
+  legend?: { label: string; color: string }[];
+}) {
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs text-slate-400">최근 1년</span>
+        {legend && (
+          <div className="flex gap-3">
+            {legend.map((l) => (
+              <span key={l.label} className="flex items-center gap-1 text-xs text-slate-500">
+                <span className="inline-block h-2 w-2 rounded-full" style={{ background: l.color }} />
+                {l.label}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {children}
+    </div>
+  );
+}
 
 function Stat({ label, value }: { label: string; value: number | null }) {
   return (

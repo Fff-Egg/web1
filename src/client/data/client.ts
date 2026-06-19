@@ -487,6 +487,15 @@ function makeStaticApi(): DataApi {
   };
 }
 
+function sampleSeries(base: number, amp: number, n = 180): { t: number; v: number }[] {
+  const day = 24 * 60 * 60_000;
+  const start = Date.now() - n * day;
+  return Array.from({ length: n }, (_, i) => ({
+    t: start + i * day,
+    v: Math.round((base + amp * Math.sin(i / 12) + amp * 0.4 * Math.sin(i / 3)) * 100) / 100,
+  }));
+}
+
 const SAMPLE_MARKET: MarketSnapshot = {
   fetchedAt: new Date().toISOString(),
   fearGreed: { score: 37.3, rating: "fear", prevClose: 37.5, week: 35.5, month: 59.4, year: 54.3, asOf: null },
@@ -497,6 +506,13 @@ const SAMPLE_MARKET: MarketSnapshot = {
   adr: {
     kospi: { value: 72.99, prevClose: 72.56 },
     kosdaq: { value: 68.18, prevClose: 68.76 },
+  },
+  history: {
+    fearGreed: sampleSeries(50, 18),
+    s5fi: sampleSeries(55, 22),
+    ndfi: sampleSeries(52, 24),
+    kospiAdr: sampleSeries(95, 20),
+    kosdaqAdr: sampleSeries(90, 22),
   },
   errors: [],
 };

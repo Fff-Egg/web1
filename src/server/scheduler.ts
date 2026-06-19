@@ -140,8 +140,9 @@ export function startSchedulers(): void {
     try {
       const snap = await getStoredSnapshot();
       const ageMs = snap ? Date.now() - new Date(snap.fetchedAt).getTime() : Infinity;
-      if (ageMs > 20 * 60 * 60_000) {
-        console.log("[scheduler] market snapshot missing/stale on boot — collecting now.");
+      const noHistory = !snap?.history || snap.history.fearGreed.length === 0;
+      if (ageMs > 20 * 60 * 60_000 || noHistory) {
+        console.log("[scheduler] market snapshot missing/stale/no-history on boot — collecting now.");
         await runMarketRoutine();
       }
     } catch (err) {

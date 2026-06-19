@@ -67,8 +67,9 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
   - **CNN Fear & Greed** — JSON `https://production.dataviz.cnn.io/index/fearandgreed/graphdata`. ⚠️ **브라우저 UA + `Origin/Referer: edition.cnn.com` 헤더 필수**(없으면 418 "I'm a teapot. You're a bot."). `fear_and_greed.{score,rating,previous_close,previous_1_week/month/year}`.
   - **ADR 코스피/코스닥** — `http://adrinfo.kr/` HTML. 페이지 내 인라인 JS 상수 파싱: `data_kospi_daily=[{time,adr},…]`(마지막=현재값)·`kospi_daily_last_adr=NN`(전일종가). kosdaq도 동일. KR 장마감(15:30 KST) 확정.
   - **타이밍 메모**: US 소스(F&G·S5FI·NDFI)는 미국 장마감 후=KST 새벽 확정, ADR은 전일 KR 장마감 확정 → **07시 KST 단일 배치**가 세 소스 모두 가장 신선한 *확정값* 포착(US는 밤사이, KR은 전일 종가). `MARKET_HOUR` env로 조정.
-  - **egress**: Railway(프로덕션)는 아웃바운드 기본 개방이라 동작. 세 소스 모두 실서버 모듈 end-to-end 확인됨(errors 0). 데모 모드(`VITE_STATIC_DEMO`)는 `SAMPLE_MARKET` 더미.
-  - ▶ **남은 개선(선택)**: 인트라데이 ADR 더 자주 보고 싶으면 `MARKET_HOUR` 외 추가 크론/장중 갱신, F&G 히스토리 차트, 스파크라인 등.
+  - **그래프(최근 1년)**: 5개 지표 모두 일별 히스토리 차트. 수집기가 현재값 + ~1년 히스토리를 함께 받아 `snapshot.history`에 저장(`SeriesPoint{t,v}[]`, 약 250점/시리즈, 전체 ~37KB). 소스: F&G=`fear_and_greed_historical.data`(252점), S5FI/NDFI=TradingView **차트 히스토리 ws**(`from=chart`, `resolve_symbol`+`create_series` 1D 400봉; ⚠️**익명 세션은 series 1개 제한** "exceed limit of series" → **심볼당 연결 1개**씩 병렬), ADR=`/chart_indx`의 `dataSet={KOSPI:{adr:[[ts,v]…]},KOSDAQ:…}`(2019~; ⚠️**배열 끝 trailing comma + 미래날짜 `null`** 있어 `,\s*]`→`]` 치환 후 JSON.parse·숫자필터). 슬라이스=`sliceLastYear`(370일). 클라 차트=의존성 없는 인라인 SVG `MarketChart.tsx`(`MultiLineChart`, 호버 크로스헤어+툴팁, breadth/adr는 2선 오버레이+범례). 부팅 시 **히스토리 없으면 즉시 재수집**(구버전 스냅샷 자동 보강).
+  - **egress**: Railway(프로덕션)는 아웃바운드 기본 개방이라 동작. 세 소스 모두 실서버 모듈 end-to-end 확인됨(errors 0, 히스토리 252/254/254/248/248점). 데모 모드(`VITE_STATIC_DEMO`)는 `SAMPLE_MARKET`(사인파 더미 히스토리). ⚠️샌드박스는 playwright 브라우저 다운로드 차단(egress)이라 스크린샷 검증 불가 — 빌드/타입체크로 확인.
+  - ▶ **남은 개선(선택)**: 장중 ADR 더 자주(추가 크론), 기간 토글(1M/3M/1Y), F&G 색구간 배경, 다이제스트에 시황 한 줄 등.
 
 ## 방향·다음 작업 (대화 요약 — 인계)
 **문제의식**: 현재 구조(피드에 글 쌓고 훑고 지움)가 "신경 끄기" 목표를 재현. 사용자는 **하루 2~3회 다이제스트만** 보고 끝내고 싶어함. 놓침 불안은 필터로 거르지 말고 **다이제스트 "누락금지 규칙"**으로 해결.
