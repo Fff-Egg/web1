@@ -3,10 +3,17 @@ import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
 import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact } from "../../server/db/schema.js";
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
-import type { MarketSnapshot } from "../../shared/market.js";
+import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 
 export type { AnalysisConfig };
-export type { MarketSnapshot };
+export type { MarketSnapshot, OHLC, Timeframe };
+
+export interface CandlesResponse {
+  symbol: string;
+  name: string | null;
+  timeframe: Timeframe;
+  candles: OHLC[];
+}
 
 export interface FeedFilter {
   impact?: Impact;
@@ -150,6 +157,8 @@ export interface DataApi {
   marketRefresh(): Promise<MarketSnapshot>;
   /** Change the configurable chart slot's TradingView symbol; re-collects it. */
   setMarketSymbol(symbol: string): Promise<MarketSnapshot>;
+  /** Live OHLC candles for the custom slot at a timeframe. */
+  marketCandles(symbol: string, timeframe: Timeframe): Promise<CandlesResponse>;
 }
 
 export interface PendingArticle {
@@ -276,6 +285,8 @@ function makeTrpcApi(): DataApi {
     marketLatest: () => client.market.latest.query() as Promise<MarketSnapshot | null>,
     marketRefresh: () => client.market.refresh.mutate() as Promise<MarketSnapshot>,
     setMarketSymbol: (symbol) => client.market.setSymbol.mutate({ symbol }) as Promise<MarketSnapshot>,
+    marketCandles: (symbol, timeframe) =>
+      client.market.candles.query({ symbol, timeframe }) as Promise<CandlesResponse>,
   };
 }
 
@@ -493,6 +504,21 @@ function makeStaticApi(): DataApi {
         custom: { symbol: symbol.toUpperCase(), name: symbol.toUpperCase(), quote: { value: 100, change: 0.5, changePct: 0.5 } },
         history: { ...SAMPLE_MARKET.history, custom: sampleSeries(100, 12) },
       };
+    },
+    async marketCandles(symbol, timeframe) {
+      const n = timeframe === "1Y" ? 30 : timeframe === "1M" ? 60 : 120;
+      const day = 24 * 60 * 60_000;
+      const start = Date.now() - n * day;
+      let prev = 100;
+      const candles = Array.from({ length: n }, (_, i) => {
+        const o = prev;
+        const c = Math.round((o + (Math.sin(i / 5) * 4 + (Math.random() - 0.5) * 6)) * 100) / 100;
+        const h = Math.max(o, c) + Math.random() * 3;
+        const l = Math.min(o, c) - Math.random() * 3;
+        prev = c;
+        return { t: start + i * day, o, h: Math.round(h * 100) / 100, l: Math.round(l * 100) / 100, c };
+      });
+      return { symbol: symbol.toUpperCase(), name: symbol.toUpperCase(), timeframe, candles };
     },
   };
 }

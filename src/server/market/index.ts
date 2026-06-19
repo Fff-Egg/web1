@@ -1,9 +1,9 @@
 import { eq } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { settings } from "../db/schema.js";
-import type { MarketSnapshot, MarketHistory } from "../../shared/market.js";
+import type { MarketSnapshot, MarketHistory, OHLC, Timeframe } from "../../shared/market.js";
 import { fetchFearGreed } from "./cnn.js";
-import { fetchBreadth, fetchSymbol } from "./tradingview.js";
+import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
 import { fetchAdr, fetchAdrHistory } from "./adr.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
@@ -147,6 +147,29 @@ export async function setCustomSymbol(symbolInput: string): Promise<MarketSnapsh
   }
   await storeSnapshot(stored);
   return stored;
+}
+
+/** TradingView resolution + bar count for each timeframe button. */
+const TF_RES: Record<Timeframe, { res: string; count: number }> = {
+  "4h": { res: "240", count: 360 },
+  "1D": { res: "1D", count: 260 },
+  "1W": { res: "1W", count: 260 },
+  "1M": { res: "1M", count: 240 },
+  "1Y": { res: "12M", count: 40 },
+};
+
+export interface CandlesResponse {
+  symbol: string;
+  name: string | null;
+  timeframe: Timeframe;
+  candles: OHLC[];
+}
+
+/** Live OHLC candles for the custom slot's candlestick chart (not stored). */
+export async function getCandles(symbol: string, timeframe: Timeframe): Promise<CandlesResponse> {
+  const { res, count } = TF_RES[timeframe];
+  const r = await fetchCandles(symbol, res, count);
+  return { symbol: r.resolved ?? symbol.toUpperCase(), name: r.name, timeframe, candles: r.candles };
 }
 
 function msg(e: unknown): string {

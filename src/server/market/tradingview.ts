@@ -1,5 +1,5 @@
 import WebSocket from "ws";
-import type { BreadthQuote, SeriesPoint } from "../../shared/market.js";
+import type { BreadthQuote, SeriesPoint, OHLC } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 
 /**
@@ -97,7 +97,7 @@ interface RawSymbol {
  * is limited to a single series ("exceed limit of series in the session"), so
  * each symbol gets its own short-lived connection; callers run them in parallel.
  */
-function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
+function fetchBars(symbol: string, timeoutMs: number, resolution = "1D", count = BARS): Promise<RawSymbol> {
   return new Promise((resolve) => {
     let bars: Bar[] = [];
     let name: string | null = null;
@@ -126,7 +126,7 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
       ws.send(frame("set_auth_token", ["unauthorized_user_token"]));
       ws.send(frame("chart_create_session", [cs, ""]));
       ws.send(frame("resolve_symbol", [cs, "sym1", `={"symbol":"${symbol}","adjustment":"splits"}`]));
-      ws.send(frame("create_series", [cs, "s1", "s1", "sym1", "1D", BARS, ""]));
+      ws.send(frame("create_series", [cs, "s1", "s1", "sym1", resolution, count, ""]));
     });
 
     ws.on("message", (data) => {
@@ -175,4 +175,31 @@ export async function fetchBreadth(timeoutMs = 22_000): Promise<BreadthResult> {
 export async function fetchSymbol(symbol: string, timeoutMs = 22_000): Promise<SymbolSeries> {
   const { bars, name, resolved } = await fetchBars(symbol, timeoutMs);
   return { ...toSeries(bars), name, resolved };
+}
+
+export interface CandleResult {
+  /** Canonical symbol it resolved to (e.g. "NASDAQ:AAPL"), or the input. */
+  resolved: string | null;
+  name: string | null;
+  candles: OHLC[];
+}
+
+/** Fetch OHLC candles for a symbol at a given TradingView resolution. */
+export async function fetchCandles(
+  symbol: string,
+  resolution: string,
+  count: number,
+  timeoutMs = 22_000,
+): Promise<CandleResult> {
+  const { bars, name, resolved } = await fetchBars(symbol, timeoutMs, resolution, count);
+  const candles: OHLC[] = bars
+    .filter((b) => Array.isArray(b.v) && b.v.length >= 5 && b.v.slice(0, 5).every((x) => typeof x === "number"))
+    .map((b) => ({
+      t: b.v[0] * 1000,
+      o: b.v[1],
+      h: b.v[2],
+      l: b.v[3],
+      c: b.v[4],
+    }));
+  return { resolved, name, candles };
 }

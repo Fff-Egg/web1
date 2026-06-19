@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { MarketSnapshot } from "../data/client.js";
-import { fearGreedLabelKo } from "../../shared/market.js";
-import type { SeriesPoint } from "../../shared/market.js";
+import { fearGreedLabelKo, TIMEFRAMES, TIMEFRAME_LABEL } from "../../shared/market.js";
+import type { SeriesPoint, Timeframe } from "../../shared/market.js";
 import { MultiLineChart } from "./MarketChart.js";
+import { CandleChart } from "./CandleChart.js";
 
 const COL = {
   fg: "#0ea5e9",
@@ -315,9 +316,11 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
 }
 
 /**
- * The user-configurable slot: any TradingView symbol (VIX, WTI, a stock…).
- * Type a symbol and 적용 → server re-collects just that symbol. Reference lines
- * are remembered per-symbol.
+ * The user-configurable slot: any TradingView symbol (VIX, WTI, a stock…),
+ * shown as a candlestick chart with selectable timeframe (4시간/일/주/월/년).
+ * Type a symbol and 적용 → server re-collects + stores it. Reference lines and
+ * timeframe are remembered per-symbol. Only THIS card uses candles; the others
+ * stay as line charts.
  */
 function CustomCard({ data }: { data: MarketSnapshot }) {
   const qc = useQueryClient();
@@ -338,6 +341,20 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
     const s = draft.trim();
     if (s && s.toUpperCase() !== symbol.toUpperCase()) setSymbol.mutate(s);
   };
+
+  const [tf, setTf] = useState<Timeframe>(() => {
+    const saved = localStorage.getItem("mkt.tf.custom");
+    return saved && (TIMEFRAMES as readonly string[]).includes(saved) ? (saved as Timeframe) : "1D";
+  });
+  const pickTf = (t: Timeframe) => {
+    setTf(t);
+    localStorage.setItem("mkt.tf.custom", t);
+  };
+  const candles = useQuery({
+    queryKey: ["candles", symbol, tf],
+    queryFn: () => api.marketCandles(symbol, tf),
+    staleTime: 5 * 60_000,
+  });
 
   return (
     <Card title={custom?.name || symbol} subtitle="TradingView · 직접 지정">
@@ -367,31 +384,43 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         <code>USOIL</code>(WTI) · <code>BTCUSD</code>. 안 잡히면 <code>거래소:티커</code>로 입력(예:{" "}
         <code>NASDAQ:AAPL</code>).
       </p>
-      {!quote && data.history.custom.length === 0 ? (
-        <Missing />
-      ) : (
-        <>
-          {quote && (
-            <div className="flex items-baseline gap-2">
-              <span className="text-3xl font-bold text-slate-800">{fmtNum(quote.value)}</span>
-              {quote.changePct !== null && (
-                <span className={`text-sm font-medium ${deltaColor(quote.changePct)}`}>
-                  {arrow(quote.changePct)} {Math.abs(quote.changePct).toFixed(2)}%
-                </span>
-              )}
-            </div>
-          )}
-          <div className="mt-0.5 text-xs text-slate-400">{symbol}</div>
-          <ChartBlock>
-            <MultiLineChart
-              series={[{ points: data.history.custom, color: COL.vix, label: symbol }]}
-              baselines={baselines}
-              decimals={2}
-            />
-          </ChartBlock>
-          <RefControls lines={lines} onChange={setLines} />
-        </>
-      )}
+
+      <div className="flex items-baseline gap-2">
+        <span className="text-3xl font-bold text-slate-800">{quote ? fmtNum(quote.value) : "—"}</span>
+        {quote?.changePct != null && (
+          <span className={`text-sm font-medium ${deltaColor(quote.changePct)}`}>
+            {arrow(quote.changePct)} {Math.abs(quote.changePct).toFixed(2)}%
+          </span>
+        )}
+        <span className="text-xs text-slate-400">{symbol}</span>
+      </div>
+
+      <div className="mt-3 flex gap-1">
+        {TIMEFRAMES.map((t) => (
+          <button
+            key={t}
+            onClick={() => pickTf(t)}
+            className={`rounded px-2 py-1 text-xs ${
+              tf === t ? "bg-slate-800 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
+            }`}
+          >
+            {TIMEFRAME_LABEL[t]}
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-3">
+        {candles.isLoading || setSymbol.isPending ? (
+          <div className="py-10 text-center text-xs text-slate-400">불러오는 중…</div>
+        ) : candles.data && candles.data.candles.length > 0 ? (
+          <CandleChart candles={candles.data.candles} baselines={baselines} intraday={tf === "4h"} />
+        ) : (
+          <div className="py-10 text-center text-xs text-slate-400">
+            캔들 데이터를 받지 못했습니다. 심볼을 확인하세요.
+          </div>
+        )}
+      </div>
+      <RefControls lines={lines} onChange={setLines} />
     </Card>
   );
 }

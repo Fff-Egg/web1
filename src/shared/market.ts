@@ -60,6 +60,29 @@ export interface SeriesPoint {
   v: number;
 }
 
+/** One OHLC candle (for the custom slot's candlestick chart). */
+export interface OHLC {
+  /** Epoch milliseconds (UTC) of the bar's open. */
+  t: number;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
+
+/** Candlestick timeframes offered for the custom slot. */
+export const TIMEFRAMES = ["4h", "1D", "1W", "1M", "1Y"] as const;
+export type Timeframe = (typeof TIMEFRAMES)[number];
+
+/** Korean label for a timeframe. */
+export const TIMEFRAME_LABEL: Record<Timeframe, string> = {
+  "4h": "4시간",
+  "1D": "일",
+  "1W": "주",
+  "1M": "월",
+  "1Y": "년",
+};
+
 /** A user-chosen TradingView symbol occupying the configurable chart slot. */
 export interface CustomMetric {
   /** TradingView symbol, e.g. "CBOE:VIX", "NYMEX:CL1!", "NASDAQ:AAPL". */
