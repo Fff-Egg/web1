@@ -10,8 +10,9 @@ import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
 import { MarketPage } from "./pages/MarketPage.js";
 import { ResearchPage } from "./pages/ResearchPage.js";
+import { ThesisMapPage } from "./pages/ThesisMapPage.js";
 
-type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "trash" | "settings" | "research";
+type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "trash" | "settings" | "research" | "thesis";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "market", label: "시황분석" },
@@ -23,6 +24,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "trash", label: "휴지통" },
   { id: "settings", label: "Settings" },
   { id: "research", label: "리포트" },
+  { id: "thesis", label: "논지 지도" },
 ];
 
 const TAB_KEY = "feedwatch.activeTab";
@@ -94,6 +96,7 @@ export function App() {
       {tab === "trash" && <TrashPage />}
       {tab === "settings" && <SettingsPage />}
       {tab === "research" && <ResearchPage />}
+      {tab === "thesis" && <ThesisMapPage />}
     </div>
   );
 }

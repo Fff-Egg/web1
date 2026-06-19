@@ -71,6 +71,13 @@
       "when": 1781080000000,
       "tag": "0009_research_summary_marketcap",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1781090000000,
+      "tag": "0010_thesis_map",
+      "breakpoints": true
     }
   ]
 }

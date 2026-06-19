@@ -50,6 +50,20 @@ export const IMPACTS = ["bullish", "bearish", "neutral"] as const;
 export type Impact = (typeof IMPACTS)[number];
 
 /**
+ * 논지 지도(Thesis Map) — a signal's effect on a thread's thesis.
+ * support 강화 / weaken 약화 / refute 반증 / neutral 중립.
+ */
+export const VERDICTS = ["support", "weaken", "refute", "neutral"] as const;
+export type Verdict = (typeof VERDICTS)[number];
+
+/**
+ * Evidence tier — how hard the signal is.
+ * confirmed 확정(사실) / mgmt 경영진주장 / inference 추론 / speculation 추측.
+ */
+export const TIERS = ["confirmed", "mgmt", "inference", "speculation"] as const;
+export type Tier = (typeof TIERS)[number];
+
+/**
  * sources — a user-managed feed instance. The user adds these from the UI.
  * `config` holds provider-specific settings (selectors, polling, etc.) and,
  * for authenticated providers, ONLY a `credentialRef` key name — never the
@@ -159,6 +173,58 @@ export const analyses = mysqlTable(
   (t) => ({
     articleIdx: uniqueIndex("analyses_article_unq").on(t.articleId),
     relevantIdx: index("analyses_relevant_idx").on(t.relevant),
+  }),
+);
+
+/**
+ * threads — 논지 지도(Thesis Map). The user's investment theses (e.g. NAND/HBF,
+ * HBM/DRAM, 광인터커넥트…). Each holds a one-line thesis the system tracks signals
+ * against. `code` is a short badge label (A~E). Archived threads stay for history.
+ */
+export const threads = mysqlTable("threads", {
+  id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+  /** Short badge code (A, B, …) shown on feed cards. Optional. */
+  code: varchar("code", { length: 16 }),
+  name: varchar("name", { length: 255 }).notNull(),
+  /** One-line thesis/proposition this thread tracks. */
+  thesis: varchar("thesis", { length: 512 }),
+  /** Longer background context (optional). */
+  context: text("context"),
+  archived: boolean("archived").notNull().default(false),
+  /** Manual display order (lower first); ties break on code/name. */
+  sort: bigint("sort", { mode: "number" }).notNull().default(0),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+});
+
+/**
+ * signals — one article's read on one thread (or, when thread_id is NULL, a
+ * "new thesis candidate" inbox row whose proposed name lives in `candidate`).
+ * Confidence is NOT stored — it's aggregated by the system from verdict counts.
+ * unique(article_id, thread_id) keeps re-analysis idempotent (NULLs are distinct
+ * in MySQL, so an article may propose several candidates).
+ */
+export const signals = mysqlTable(
+  "signals",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    articleId: bigint("article_id", { mode: "number", unsigned: true })
+      .notNull()
+      .references(() => articles.id, { onDelete: "cascade" }),
+    /** NULL = unassigned candidate (inbox); else the thread it scores. */
+    threadId: bigint("thread_id", { mode: "number", unsigned: true }).references(
+      () => threads.id,
+      { onDelete: "cascade" },
+    ),
+    /** Proposed new-thread name when threadId is NULL (inbox candidate). */
+    candidate: varchar("candidate", { length: 255 }),
+    verdict: varchar("verdict", { length: 16 }).$type<Verdict>().notNull(),
+    tier: varchar("tier", { length: 16 }).$type<Tier>().notNull(),
+    note: text("note"),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    articleThreadUnq: uniqueIndex("signals_article_thread_unq").on(t.articleId, t.threadId),
+    threadIdx: index("signals_thread_idx").on(t.threadId, t.createdAt),
   }),
 );
 
@@ -300,6 +366,21 @@ export const analysesRelations = relations(analyses, ({ one }) => ({
   }),
 }));
 
+export const threadsRelations = relations(threads, ({ many }) => ({
+  signals: many(signals),
+}));
+
+export const signalsRelations = relations(signals, ({ one }) => ({
+  thread: one(threads, {
+    fields: [signals.threadId],
+    references: [threads.id],
+  }),
+  article: one(articles, {
+    fields: [signals.articleId],
+    references: [articles.id],
+  }),
+}));
+
 // ─── Inferred types ─────────────────────────────────────────────────
 export type Source = typeof sources.$inferSelect;
 export type NewSource = typeof sources.$inferInsert;
@@ -309,6 +390,10 @@ export type Analysis = typeof analyses.$inferSelect;
 export type NewAnalysis = typeof analyses.$inferInsert;
 export type Digest = typeof digests.$inferSelect;
 export type NewDigest = typeof digests.$inferInsert;
+export type Thread = typeof threads.$inferSelect;
+export type NewThread = typeof threads.$inferInsert;
+export type Signal = typeof signals.$inferSelect;
+export type NewSignal = typeof signals.$inferInsert;
 export type FilterFeedback = typeof filterFeedback.$inferSelect;
 export type NewFilterFeedback = typeof filterFeedback.$inferInsert;
 export type ResearchReport = typeof researchReports.$inferSelect;

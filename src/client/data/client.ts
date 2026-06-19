@@ -1,12 +1,12 @@
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
-import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact } from "../../server/db/schema.js";
+import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact, Verdict, Tier } from "../../server/db/schema.js";
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
 
-export type { AnalysisConfig };
+export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
 export type { ResearchList } from "../../shared/research.js";
 
@@ -15,6 +15,51 @@ export interface CandlesResponse {
   name: string | null;
   timeframe: Timeframe;
   candles: OHLC[];
+}
+
+// ─── 논지 지도(Thesis Map) ──────────────────────────────────────────
+export interface ThreadRow {
+  id: number;
+  code: string | null;
+  name: string;
+  thesis: string | null;
+  context: string | null;
+  archived: boolean;
+  sort: number;
+  createdAt: string | Date;
+  total: number;
+  lastSignalAt: string | Date | null;
+  c7: Record<Verdict, number>;
+  c30: Record<Verdict, number>;
+}
+export interface SignalRow {
+  id: number;
+  articleId: number;
+  threadId: number | null;
+  candidate: string | null;
+  verdict: Verdict;
+  tier: Tier;
+  note: string | null;
+  createdAt: string | Date;
+  title: string | null;
+  url: string | null;
+  provider: string | null;
+  sourceLabel: string | null;
+  summary: string | null;
+}
+export interface CreateThreadInput {
+  code?: string;
+  name: string;
+  thesis?: string;
+  context?: string;
+}
+export interface UpdateThreadInput {
+  id: number;
+  code?: string | null;
+  name?: string;
+  thesis?: string | null;
+  context?: string | null;
+  sort?: number;
 }
 
 export interface FeedFilter {
@@ -165,6 +210,18 @@ export interface DataApi {
   researchList(date?: string): Promise<ResearchList>;
   /** Force-collect today's reports from 한경 컨센서스, return the fresh board. */
   researchRefresh(date?: string): Promise<ResearchList>;
+  // 논지 지도(Thesis Map)
+  listThreads(includeArchived?: boolean): Promise<ThreadRow[]>;
+  createThread(input: CreateThreadInput): Promise<{ id: number }>;
+  updateThread(input: UpdateThreadInput): Promise<void>;
+  setThreadArchived(id: number, archived: boolean): Promise<void>;
+  removeThread(id: number): Promise<void>;
+  threadSignals(threadId: number): Promise<SignalRow[]>;
+  thesisInbox(): Promise<SignalRow[]>;
+  assignSignal(signalId: number, threadId: number): Promise<void>;
+  promoteSignal(signalId: number, opts?: { name?: string; thesis?: string }): Promise<{ threadId: number }>;
+  dismissSignal(signalId: number): Promise<void>;
+  seedThreads(): Promise<{ created: number }>;
 }
 
 export interface PendingArticle {
@@ -295,6 +352,18 @@ function makeTrpcApi(): DataApi {
       client.market.candles.query({ symbol, timeframe }) as Promise<CandlesResponse>,
     researchList: (date) => client.research.list.query({ date }) as Promise<ResearchList>,
     researchRefresh: (date) => client.research.refresh.mutate({ date }) as Promise<ResearchList>,
+    listThreads: (includeArchived) =>
+      client.thesis.threads.query({ includeArchived: includeArchived ?? false }) as Promise<ThreadRow[]>,
+    createThread: (input) => client.thesis.createThread.mutate(input),
+    updateThread: async (input) => { await client.thesis.updateThread.mutate(input); },
+    setThreadArchived: async (id, archived) => { await client.thesis.setArchived.mutate({ id, archived }); },
+    removeThread: async (id) => { await client.thesis.removeThread.mutate({ id }); },
+    threadSignals: (threadId) => client.thesis.signals.query({ threadId }) as Promise<SignalRow[]>,
+    thesisInbox: () => client.thesis.inbox.query() as Promise<SignalRow[]>,
+    assignSignal: async (signalId, threadId) => { await client.thesis.assignSignal.mutate({ signalId, threadId }); },
+    promoteSignal: (signalId, opts) => client.thesis.promoteSignal.mutate({ signalId, ...opts }),
+    dismissSignal: async (signalId) => { await client.thesis.dismissSignal.mutate({ signalId }); },
+    seedThreads: () => client.thesis.seed.mutate(),
   };
 }
 
@@ -534,6 +603,30 @@ function makeStaticApi(): DataApi {
     async researchRefresh() {
       return { ...SAMPLE_RESEARCH, collectedAt: new Date().toISOString() };
     },
+    // 논지 지도 — demo: read-only sample, mutations are no-ops.
+    async listThreads() {
+      return SAMPLE_THREADS;
+    },
+    async createThread() {
+      return { id: Math.floor(Math.random() * 1e6) };
+    },
+    async updateThread() {},
+    async setThreadArchived() {},
+    async removeThread() {},
+    async threadSignals() {
+      return [];
+    },
+    async thesisInbox() {
+      return [];
+    },
+    async assignSignal() {},
+    async promoteSignal() {
+      return { threadId: Math.floor(Math.random() * 1e6) };
+    },
+    async dismissSignal() {},
+    async seedThreads() {
+      return { created: 0 };
+    },
   };
 }
 
@@ -588,6 +681,21 @@ const SAMPLE_RESEARCH: ResearchList = {
     { id: 5, source: "hankyung", reportDate: "2026-06-20", category: "산업", title: "2차전지 - 수요 둔화 우려 점검", summary: null, marketCap: null, stockName: null, stockCode: null, targetPrice: null, opinion: null, broker: "대신증권", pdfUrl: "https://example.com/r5.pdf", coverageCount: 0, isMajor: false, tpRaised: false },
   ],
 };
+
+const SAMPLE_THREADS: ThreadRow[] = [
+  {
+    id: 1, code: "A", name: "NAND / HBF", thesis: "NAND 업황 반등과 HBF 구조적 수요",
+    context: null, archived: false, sort: 0, createdAt: new Date().toISOString(),
+    total: 3, lastSignalAt: new Date().toISOString(),
+    c7: { support: 2, weaken: 0, refute: 0, neutral: 1 }, c30: { support: 2, weaken: 1, refute: 0, neutral: 1 },
+  },
+  {
+    id: 2, code: "B", name: "HBM / DRAM", thesis: "HBM·DRAM 사이클과 AI 메모리 수요",
+    context: null, archived: false, sort: 1, createdAt: new Date().toISOString(),
+    total: 1, lastSignalAt: new Date().toISOString(),
+    c7: { support: 1, weaken: 0, refute: 0, neutral: 0 }, c30: { support: 1, weaken: 0, refute: 0, neutral: 0 },
+  },
+];
 
 const PENDING_KEY = "feedwatch.pending.v1";
 const SAVED_FEED_KEY = "feedwatch.savedfeed.v1";

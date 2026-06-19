@@ -42,7 +42,14 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 ## 마이그레이션 (중요)
 - `drizzle-kit generate`는 **대화형이라 이 환경에서 막힘**. 마이그레이션은 **수동 작성**:
   `drizzle/00XX_name.sql` + `drizzle/meta/_journal.json`에 엔트리 추가(idx/tag/when). 컬럼 추가는 nullable 또는 default로(기존행 보호).
-- 현재 0000~0007 (0006: markdown/body/full_text → mediumtext, 0007: `filter_feedback` 테이블).
+- 현재 0000~0008 (0006: markdown/body/full_text → mediumtext, 0007: `filter_feedback` 테이블, 0008: `threads`+`signals` 논지 지도).
+
+## 논지 지도(Thesis Map) — 구현됨 (1차 슬라이스)
+- **DB**(0008): `threads`(code·name·thesis 한줄·context·archived·sort) + `signals`(articleId FK·threadId FK nullable·candidate·verdict·tier·note, unique(articleId,threadId)). **threadId NULL = 신규 논지 후보(인박스)**, 그 제안명은 `candidate`에. verdict=`support/weaken/refute/neutral`(강화/약화/반증/중립), tier=`confirmed/mgmt/inference/speculation`(확정/경영진주장/추론/추측).
+- **1차 분석 통합**(`analysis/analyze.ts`): 활성 스레드 목록(`thesisRepo.listBrief`)을 **기존 1차 호출 system 프롬프트에 주입**(`threadsBlock`) → 출력 JSON에 `signals[]`+`newThread` 추가(`THESIS_OUTPUT`, **스레드 있을 때만**; 없으면 프롬프트·동작 그대로). **추가 LLM 호출 없음**. relevant 글만 `thesisRepo.storeSignals`로 저장(스레드 매핑은 id 우선·code 폴백, verdict/tier 한↔영 정규화, 알 수 없는 스레드 참조는 skip, newThread는 candidate 행). **관련성/요약 게이트 불변** — 신호는 부가 출력일 뿐.
+- **집계는 시스템**(`thesisRepo.listWithStats`): 스레드별 7/30일 verdict 카운트·총합·마지막 신호일(LLM 신뢰도 아님). 7일 net(강화−약화−반증) 화살표, 30일 반증>0이면 카드 상단 빨강 경고.
+- **탭 "논지 지도"**(`ThesisMapPage.tsx`, App 탭 archive↔digest 사이): 스레드 카드(코드 배지·명제·집계·추세, 펼치면 신호목록+원문/?article 링크·반증 위로 정렬), 스레드 CRUD/보관, **신규 논지 후보 인박스**(붙이기→assignSignal / 승격→promoteSignal / 버리기→dismiss), **A~E 시딩**(`thesis.seed`, 비어있을 때만). tRPC `thesis` 라우터 + `data/client.ts` 메서드. 정적 데모는 샘플/무동작 스텁.
+- **남은 것(다음 세션)**: ① 다이제스트 = changelog(움직인 논지만 + 스레드 밖 신호 한 줄 + 변동 없으면 "오늘 논지 변동 없음"), ② Feed 카드 스레드 배지(`A 강화`) — feed.list에 신호 조인 필요, ③ A~E 명제 실제 내용으로 사용자 편집.
 
 ## 검증·배포
 - `npm run typecheck` / `npm run build` 통과 후 커밋·푸시. 빌드는 client(vite)+server(tsc). gramjs(telegram)는 server 전용.
