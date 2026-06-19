@@ -50,6 +50,8 @@ export interface BreadthSeries {
 export interface BreadthResult {
   s5fi: BreadthSeries;
   ndfi: BreadthSeries;
+  /** CBOE Volatility Index (VIX). */
+  vix: BreadthSeries;
 }
 
 interface Bar {
@@ -140,9 +142,10 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<Bar[]> {
 }
 
 export async function fetchBreadth(timeoutMs = 22_000): Promise<BreadthResult> {
-  const [s5, nd] = await Promise.all([
+  const [s5, nd, vix] = await Promise.all([
     fetchBars("INDEX:S5FI", timeoutMs),
     fetchBars("INDEX:NDFI", timeoutMs),
+    fetchBars("CBOE:VIX", timeoutMs),
   ]);
-  return { s5fi: toSeries(s5), ndfi: toSeries(nd) };
+  return { s5fi: toSeries(s5), ndfi: toSeries(nd), vix: toSeries(vix) };
 }

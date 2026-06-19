@@ -63,6 +63,7 @@ export interface SeriesPoint {
 /** ~1 year of daily history per metric, for the charts. */
 export interface MarketHistory {
   fearGreed: SeriesPoint[];
+  vix: SeriesPoint[];
   s5fi: SeriesPoint[];
   ndfi: SeriesPoint[];
   kospiAdr: SeriesPoint[];
@@ -73,6 +74,8 @@ export interface MarketSnapshot {
   /** When this snapshot was collected (ISO). */
   fetchedAt: string;
   fearGreed: FearGreed | null;
+  /** CBOE Volatility Index (VIX). */
+  vix: BreadthQuote | null;
   breadth: {
     /** S&P 500 stocks above 50-day average. */
     s5fi: BreadthQuote | null;

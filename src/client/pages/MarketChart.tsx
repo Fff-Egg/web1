@@ -10,10 +10,10 @@ export interface ChartSeries {
 
 interface Props {
   series: ChartSeries[];
-  /** Fixed y-domain, else auto from the data with a little padding. */
+  /** Fixed y-domain, else auto from the data (and any baselines) with padding. */
   domain?: [number, number];
-  /** Optional dashed reference line (e.g. 50 for breadth, 100 for ADR). */
-  baseline?: number;
+  /** User-set dashed reference lines (overbought/oversold thresholds). */
+  baselines?: number[];
   height?: number;
   decimals?: number;
   suffix?: string;
@@ -27,7 +27,7 @@ const PAD = 8;
  * No chart library — keeps the bundle small. The SVG stretches to its container
  * (preserveAspectRatio="none"); strokes stay 1px via vector-effect.
  */
-export function MultiLineChart({ series, domain, baseline, height = 150, decimals = 1, suffix = "" }: Props) {
+export function MultiLineChart({ series, domain, baselines = [], height = 150, decimals = 1, suffix = "" }: Props) {
   const ref = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<number | null>(null);
 
@@ -40,7 +40,8 @@ export function MultiLineChart({ series, domain, baseline, height = 150, decimal
   const ref0 = nonEmpty.reduce((a, b) => (b.points.length > a.points.length ? b : a)).points;
   const n = ref0.length;
 
-  const allV = nonEmpty.flatMap((s) => s.points.map((p) => p.v));
+  // Auto-domain includes the data AND any baselines, so user-set lines stay visible.
+  const allV = nonEmpty.flatMap((s) => s.points.map((p) => p.v)).concat(domain ? [] : baselines);
   let lo = domain ? domain[0] : Math.min(...allV);
   let hi = domain ? domain[1] : Math.max(...allV);
   if (lo === hi) {
@@ -73,18 +74,21 @@ export function MultiLineChart({ series, domain, baseline, height = 150, decimal
   return (
     <div className="relative" ref={ref} onMouseMove={onMove} onMouseLeave={() => setHover(null)}>
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full" style={{ height: H }}>
-        {baseline !== undefined && baseline >= lo && baseline <= hi && (
-          <line
-            x1={0}
-            x2={W}
-            y1={y(baseline)}
-            y2={y(baseline)}
-            stroke="#cbd5e1"
-            strokeWidth={1}
-            strokeDasharray="4 4"
-            vectorEffect="non-scaling-stroke"
-          />
-        )}
+        {baselines
+          .filter((b) => b >= lo && b <= hi)
+          .map((b) => (
+            <line
+              key={b}
+              x1={0}
+              x2={W}
+              y1={y(b)}
+              y2={y(b)}
+              stroke="#f59e0b"
+              strokeWidth={1}
+              strokeDasharray="4 4"
+              vectorEffect="non-scaling-stroke"
+            />
+          ))}
         {nonEmpty.map((s) => (
           <path
             key={s.label}

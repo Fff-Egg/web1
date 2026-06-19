@@ -1,16 +1,24 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { MarketSnapshot } from "../data/client.js";
 import { fearGreedLabelKo } from "../../shared/market.js";
+import type { SeriesPoint } from "../../shared/market.js";
 import { MultiLineChart } from "./MarketChart.js";
 
-const COL = { s5fi: "#2563eb", ndfi: "#7c3aed", kospi: "#2563eb", kosdaq: "#d97706", fg: "#0ea5e9" };
+const COL = {
+  fg: "#0ea5e9",
+  vix: "#e11d48",
+  ndfi: "#7c3aed",
+  s5fi: "#2563eb",
+  kospi: "#2563eb",
+  kosdaq: "#d97706",
+};
 
 /**
- * 시황분석 (Market Analysis) — daily snapshot dashboard.
- *  - CNN Fear & Greed (시장 심리)
- *  - S5FI / NDFI (시장 폭 / breadth, % of index above 50-day MA)
- *  - ADR 코스피/코스닥 (등락비율)
+ * 시황분석 (Market Analysis) — daily snapshot dashboard, one chart per metric.
+ *  layout: ① 공포·탐욕 / VIX  ② NDFI / S5FI  ③ 코스피 ADR / 코스닥 ADR
+ * Each chart has user-configurable reference lines (저장: localStorage).
  *
  * The snapshot is collected once a day by the server (default 07시 KST). The
  * "지금 갱신" button forces a fresh collection on demand.
@@ -51,8 +59,65 @@ export function MarketPage() {
       {data && (
         <div className="grid gap-4 md:grid-cols-2">
           <FearGreedCard data={data} />
-          <BreadthCard data={data} />
-          <AdrCard data={data} />
+          <MetricCard
+            id="vix"
+            title="VIX (변동성)"
+            subtitle="CBOE · 공포지수"
+            color={COL.vix}
+            quote={data.vix}
+            history={data.history.vix}
+            decimals={2}
+            defLow={null}
+            defHigh={null}
+          />
+          <MetricCard
+            id="ndfi"
+            title="NDFI · 나스닥 100"
+            subtitle="50일선 위 비율"
+            color={COL.ndfi}
+            quote={data.breadth.ndfi}
+            history={data.history.ndfi}
+            domain={[0, 100]}
+            decimals={1}
+            suffix="%"
+            defLow={25}
+            defHigh={75}
+          />
+          <MetricCard
+            id="s5fi"
+            title="S5FI · S&P 500"
+            subtitle="50일선 위 비율"
+            color={COL.s5fi}
+            quote={data.breadth.s5fi}
+            history={data.history.s5fi}
+            domain={[0, 100]}
+            decimals={1}
+            suffix="%"
+            defLow={25}
+            defHigh={75}
+          />
+          <MetricCard
+            id="kospiAdr"
+            title="코스피 ADR"
+            subtitle="등락비율 · adrinfo.kr"
+            color={COL.kospi}
+            quote={adrToQuote(data.adr.kospi)}
+            history={data.history.kospiAdr}
+            decimals={2}
+            defLow={25}
+            defHigh={75}
+          />
+          <MetricCard
+            id="kosdaqAdr"
+            title="코스닥 ADR"
+            subtitle="등락비율 · adrinfo.kr"
+            color={COL.kosdaq}
+            quote={adrToQuote(data.adr.kosdaq)}
+            history={data.history.kosdaqAdr}
+            decimals={2}
+            defLow={25}
+            defHigh={75}
+          />
         </div>
       )}
 
@@ -66,6 +131,60 @@ export function MarketPage() {
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Reference-line config (per chart, persisted in localStorage) ───
+
+interface RefLines {
+  low: number | null;
+  high: number | null;
+}
+
+function useRefLines(key: string, def: RefLines) {
+  const [v, setV] = useState<RefLines>(() => {
+    try {
+      const raw = localStorage.getItem(`mkt.ref.${key}`);
+      return raw ? (JSON.parse(raw) as RefLines) : def;
+    } catch {
+      return def;
+    }
+  });
+  const update = (nv: RefLines) => {
+    setV(nv);
+    try {
+      localStorage.setItem(`mkt.ref.${key}`, JSON.stringify(nv));
+    } catch {
+      /* ignore quota */
+    }
+  };
+  return [v, update] as const;
+}
+
+function RefControls({ lines, onChange }: { lines: RefLines; onChange: (v: RefLines) => void }) {
+  const parse = (s: string): number | null => {
+    const n = Number(s);
+    return s.trim() === "" || Number.isNaN(n) ? null : n;
+  };
+  const box = "w-16 rounded border border-slate-200 px-1.5 py-0.5 text-slate-700";
+  return (
+    <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+      <span>기준선</span>
+      <input
+        type="number"
+        value={lines.low ?? ""}
+        onChange={(e) => onChange({ ...lines, low: parse(e.target.value) })}
+        placeholder="낮음"
+        className={box}
+      />
+      <input
+        type="number"
+        value={lines.high ?? ""}
+        onChange={(e) => onChange({ ...lines, high: parse(e.target.value) })}
+        placeholder="높음"
+        className={box}
+      />
     </div>
   );
 }
@@ -84,8 +203,90 @@ function Card({ title, subtitle, children }: { title: string; subtitle?: string;
   );
 }
 
+interface Quote {
+  value: number;
+  change: number | null;
+  changePct: number | null;
+  /** Optional note under the value (e.g. ADR 전일 종가). */
+  note?: string;
+}
+
+function adrToQuote(q: MarketSnapshot["adr"]["kospi"]): Quote | null {
+  if (!q) return null;
+  const change = q.prevClose !== null ? Math.round((q.value - q.prevClose) * 100) / 100 : null;
+  return { value: q.value, change, changePct: null, note: q.prevClose !== null ? `전일 ${q.prevClose.toFixed(2)}` : undefined };
+}
+
+function MetricCard({
+  id,
+  title,
+  subtitle,
+  color,
+  quote,
+  history,
+  domain,
+  decimals = 1,
+  suffix = "",
+  defLow,
+  defHigh,
+}: {
+  id: string;
+  title: string;
+  subtitle: string;
+  color: string;
+  quote: Quote | null;
+  history: SeriesPoint[];
+  domain?: [number, number];
+  decimals?: number;
+  suffix?: string;
+  defLow: number | null;
+  defHigh: number | null;
+}) {
+  const [lines, setLines] = useRefLines(id, { low: defLow, high: defHigh });
+  const baselines = [lines.low, lines.high].filter((x): x is number => x !== null);
+  return (
+    <Card title={title} subtitle={subtitle}>
+      {!quote ? (
+        <Missing />
+      ) : (
+        <>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-slate-800">
+              {quote.value.toFixed(decimals)}
+              {suffix}
+            </span>
+            {quote.changePct !== null && (
+              <span className={`text-sm font-medium ${deltaColor(quote.changePct)}`}>
+                {arrow(quote.changePct)} {Math.abs(quote.changePct).toFixed(2)}%
+              </span>
+            )}
+            {quote.changePct === null && quote.change !== null && (
+              <span className={`text-sm font-medium ${deltaColor(quote.change)}`}>
+                {arrow(quote.change)} {Math.abs(quote.change).toFixed(decimals)}
+              </span>
+            )}
+          </div>
+          {quote.note && <div className="mt-0.5 text-xs text-slate-400">{quote.note}</div>}
+          <ChartBlock>
+            <MultiLineChart
+              series={[{ points: history, color, label: title }]}
+              domain={domain}
+              baselines={baselines}
+              decimals={decimals}
+              suffix={suffix}
+            />
+          </ChartBlock>
+          <RefControls lines={lines} onChange={setLines} />
+        </>
+      )}
+    </Card>
+  );
+}
+
 function FearGreedCard({ data }: { data: MarketSnapshot }) {
   const fg = data.fearGreed;
+  const [lines, setLines] = useRefLines("fearGreed", { low: 25, high: 75 });
+  const baselines = [lines.low, lines.high].filter((x): x is number => x !== null);
   return (
     <Card title="공포·탐욕 지수" subtitle="CNN Fear & Greed">
       {!fg ? (
@@ -94,11 +295,8 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
         <div>
           <div className="flex items-end gap-3">
             <span className={`text-4xl font-bold ${fearGreedColor(fg.score)}`}>{Math.round(fg.score)}</span>
-            <span className={`pb-1 text-sm font-medium ${fearGreedColor(fg.score)}`}>
-              {fearGreedLabelKo(fg.score)}
-            </span>
+            <span className={`pb-1 text-sm font-medium ${fearGreedColor(fg.score)}`}>{fearGreedLabelKo(fg.score)}</span>
           </div>
-          {/* 0–100 scale bar with the current position marked. */}
           <div className="relative mt-3 h-2 rounded-full bg-gradient-to-r from-red-400 via-amber-300 to-green-400">
             <div
               className="absolute top-1/2 h-4 w-1 -translate-x-1/2 -translate-y-1/2 rounded bg-slate-800"
@@ -115,151 +313,23 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
             <MultiLineChart
               series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
               domain={[0, 100]}
-              baseline={50}
+              baselines={baselines}
               decimals={0}
             />
           </ChartBlock>
+          <RefControls lines={lines} onChange={setLines} />
         </div>
       )}
     </Card>
-  );
-}
-
-function BreadthCard({ data }: { data: MarketSnapshot }) {
-  const { s5fi, ndfi } = data.breadth;
-  return (
-    <Card title="시장 폭 (50일선 위 비율)" subtitle="TradingView · EOD">
-      {!s5fi && !ndfi ? (
-        <Missing />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3">
-            <BreadthItem label="S&P 500" sub="S5FI" q={s5fi} />
-            <BreadthItem label="나스닥 100" sub="NDFI" q={ndfi} />
-          </div>
-          <ChartBlock legend={[{ label: "S&P 500", color: COL.s5fi }, { label: "나스닥 100", color: COL.ndfi }]}>
-            <MultiLineChart
-              series={[
-                { points: data.history.s5fi, color: COL.s5fi, label: "S&P 500" },
-                { points: data.history.ndfi, color: COL.ndfi, label: "나스닥 100" },
-              ]}
-              domain={[0, 100]}
-              baseline={50}
-              suffix="%"
-            />
-          </ChartBlock>
-        </>
-      )}
-    </Card>
-  );
-}
-
-function BreadthItem({
-  label,
-  sub,
-  q,
-}: {
-  label: string;
-  sub: string;
-  q: MarketSnapshot["breadth"]["s5fi"];
-}) {
-  return (
-    <div className="rounded border border-slate-100 bg-slate-50 p-3">
-      <div className="text-xs text-slate-500">
-        {label} <span className="text-slate-400">· {sub}</span>
-      </div>
-      {!q ? (
-        <div className="mt-1 text-sm text-slate-400">—</div>
-      ) : (
-        <div className="mt-1 flex items-baseline gap-2">
-          <span className="text-2xl font-bold text-slate-800">{q.value.toFixed(1)}%</span>
-          {q.changePct !== null && (
-            <span className={`text-xs font-medium ${deltaColor(q.changePct)}`}>
-              {arrow(q.changePct)} {Math.abs(q.changePct).toFixed(2)}%
-            </span>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function AdrCard({ data }: { data: MarketSnapshot }) {
-  const { kospi, kosdaq } = data.adr;
-  return (
-    <Card title="한국 ADR (등락비율)" subtitle="adrinfo.kr">
-      {!kospi && !kosdaq ? (
-        <Missing />
-      ) : (
-        <>
-          <div className="grid grid-cols-2 gap-3">
-            <AdrItem label="코스피" q={kospi} />
-            <AdrItem label="코스닥" q={kosdaq} />
-          </div>
-          <ChartBlock legend={[{ label: "코스피", color: COL.kospi }, { label: "코스닥", color: COL.kosdaq }]}>
-            <MultiLineChart
-              series={[
-                { points: data.history.kospiAdr, color: COL.kospi, label: "코스피" },
-                { points: data.history.kosdaqAdr, color: COL.kosdaq, label: "코스닥" },
-              ]}
-              baseline={100}
-              decimals={2}
-            />
-          </ChartBlock>
-        </>
-      )}
-    </Card>
-  );
-}
-
-function AdrItem({ label, q }: { label: string; q: MarketSnapshot["adr"]["kospi"] }) {
-  const delta = q && q.prevClose !== null ? q.value - q.prevClose : null;
-  return (
-    <div className="rounded border border-slate-100 bg-slate-50 p-3">
-      <div className="text-xs text-slate-500">{label}</div>
-      {!q ? (
-        <div className="mt-1 text-sm text-slate-400">—</div>
-      ) : (
-        <div className="mt-1">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-bold text-slate-800">{q.value.toFixed(2)}</span>
-            {delta !== null && (
-              <span className={`text-xs font-medium ${deltaColor(delta)}`}>
-                {arrow(delta)} {Math.abs(delta).toFixed(2)}
-              </span>
-            )}
-          </div>
-          {q.prevClose !== null && <div className="mt-0.5 text-xs text-slate-400">전일 {q.prevClose.toFixed(2)}</div>}
-        </div>
-      )}
-    </div>
   );
 }
 
 // ─── Small helpers ──────────────────────────────────────────────────
 
-function ChartBlock({
-  children,
-  legend,
-}: {
-  children: React.ReactNode;
-  legend?: { label: string; color: string }[];
-}) {
+function ChartBlock({ children }: { children: React.ReactNode }) {
   return (
     <div className="mt-4 border-t border-slate-100 pt-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs text-slate-400">최근 1년</span>
-        {legend && (
-          <div className="flex gap-3">
-            {legend.map((l) => (
-              <span key={l.label} className="flex items-center gap-1 text-xs text-slate-500">
-                <span className="inline-block h-2 w-2 rounded-full" style={{ background: l.color }} />
-                {l.label}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      <div className="mb-1 text-xs text-slate-400">최근 1년</div>
       {children}
     </div>
   );

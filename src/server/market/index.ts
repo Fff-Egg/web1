@@ -10,6 +10,7 @@ const SNAPSHOT_KEY = "marketSnapshot";
 
 const EMPTY_HISTORY: MarketHistory = {
   fearGreed: [],
+  vix: [],
   s5fi: [],
   ndfi: [],
   kospiAdr: [],
@@ -50,6 +51,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   if (breadth) {
     history.s5fi = breadth.s5fi.history;
     history.ndfi = breadth.ndfi.history;
+    history.vix = breadth.vix.history;
   }
   history.kospiAdr = adrHist.kospi;
   history.kosdaqAdr = adrHist.kosdaq;
@@ -57,6 +59,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   return {
     fetchedAt: new Date().toISOString(),
     fearGreed: fg ? fg.current : null,
+    vix: breadth ? breadth.vix.quote : null,
     breadth: {
       s5fi: breadth ? breadth.s5fi.quote : null,
       ndfi: breadth ? breadth.ndfi.quote : null,

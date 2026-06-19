@@ -499,6 +499,7 @@ function sampleSeries(base: number, amp: number, n = 180): { t: number; v: numbe
 const SAMPLE_MARKET: MarketSnapshot = {
   fetchedAt: new Date().toISOString(),
   fearGreed: { score: 37.3, rating: "fear", prevClose: 37.5, week: 35.5, month: 59.4, year: 54.3, asOf: null },
+  vix: { value: 16.4, change: -2.04, changePct: -11.06 },
   breadth: {
     s5fi: { value: 55.26, change: 1.79, changePct: 3.35 },
     ndfi: { value: 50.49, change: 3.96, changePct: 8.51 },
@@ -509,6 +510,7 @@ const SAMPLE_MARKET: MarketSnapshot = {
   },
   history: {
     fearGreed: sampleSeries(50, 18),
+    vix: sampleSeries(18, 6),
     s5fi: sampleSeries(55, 22),
     ndfi: sampleSeries(52, 24),
     kospiAdr: sampleSeries(95, 20),
