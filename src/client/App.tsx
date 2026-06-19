@@ -8,17 +8,19 @@ import { ArchivePage } from "./pages/ArchivePage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { TrashPage } from "./pages/TrashPage.js";
+import { MarketPage } from "./pages/MarketPage.js";
 
-type Tab = "sources" | "analyze" | "feed" | "archive" | "digest" | "settings" | "trash";
+type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "trash" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: "sources", label: "Sources" },
-  { id: "analyze", label: "분석(수동)" },
+  { id: "market", label: "시황분석" },
+  { id: "digest", label: "Daily Digest" },
   { id: "feed", label: "Feed" },
   { id: "archive", label: "보관함" },
-  { id: "digest", label: "Daily Digest" },
-  { id: "settings", label: "Settings" },
+  { id: "analyze", label: "분석(수동)" },
+  { id: "sources", label: "Sources" },
   { id: "trash", label: "휴지통" },
+  { id: "settings", label: "Settings" },
 ];
 
 const TAB_KEY = "feedwatch.activeTab";
@@ -60,7 +62,7 @@ export function App() {
         </div>
       )}
 
-      {/* Mobile: a horizontal scroll strip (7 tabs overflow a phone) instead of
+      {/* Mobile: a horizontal scroll strip (8 tabs overflow a phone) instead of
           spilling off-screen. -mx pulls it to the screen edges so chips aren't clipped.
           overflow-y-hidden + touch-pan-x keep the swipe strictly horizontal (otherwise
           overflow-x:auto promotes overflow-y to auto and the strip jiggles vertically). */}
@@ -81,13 +83,14 @@ export function App() {
         ))}
       </nav>
 
-      {tab === "sources" && <SourcesPage />}
-      {tab === "analyze" && <ManualPage />}
+      {tab === "market" && <MarketPage />}
+      {tab === "digest" && <DigestPage />}
       {tab === "feed" && <FeedPage />}
       {tab === "archive" && <ArchivePage />}
-      {tab === "digest" && <DigestPage />}
-      {tab === "settings" && <SettingsPage />}
+      {tab === "analyze" && <ManualPage />}
+      {tab === "sources" && <SourcesPage />}
       {tab === "trash" && <TrashPage />}
+      {tab === "settings" && <SettingsPage />}
     </div>
   );
 }
