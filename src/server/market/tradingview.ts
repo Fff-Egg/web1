@@ -52,9 +52,13 @@ export interface BreadthResult {
   ndfi: BreadthSeries;
 }
 
-/** A symbol's series + its resolved display name. */
+/** A symbol's series + its resolved display name + canonical symbol. */
 export interface SymbolSeries extends BreadthSeries {
+  /** Human description, e.g. "Apple Inc.". */
   name: string | null;
+  /** Canonical TradingView symbol the input resolved to, e.g. "NASDAQ:AAPL".
+   *  Lets the user type a bare ticker ("aapl") and we store the full symbol. */
+  resolved: string | null;
 }
 
 interface Bar {
@@ -85,6 +89,7 @@ function toSeries(bars: Bar[] | undefined): BreadthSeries {
 interface RawSymbol {
   bars: Bar[];
   name: string | null;
+  resolved: string | null;
 }
 
 /**
@@ -96,6 +101,7 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
   return new Promise((resolve) => {
     let bars: Bar[] = [];
     let name: string | null = null;
+    let resolved: string | null = null;
     let settled = false;
 
     const ws = new WebSocket(WS_URL, {
@@ -111,7 +117,7 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
       } catch {
         /* already closing */
       }
-      resolve({ bars, name });
+      resolve({ bars, name, resolved });
     };
     const timer = setTimeout(finish, timeoutMs);
 
@@ -134,8 +140,9 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
         try {
           const o = JSON.parse(part) as { m?: string; p?: unknown[] };
           if (o.m === "symbol_resolved") {
-            const info = o.p?.[2] as { description?: string; short_name?: string } | undefined;
+            const info = o.p?.[2] as { description?: string; short_name?: string; pro_name?: string } | undefined;
             name = info?.description ?? info?.short_name ?? null;
+            resolved = info?.pro_name ?? null;
           } else if (o.m === "symbol_error" || o.m === "series_error") {
             finish(); // invalid symbol — bail fast (empty bars)
           } else if (o.m === "timescale_update" && o.p) {
@@ -166,6 +173,6 @@ export async function fetchBreadth(timeoutMs = 22_000): Promise<BreadthResult> {
 
 /** Fetch an arbitrary TradingView symbol (for the user-configurable slot). */
 export async function fetchSymbol(symbol: string, timeoutMs = 22_000): Promise<SymbolSeries> {
-  const { bars, name } = await fetchBars(symbol, timeoutMs);
-  return { ...toSeries(bars), name };
+  const { bars, name, resolved } = await fetchBars(symbol, timeoutMs);
+  return { ...toSeries(bars), name, resolved };
 }

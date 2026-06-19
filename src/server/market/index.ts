@@ -129,18 +129,21 @@ export async function refreshMarketSnapshot(): Promise<MarketSnapshot> {
  * Returns the updated snapshot.
  */
 export async function setCustomSymbol(symbolInput: string): Promise<MarketSnapshot> {
-  const symbol = symbolInput.trim().toUpperCase();
+  const input = symbolInput.trim();
+  // The chart WS resolves bare tickers ("aapl" → "NASDAQ:AAPL"), so fetch with
+  // the raw input and persist whatever canonical symbol it resolved to.
+  const series = await fetchSymbol(input).catch(() => null);
+  const ok = series && (series.quote || series.history.length > 0);
+  const symbol = ok && series.resolved ? series.resolved : input.toUpperCase();
   await setCustomSymbolValue(symbol);
 
-  const series = await fetchSymbol(symbol).catch(() => null);
   const stored = (await getStoredSnapshot()) ?? (await refreshMarketSnapshot());
-
   stored.custom = { symbol, name: series?.name ?? null, quote: series?.quote ?? null };
   stored.history.custom = series?.history ?? [];
   // Drop a previous custom-symbol error (keep unrelated source errors).
-  stored.errors = (stored.errors ?? []).filter((e) => !/심볼 형식을 확인/.test(e));
-  if (!series || (!series.quote && series.history.length === 0)) {
-    stored.errors.push(`${symbol}: 데이터를 받지 못했습니다. 심볼 형식을 확인하세요 (예: NASDAQ:AAPL).`);
+  stored.errors = (stored.errors ?? []).filter((e) => !/찾지 못했습니다/.test(e));
+  if (!ok) {
+    stored.errors.push(`"${input}" 심볼을 찾지 못했습니다. 티커(예: AAPL) 또는 거래소:티커(예: NASDAQ:AAPL)로 입력하세요.`);
   }
   await storeSnapshot(stored);
   return stored;

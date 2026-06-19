@@ -326,7 +326,10 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
   const [draft, setDraft] = useState(symbol);
   const setSymbol = useMutation({
     mutationFn: (s: string) => api.setMarketSymbol(s),
-    onSuccess: (snap) => qc.setQueryData(["market"], snap),
+    onSuccess: (snap) => {
+      qc.setQueryData(["market"], snap);
+      if (snap.custom?.symbol) setDraft(snap.custom.symbol);
+    },
   });
   const [lines, setLines] = useRefLines(`custom:${symbol}`, { low: null, high: null });
   const baselines = [lines.low, lines.high].filter((x): x is number => x !== null);
@@ -348,7 +351,7 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         <input
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="예: NYMEX:CL1!  (WTI)"
+          placeholder="예: AAPL · TSLA · 005930"
           className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
         />
         <button
@@ -360,8 +363,9 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         </button>
       </form>
       <p className="mb-3 text-[11px] leading-relaxed text-slate-400">
-        TradingView 심볼: <code>CBOE:VIX</code> · <code>TVC:USOIL</code>(WTI) · <code>NASDAQ:AAPL</code> ·{" "}
-        <code>KRX:005930</code>(삼성전자) · <code>BINANCE:BTCUSDT</code>
+        티커만 입력해도 됩니다: <code>AAPL</code> · <code>NVDA</code> · <code>005930</code>(삼성) ·{" "}
+        <code>USOIL</code>(WTI) · <code>BTCUSD</code>. 안 잡히면 <code>거래소:티커</code>로 입력(예:{" "}
+        <code>NASDAQ:AAPL</code>).
       </p>
       {!quote && data.history.custom.length === 0 ? (
         <Missing />
