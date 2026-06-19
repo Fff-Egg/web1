@@ -3,8 +3,10 @@ import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
 import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact } from "../../server/db/schema.js";
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
+import type { MarketSnapshot } from "../../shared/market.js";
 
 export type { AnalysisConfig };
+export type { MarketSnapshot };
 
 export interface FeedFilter {
   impact?: Impact;
@@ -142,6 +144,10 @@ export interface DataApi {
   listPending(): Promise<PendingArticle[]>;
   saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
   skipPending(articleId: number): Promise<void>;
+  /** 시황분석: last stored daily snapshot (null until first collected). */
+  marketLatest(): Promise<MarketSnapshot | null>;
+  /** Force a fresh collection now (the "지금 갱신" button). */
+  marketRefresh(): Promise<MarketSnapshot>;
 }
 
 export interface PendingArticle {
@@ -265,6 +271,8 @@ function makeTrpcApi(): DataApi {
     skipPending: async (articleId) => {
       await client.manual.skip.mutate({ articleId });
     },
+    marketLatest: () => client.market.latest.query() as Promise<MarketSnapshot | null>,
+    marketRefresh: () => client.market.refresh.mutate() as Promise<MarketSnapshot>,
   };
 }
 
@@ -470,8 +478,28 @@ function makeStaticApi(): DataApi {
     async skipPending(articleId) {
       savePending(loadPending().filter((p) => p.id !== articleId));
     },
+    async marketLatest() {
+      return SAMPLE_MARKET;
+    },
+    async marketRefresh() {
+      return { ...SAMPLE_MARKET, fetchedAt: new Date().toISOString() };
+    },
   };
 }
+
+const SAMPLE_MARKET: MarketSnapshot = {
+  fetchedAt: new Date().toISOString(),
+  fearGreed: { score: 37.3, rating: "fear", prevClose: 37.5, week: 35.5, month: 59.4, year: 54.3, asOf: null },
+  breadth: {
+    s5fi: { value: 55.26, change: 1.79, changePct: 3.35 },
+    ndfi: { value: 50.49, change: 3.96, changePct: 8.51 },
+  },
+  adr: {
+    kospi: { value: 72.99, prevClose: 72.56 },
+    kosdaq: { value: 68.18, prevClose: 68.76 },
+  },
+  errors: [],
+};
 
 const PENDING_KEY = "feedwatch.pending.v1";
 const SAVED_FEED_KEY = "feedwatch.savedfeed.v1";

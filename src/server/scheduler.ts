@@ -14,6 +14,7 @@ import {
 import { feedbackRepo } from "./repo/feedback.js";
 import { hasDb } from "./db/client.js";
 import { hasLLM } from "./analysis/anthropic.js";
+import { getStoredSnapshot, refreshMarketSnapshot } from "./market/index.js";
 
 /** 14시 routine: midday digest (어제21시~오늘14시) ONLY — no sweep, no memo. */
 async function runMiddayRoutine(): Promise<void> {
@@ -70,6 +71,22 @@ async function catchUpRoutines(digestHour: number): Promise<void> {
   }
 }
 
+/** 시황분석 daily batch: collect Fear&Greed + S5FI/NDFI + ADR once a day and
+ *  store the snapshot. A single morning run (default 07시 KST) captures the US
+ *  sources at their overnight end-of-day close and the Korean ADR at the prior
+ *  session's close — every source at its freshest *settled* value. */
+async function runMarketRoutine(): Promise<void> {
+  try {
+    const snap = await refreshMarketSnapshot();
+    const ok = [snap.fearGreed && "F&G", snap.breadth.s5fi && "S5FI", snap.adr.kospi && "ADR"]
+      .filter(Boolean)
+      .join("+");
+    console.log(`[scheduler] market snapshot: ${ok || "none"}${snap.errors.length ? ` (errors: ${snap.errors.length})` : ""}`);
+  } catch (err) {
+    console.error("[scheduler] market snapshot failed:", err);
+  }
+}
+
 /**
  * Background schedulers. Phase 1 wires the collection loop. The analysis
  * pipeline (Phase 3) and the evening digest cron (Phase 4) hook in here.
@@ -113,4 +130,22 @@ export function startSchedulers(): void {
   console.log(`[scheduler] digest crons at ${midHour}:00 (낮) and ${digestHour}:00 (저녁+정리) KST`);
   // Self-heal a run missed by a restart (e.g. today's deploy landed across the cron hour).
   void catchUpRoutines(digestHour);
+
+  // 시황분석 daily batch (KST). One run/day; refresh on boot if the stored
+  // snapshot is missing or older than ~20h (covers a restart that skipped the cron).
+  const marketHour = Number(process.env.MARKET_HOUR ?? 7);
+  cron.schedule(`0 ${marketHour} * * *`, () => void runMarketRoutine(), { timezone: "Asia/Seoul" });
+  console.log(`[scheduler] market snapshot cron at ${marketHour}:00 KST`);
+  void (async () => {
+    try {
+      const snap = await getStoredSnapshot();
+      const ageMs = snap ? Date.now() - new Date(snap.fetchedAt).getTime() : Infinity;
+      if (ageMs > 20 * 60 * 60_000) {
+        console.log("[scheduler] market snapshot missing/stale on boot — collecting now.");
+        await runMarketRoutine();
+      }
+    } catch (err) {
+      console.error("[scheduler] market boot check failed:", err);
+    }
+  })();
 }

@@ -62,13 +62,13 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 
 ## 탭 구성 (`src/client/App.tsx`)
 순서(8개): **시황분석 / Daily Digest / Feed / 보관함 / 분석(수동) / Sources / 휴지통 / Settings**.
-- **시황분석**(신설, tab 1, `src/client/pages/MarketPage.tsx`): 시장 지표 대시보드. **현재 플레이스홀더**. 넣을 지표:
-  - **S5FI** — S&P500 종목 중 50일 이동평균선 위 비율(시장 폭/breadth). **출처 확정: TradingView**(심볼 `S5FI`; 스캐너 API `POST https://scanner.tradingview.com/america/scan` 등 비공식 엔드포인트로 close/change 취득 예정).
-  - **NDFI** — 나스닥 종목 중 50일선 위 비율(breadth). **출처 확정: TradingView**(심볼 `NDFI`, 위와 동일 방식).
-  - **CNN Fear & Greed Index** — 비공식 JSON `https://production.dataviz.cnn.io/index/fearandgreed/graphdata` (브라우저 User-Agent 필요, UA 없으면 403/418).
-  - **ADR 코스피 / ADR 코스닥** — 등락비율(advance-decline ratio). **출처 확정: `http://adrinfo.kr/`** (HTML 구조 확인 후 스크레이프 예정).
-  - ✅ **데이터 소스 확정**(TradingView·CNN·adrinfo.kr). **네트워크 허용목록(egress) 설정 완료** — adrinfo.kr·*.tradingview.com·production.dataviz.cnn.io 추가됨(단 **새 세션부터 적용**; 기존 세션 컨테이너엔 미반영). 갱신 주기 미정.
-  - ▶ **다음 세션 할 일**: (1) 새 세션에서 세 소스 응답 구조를 curl로 직접 확인(샌드박스 egress 열림). (2) 서버 어댑터/엔드포인트 추가(`src/server/` — 캐싱 권장, 외부호출 잦지 않게). (3) `MarketPage.tsx`를 플레이스홀더에서 실제 대시보드로 구현. 갱신 주기는 사용자에게 재확인(하루 1회 vs 페이지 열 때 캐시 vs 실시간).
+- **시황분석**(tab 1, `src/client/pages/MarketPage.tsx`): 시장 지표 대시보드 **✅ 구현 완료**. 하루 1회 배치 수집(기본 07시 KST `MARKET_HOUR`) → `settings` KV(`key="marketSnapshot"`, 마이그레이션 불필요)에 JSON 스냅샷 저장. tRPC `market.latest`(저장본)·`market.refresh`('지금 갱신' 버튼=즉시 재수집). 서버 수집기 = **`src/server/market/`**: `cnn.ts`/`tradingview.ts`/`adr.ts`/`index.ts`(병렬·소스별 tolerant — 한 곳 실패해도 나머지 진행, 실패는 `errors[]` 한국어 메모). 스케줄러(`scheduler.ts`)에 일일 크론 + **부팅 시 스냅샷 없거나 20h↑ 오래되면 즉시 수집**.
+  - **S5FI / NDFI**(S&P500/나스닥100 50일선 위 비율, breadth) — **TradingView 쿼트 websocket**(`wss://data.tradingview.com/socket.io/websocket`, 심볼 `INDEX:S5FI`/`INDEX:NDFI`). ⚠️ scanner REST(`scanner.tradingview.com/.../scan`)는 이 심볼(barchart EOD) **0건 반환**이라 못 씀. ⚠️ ws 핸드셰이크에 **`Origin: https://www.tradingview.com` 헤더 필수**(없으면 non-101 거부) → native WebSocket 불가, **`ws` 라이브러리 사용**(deps에 추가함). `update_mode=endofday`(미국 장마감 후 확정). 값=`lp`, 변화=`ch`/`chp`.
+  - **CNN Fear & Greed** — JSON `https://production.dataviz.cnn.io/index/fearandgreed/graphdata`. ⚠️ **브라우저 UA + `Origin/Referer: edition.cnn.com` 헤더 필수**(없으면 418 "I'm a teapot. You're a bot."). `fear_and_greed.{score,rating,previous_close,previous_1_week/month/year}`.
+  - **ADR 코스피/코스닥** — `http://adrinfo.kr/` HTML. 페이지 내 인라인 JS 상수 파싱: `data_kospi_daily=[{time,adr},…]`(마지막=현재값)·`kospi_daily_last_adr=NN`(전일종가). kosdaq도 동일. KR 장마감(15:30 KST) 확정.
+  - **타이밍 메모**: US 소스(F&G·S5FI·NDFI)는 미국 장마감 후=KST 새벽 확정, ADR은 전일 KR 장마감 확정 → **07시 KST 단일 배치**가 세 소스 모두 가장 신선한 *확정값* 포착(US는 밤사이, KR은 전일 종가). `MARKET_HOUR` env로 조정.
+  - **egress**: Railway(프로덕션)는 아웃바운드 기본 개방이라 동작. 세 소스 모두 실서버 모듈 end-to-end 확인됨(errors 0). 데모 모드(`VITE_STATIC_DEMO`)는 `SAMPLE_MARKET` 더미.
+  - ▶ **남은 개선(선택)**: 인트라데이 ADR 더 자주 보고 싶으면 `MARKET_HOUR` 외 추가 크론/장중 갱신, F&G 히스토리 차트, 스파크라인 등.
 
 ## 방향·다음 작업 (대화 요약 — 인계)
 **문제의식**: 현재 구조(피드에 글 쌓고 훑고 지움)가 "신경 끄기" 목표를 재현. 사용자는 **하루 2~3회 다이제스트만** 보고 끝내고 싶어함. 놓침 불안은 필터로 거르지 말고 **다이제스트 "누락금지 규칙"**으로 해결.
