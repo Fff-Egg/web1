@@ -413,7 +413,7 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         {candles.isLoading || setSymbol.isPending ? (
           <div className="py-10 text-center text-xs text-slate-400">불러오는 중…</div>
         ) : candles.data && candles.data.candles.length > 0 ? (
-          <CandleChart candles={candles.data.candles} baselines={baselines} intraday={tf === "4h"} />
+          <CandleChart key={`${symbol}:${tf}`} candles={candles.data.candles} baselines={baselines} intraday={tf === "4h"} />
         ) : (
           <div className="py-10 text-center text-xs text-slate-400">
             캔들 데이터를 받지 못했습니다. 심볼을 확인하세요.
