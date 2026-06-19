@@ -50,8 +50,11 @@ export interface BreadthSeries {
 export interface BreadthResult {
   s5fi: BreadthSeries;
   ndfi: BreadthSeries;
-  /** CBOE Volatility Index (VIX). */
-  vix: BreadthSeries;
+}
+
+/** A symbol's series + its resolved display name. */
+export interface SymbolSeries extends BreadthSeries {
+  name: string | null;
 }
 
 interface Bar {
@@ -79,14 +82,20 @@ function toSeries(bars: Bar[] | undefined): BreadthSeries {
   return { quote, history };
 }
 
+interface RawSymbol {
+  bars: Bar[];
+  name: string | null;
+}
+
 /**
- * Fetch daily bars for ONE symbol. An anonymous chart session is limited to a
- * single series ("exceed limit of series in the session"), so each symbol gets
- * its own short-lived connection; the caller runs them in parallel.
+ * Fetch daily bars + resolved name for ONE symbol. An anonymous chart session
+ * is limited to a single series ("exceed limit of series in the session"), so
+ * each symbol gets its own short-lived connection; callers run them in parallel.
  */
-function fetchBars(symbol: string, timeoutMs: number): Promise<Bar[]> {
+function fetchBars(symbol: string, timeoutMs: number): Promise<RawSymbol> {
   return new Promise((resolve) => {
     let bars: Bar[] = [];
+    let name: string | null = null;
     let settled = false;
 
     const ws = new WebSocket(WS_URL, {
@@ -102,7 +111,7 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<Bar[]> {
       } catch {
         /* already closing */
       }
-      resolve(bars);
+      resolve({ bars, name });
     };
     const timer = setTimeout(finish, timeoutMs);
 
@@ -124,11 +133,17 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<Bar[]> {
         if (!part || part.startsWith("~h~")) continue;
         try {
           const o = JSON.parse(part) as { m?: string; p?: unknown[] };
-          if (o.m !== "timescale_update" || !o.p) continue;
-          const upd = o.p[1] as Record<string, { s?: Bar[] }>;
-          if (upd.s1?.s && upd.s1.s.length) {
-            bars = upd.s1.s;
-            finish();
+          if (o.m === "symbol_resolved") {
+            const info = o.p?.[2] as { description?: string; short_name?: string } | undefined;
+            name = info?.description ?? info?.short_name ?? null;
+          } else if (o.m === "symbol_error" || o.m === "series_error") {
+            finish(); // invalid symbol — bail fast (empty bars)
+          } else if (o.m === "timescale_update" && o.p) {
+            const upd = o.p[1] as Record<string, { s?: Bar[] }>;
+            if (upd.s1?.s && upd.s1.s.length) {
+              bars = upd.s1.s;
+              finish();
+            }
           }
         } catch {
           /* control frame */
@@ -142,10 +157,15 @@ function fetchBars(symbol: string, timeoutMs: number): Promise<Bar[]> {
 }
 
 export async function fetchBreadth(timeoutMs = 22_000): Promise<BreadthResult> {
-  const [s5, nd, vix] = await Promise.all([
+  const [s5, nd] = await Promise.all([
     fetchBars("INDEX:S5FI", timeoutMs),
     fetchBars("INDEX:NDFI", timeoutMs),
-    fetchBars("CBOE:VIX", timeoutMs),
   ]);
-  return { s5fi: toSeries(s5), ndfi: toSeries(nd), vix: toSeries(vix) };
+  return { s5fi: toSeries(s5.bars), ndfi: toSeries(nd.bars) };
+}
+
+/** Fetch an arbitrary TradingView symbol (for the user-configurable slot). */
+export async function fetchSymbol(symbol: string, timeoutMs = 22_000): Promise<SymbolSeries> {
+  const { bars, name } = await fetchBars(symbol, timeoutMs);
+  return { ...toSeries(bars), name };
 }

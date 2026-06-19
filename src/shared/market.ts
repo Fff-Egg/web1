@@ -60,10 +60,20 @@ export interface SeriesPoint {
   v: number;
 }
 
+/** A user-chosen TradingView symbol occupying the configurable chart slot. */
+export interface CustomMetric {
+  /** TradingView symbol, e.g. "CBOE:VIX", "NYMEX:CL1!", "NASDAQ:AAPL". */
+  symbol: string;
+  /** Resolved display name (description/short name), if available. */
+  name: string | null;
+  quote: BreadthQuote | null;
+}
+
 /** ~1 year of daily history per metric, for the charts. */
 export interface MarketHistory {
   fearGreed: SeriesPoint[];
-  vix: SeriesPoint[];
+  /** History for the user-configurable symbol slot. */
+  custom: SeriesPoint[];
   s5fi: SeriesPoint[];
   ndfi: SeriesPoint[];
   kospiAdr: SeriesPoint[];
@@ -74,8 +84,8 @@ export interface MarketSnapshot {
   /** When this snapshot was collected (ISO). */
   fetchedAt: string;
   fearGreed: FearGreed | null;
-  /** CBOE Volatility Index (VIX). */
-  vix: BreadthQuote | null;
+  /** User-configurable TradingView symbol slot (defaults to CBOE:VIX). */
+  custom: CustomMetric | null;
   breadth: {
     /** S&P 500 stocks above 50-day average. */
     s5fi: BreadthQuote | null;

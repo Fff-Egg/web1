@@ -59,17 +59,7 @@ export function MarketPage() {
       {data && (
         <div className="grid gap-4 md:grid-cols-2">
           <FearGreedCard data={data} />
-          <MetricCard
-            id="vix"
-            title="VIX (변동성)"
-            subtitle="CBOE · 공포지수"
-            color={COL.vix}
-            quote={data.vix}
-            history={data.history.vix}
-            decimals={2}
-            defLow={null}
-            defHigh={null}
-          />
+          <CustomCard data={data} />
           <MetricCard
             id="ndfi"
             title="NDFI · 나스닥 100"
@@ -324,7 +314,93 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
   );
 }
 
+/**
+ * The user-configurable slot: any TradingView symbol (VIX, WTI, a stock…).
+ * Type a symbol and 적용 → server re-collects just that symbol. Reference lines
+ * are remembered per-symbol.
+ */
+function CustomCard({ data }: { data: MarketSnapshot }) {
+  const qc = useQueryClient();
+  const custom = data.custom;
+  const symbol = custom?.symbol ?? "CBOE:VIX";
+  const [draft, setDraft] = useState(symbol);
+  const setSymbol = useMutation({
+    mutationFn: (s: string) => api.setMarketSymbol(s),
+    onSuccess: (snap) => qc.setQueryData(["market"], snap),
+  });
+  const [lines, setLines] = useRefLines(`custom:${symbol}`, { low: null, high: null });
+  const baselines = [lines.low, lines.high].filter((x): x is number => x !== null);
+  const quote = custom?.quote ?? null;
+  const apply = () => {
+    const s = draft.trim();
+    if (s && s.toUpperCase() !== symbol.toUpperCase()) setSymbol.mutate(s);
+  };
+
+  return (
+    <Card title={custom?.name || symbol} subtitle="TradingView · 직접 지정">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          apply();
+        }}
+        className="mb-3 flex gap-2"
+      >
+        <input
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          placeholder="예: NYMEX:CL1!  (WTI)"
+          className="min-w-0 flex-1 rounded border border-slate-300 px-2 py-1 text-sm"
+        />
+        <button
+          type="submit"
+          disabled={setSymbol.isPending}
+          className="shrink-0 rounded border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+        >
+          {setSymbol.isPending ? "…" : "적용"}
+        </button>
+      </form>
+      <p className="mb-3 text-[11px] leading-relaxed text-slate-400">
+        TradingView 심볼: <code>CBOE:VIX</code> · <code>TVC:USOIL</code>(WTI) · <code>NASDAQ:AAPL</code> ·{" "}
+        <code>KRX:005930</code>(삼성전자) · <code>BINANCE:BTCUSDT</code>
+      </p>
+      {!quote && data.history.custom.length === 0 ? (
+        <Missing />
+      ) : (
+        <>
+          {quote && (
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-800">{fmtNum(quote.value)}</span>
+              {quote.changePct !== null && (
+                <span className={`text-sm font-medium ${deltaColor(quote.changePct)}`}>
+                  {arrow(quote.changePct)} {Math.abs(quote.changePct).toFixed(2)}%
+                </span>
+              )}
+            </div>
+          )}
+          <div className="mt-0.5 text-xs text-slate-400">{symbol}</div>
+          <ChartBlock>
+            <MultiLineChart
+              series={[{ points: data.history.custom, color: COL.vix, label: symbol }]}
+              baselines={baselines}
+              decimals={2}
+            />
+          </ChartBlock>
+          <RefControls lines={lines} onChange={setLines} />
+        </>
+      )}
+    </Card>
+  );
+}
+
 // ─── Small helpers ──────────────────────────────────────────────────
+
+/** Compact number: keep small values precise, drop decimals on large ones. */
+function fmtNum(v: number): string {
+  const abs = Math.abs(v);
+  if (abs >= 1000) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  if (abs >= 100) return v.toFixed(1);
+  return v.toFixed(2);
+}
 
 function ChartBlock({ children }: { children: React.ReactNode }) {
   return (
