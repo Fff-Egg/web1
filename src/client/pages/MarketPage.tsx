@@ -109,6 +109,30 @@ export function MarketPage() {
             defLow={25}
             defHigh={75}
           />
+          <MetricCard
+            id="creditKospi"
+            title="코스피 신용잔고"
+            subtitle="신용거래융자 · KOFIA"
+            color={COL.kospi}
+            quote={creditToQuote(data.credit.kospi)}
+            history={data.history.creditKospi}
+            decimals={1}
+            suffix="조"
+            defLow={null}
+            defHigh={null}
+          />
+          <MetricCard
+            id="creditKosdaq"
+            title="코스닥 신용잔고"
+            subtitle="신용거래융자 · KOFIA"
+            color={COL.kosdaq}
+            quote={creditToQuote(data.credit.kosdaq)}
+            history={data.history.creditKosdaq}
+            decimals={1}
+            suffix="조"
+            defLow={null}
+            defHigh={null}
+          />
         </div>
       )}
 
@@ -206,6 +230,12 @@ function adrToQuote(q: MarketSnapshot["adr"]["kospi"]): Quote | null {
   if (!q) return null;
   const change = q.prevClose !== null ? Math.round((q.value - q.prevClose) * 100) / 100 : null;
   return { value: q.value, change, changePct: null, note: q.prevClose !== null ? `전일 ${q.prevClose.toFixed(2)}` : undefined };
+}
+
+function creditToQuote(q: MarketSnapshot["credit"]["kospi"]): Quote | null {
+  if (!q) return null;
+  const change = q.prevValue !== null ? Math.round((q.value - q.prevValue) * 100) / 100 : null;
+  return { value: q.value, change, changePct: null, note: q.prevValue !== null ? `전일 ${q.prevValue.toFixed(1)}조` : undefined };
 }
 
 function MetricCard({

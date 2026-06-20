@@ -52,6 +52,18 @@ export interface AdrQuote {
   prevClose: number | null;
 }
 
+/**
+ * Korean margin-loan (신용거래융자) balance for one market, in 조원 (trillion KRW).
+ * Source: KOFIA FreeSIS 신용공여 잔고 추이 (service STATSCU0100000070), split into
+ * 유가증권(KOSPI) / 코스닥, settled at the KR close.
+ */
+export interface CreditQuote {
+  /** Latest balance, in 조원 (trillion won). */
+  value: number;
+  /** Previous trading day's balance (조원), for the delta. */
+  prevValue: number | null;
+}
+
 /** One point on a daily history line: timestamp (ms) + value. */
 export interface SeriesPoint {
   /** Epoch milliseconds (UTC) of the trading day. */
@@ -101,6 +113,9 @@ export interface MarketHistory {
   ndfi: SeriesPoint[];
   kospiAdr: SeriesPoint[];
   kosdaqAdr: SeriesPoint[];
+  /** 신용거래융자 잔고 history (조원), KOSPI / KOSDAQ. */
+  creditKospi: SeriesPoint[];
+  creditKosdaq: SeriesPoint[];
 }
 
 export interface MarketSnapshot {
@@ -118,6 +133,11 @@ export interface MarketSnapshot {
   adr: {
     kospi: AdrQuote | null;
     kosdaq: AdrQuote | null;
+  };
+  /** 신용거래융자 잔고 (margin-loan balance), 조원, KOSPI / KOSDAQ. */
+  credit: {
+    kospi: CreditQuote | null;
+    kosdaq: CreditQuote | null;
   };
   /** ~1 year of daily history for each metric (empty arrays if unavailable). */
   history: MarketHistory;

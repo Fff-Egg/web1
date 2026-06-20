@@ -5,6 +5,7 @@ import type { MarketSnapshot, MarketHistory, OHLC, Timeframe } from "../../share
 import { fetchFearGreed } from "./cnn.js";
 import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
 import { fetchAdr, fetchAdrHistory } from "./adr.js";
+import { fetchCreditSnapshot } from "./credit.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
 const CUSTOM_SYMBOL_KEY = "marketCustomSymbol";
@@ -17,6 +18,8 @@ const EMPTY_HISTORY: MarketHistory = {
   ndfi: [],
   kospiAdr: [],
   kosdaqAdr: [],
+  creditKospi: [],
+  creditKosdaq: [],
 };
 
 /** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
@@ -48,7 +51,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   const history: MarketHistory = { ...EMPTY_HISTORY };
   const customSymbol = await getCustomSymbol();
 
-  const [fg, breadth, custom, adr, adrHist] = await Promise.all([
+  const [fg, breadth, custom, adr, adrHist, credit] = await Promise.all([
     fetchFearGreed().catch((e: unknown) => {
       errors.push(`Fear & Greed 수집 실패: ${msg(e)}`);
       return null;
@@ -69,6 +72,10 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
       errors.push(`ADR 히스토리 수집 실패: ${msg(e)}`);
       return { kospi: [], kosdaq: [] };
     }),
+    fetchCreditSnapshot().catch((e: unknown) => {
+      errors.push(`신용잔고(KOFIA) 수집 실패: ${msg(e)}`);
+      return { kospi: null, kosdaq: null, history: { kospi: [], kosdaq: [] } };
+    }),
   ]);
 
   if (fg) history.fearGreed = fg.history;
@@ -79,6 +86,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   if (custom) history.custom = custom.history;
   history.kospiAdr = adrHist.kospi;
   history.kosdaqAdr = adrHist.kosdaq;
+  history.creditKospi = credit.history.kospi;
+  history.creditKosdaq = credit.history.kosdaq;
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -89,6 +98,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
       ndfi: breadth ? breadth.ndfi.quote : null,
     },
     adr,
+    credit: { kospi: credit.kospi, kosdaq: credit.kosdaq },
     history,
     errors,
   };
@@ -100,9 +110,12 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   const rows = await db.select().from(settings).where(eq(settings.key, SNAPSHOT_KEY)).limit(1);
   if (rows.length === 0) return null;
   const snap = rows[0].value as unknown as MarketSnapshot;
-  // Back-compat: snapshots stored before history/custom existed.
+  // Back-compat: snapshots stored before history/custom/credit existed.
   if (!snap.history) snap.history = { ...EMPTY_HISTORY };
   if (snap.history.custom === undefined) snap.history.custom = [];
+  if (snap.history.creditKospi === undefined) snap.history.creditKospi = [];
+  if (snap.history.creditKosdaq === undefined) snap.history.creditKosdaq = [];
+  if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
   return snap;
 }
 

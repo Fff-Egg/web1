@@ -544,6 +544,10 @@ const SAMPLE_MARKET: MarketSnapshot = {
     kospi: { value: 72.99, prevClose: 72.56 },
     kosdaq: { value: 68.18, prevClose: 68.76 },
   },
+  credit: {
+    kospi: { value: 12.4, prevValue: 12.2 },
+    kosdaq: { value: 9.8, prevValue: 9.9 },
+  },
   history: {
     fearGreed: sampleSeries(50, 18),
     custom: sampleSeries(18, 6),
@@ -551,6 +555,8 @@ const SAMPLE_MARKET: MarketSnapshot = {
     ndfi: sampleSeries(52, 24),
     kospiAdr: sampleSeries(95, 20),
     kosdaqAdr: sampleSeries(90, 22),
+    creditKospi: sampleSeries(12, 1.2),
+    creditKosdaq: sampleSeries(9.8, 1),
   },
   errors: [],
 };
