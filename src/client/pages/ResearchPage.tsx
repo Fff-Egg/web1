@@ -32,7 +32,7 @@ export function ResearchPage() {
         <div>
           <h2 className="text-lg font-semibold">증권사 리포트</h2>
           <p className="text-sm text-slate-500">
-            한경 컨센서스 · {data?.collectedAt ? `수집 ${fmtTime(data.collectedAt)}` : "하루 1회 자동 수집"}
+            네이버 증권 · {data?.collectedAt ? `수집 ${fmtTime(data.collectedAt)}` : "하루 1회 자동 수집"}
           </p>
         </div>
         <div className="flex items-center gap-2">

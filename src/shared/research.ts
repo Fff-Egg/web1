@@ -7,8 +7,8 @@
  * last 5 working days) or whose target price was just raised (TP상향종목).
  */
 
-/** Report categories (한경 컨센서스 분류, normalized). */
-export const REPORT_CATEGORIES = ["기업", "산업", "시황", "경제", "채권", "파생", "기타"] as const;
+/** Report categories (normalized). */
+export const REPORT_CATEGORIES = ["기업", "산업", "시황", "투자", "경제", "채권", "파생", "기타"] as const;
 export type ReportCategory = (typeof REPORT_CATEGORIES)[number];
 
 /** ≥ this many reports for a stock within the coverage window → 주요종목. */

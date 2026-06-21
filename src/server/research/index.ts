@@ -1,13 +1,15 @@
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, desc, eq, gte, isNotNull, lte } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { researchReports, settings } from "../db/schema.js";
 import type { ReportRow, ResearchList } from "../../shared/research.js";
 import { COVERAGE_WORKDAYS, MAJOR_THRESHOLD } from "../../shared/research.js";
-import { fetchReportsRange } from "./hankyung.js";
+import { fetchListRange, fetchDetail } from "./naver.js";
 
 const META_KEY = "researchMeta";
 /** Calendar days of history to fetch/keep — covers the 5-working-day window + TP context. */
-const LOOKBACK_DAYS = 14;
+const LOOKBACK_DAYS = 10;
+/** Cap on read-page (TP/opinion) fetches per run, so a backfill doesn't hammer Naver. */
+const MAX_DETAIL = 160;
 
 interface ResearchMeta {
   collectedAt: string | null;
@@ -15,27 +17,48 @@ interface ResearchMeta {
 }
 
 /**
- * Collect recent reports (last ~2 weeks) from 한경 컨센서스 and upsert them. The
- * range (not just today) keeps the coverage window + prior-TP context fresh and
- * self-heals gaps. Dedupe is by external_id (unique). Tolerant — failures are
- * recorded in the meta note, never thrown to the scheduler.
+ * Collect recent reports (last ~10 days) from 네이버 증권 and upsert them. The range
+ * (not just today) keeps the coverage window + prior-TP context fresh and self-heals
+ * gaps. Company reports are enriched with 목표주가/투자의견 from their read pages, but
+ * only the ones not already enriched in the DB (so detail fetches stay bounded to new
+ * reports). Tolerant — failures are recorded in the meta note, never thrown.
  */
 export async function collectResearch(): Promise<{ inserted: number; error: string | null }> {
   if (!hasDb) return { inserted: 0, error: "DB 미설정 (DATABASE_URL)" };
-  const today = new Date();
-  const from = new Date(today.getTime() - LOOKBACK_DAYS * 86_400_000);
+  const fromStr = ymd(new Date(Date.now() - LOOKBACK_DAYS * 86_400_000));
+  const toStr = ymd(new Date());
 
-  let parsed;
+  let rows;
   try {
-    parsed = await fetchReportsRange(ymd(from), ymd(today));
+    rows = await fetchListRange(fromStr, toStr);
   } catch (e) {
-    const error = `한경 컨센서스 수집 실패: ${e instanceof Error ? e.message : String(e)}`;
+    const error = `네이버 증권 리포트 수집 실패: ${e instanceof Error ? e.message : String(e)}`;
     await setMeta({ collectedAt: (await getMeta()).collectedAt, error });
     return { inserted: 0, error };
   }
 
+  // Enrich only company reports we haven't already enriched (TP already in DB).
+  const enrichedRows = await db
+    .select({ e: researchReports.externalId })
+    .from(researchReports)
+    .where(and(gte(researchReports.reportDate, fromStr), isNotNull(researchReports.targetPriceNum)));
+  const enriched = new Set(enrichedRows.map((r) => r.e));
+  const toEnrich = rows
+    .filter((r) => r.category === "기업" && r.detailUrl && !enriched.has(r.externalId))
+    .slice(0, MAX_DETAIL);
+  await mapLimit(toEnrich, 4, async (r) => {
+    try {
+      const d = await fetchDetail(r.detailUrl!);
+      r.targetPrice = d.targetPrice;
+      r.targetPriceNum = d.targetPriceNum;
+      r.opinion = d.opinion;
+    } catch {
+      /* leave TP/opinion empty for this report */
+    }
+  });
+
   let inserted = 0;
-  for (const r of parsed) {
+  for (const r of rows) {
     try {
       await db
         .insert(researchReports)
@@ -50,17 +73,18 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
           opinion: r.opinion,
           broker: r.broker,
           pdfUrl: r.pdfUrl,
-          source: "hankyung",
+          source: "naver",
           externalId: r.externalId,
         })
-        // Re-collected rows may gain a TP/opinion (intraday updates) — refresh those.
+        // Only overwrite TP/opinion/code when we have a fresh non-null value, so a
+        // re-collection that skipped enrichment doesn't wipe an earlier read-page result.
         .onDuplicateKeyUpdate({
           set: {
             title: r.title,
             category: r.category,
-            targetPrice: r.targetPrice,
-            targetPriceNum: r.targetPriceNum,
-            opinion: r.opinion,
+            ...(r.targetPriceNum != null ? { targetPrice: r.targetPrice, targetPriceNum: r.targetPriceNum } : {}),
+            ...(r.opinion != null ? { opinion: r.opinion } : {}),
+            ...(r.stockCode != null ? { stockCode: r.stockCode } : {}),
           },
         });
       inserted++;
@@ -71,9 +95,21 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
 
   await setMeta({
     collectedAt: new Date().toISOString(),
-    error: parsed.length === 0 ? "수집된 리포트가 없습니다 (페이지 구조 변경 가능)" : null,
+    error: rows.length === 0 ? "수집된 리포트가 없습니다 (페이지 구조 변경 가능)" : null,
   });
   return { inserted, error: null };
+}
+
+/** Run an async fn over items with bounded concurrency. */
+async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let i = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (i < items.length) {
+      const idx = i++;
+      await fn(items[idx]!);
+    }
+  });
+  await Promise.all(workers);
 }
 
 /**
