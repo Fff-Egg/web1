@@ -23,6 +23,10 @@ export interface ReportRow {
   category: string;
   /** 헤드라인(제목). */
   title: string;
+  /** 주요 내용 — 리포트 본문 LLM 한 줄 요약 (없으면 null). */
+  summary: string | null;
+  /** 현재 시가총액(원), 없으면 null. */
+  marketCap: number | null;
   stockName: string | null;
   stockCode: string | null;
   /** 적정가격(TP) 표시 문자열 (예: "90,000"). */

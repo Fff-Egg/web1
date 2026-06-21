@@ -121,12 +121,19 @@ function ReportCard({ r }: { r: Report }) {
         )}
       </div>
 
+      {r.summary && <p className="mt-1 text-xs leading-relaxed text-slate-500">{r.summary}</p>}
+
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">
         {r.broker && <span>{r.broker}</span>}
         {r.opinion && <span className="text-slate-600">{r.opinion}</span>}
         {r.targetPrice && (
           <span>
             목표가 <span className="font-medium text-slate-700">{r.targetPrice}</span>
+          </span>
+        )}
+        {r.marketCap != null && (
+          <span>
+            시총 <span className="font-medium text-slate-700">{fmtCap(r.marketCap)}</span>
           </span>
         )}
         {r.pdfUrl && (
@@ -187,6 +194,12 @@ function orderedCategories(data: ResearchList): string[] {
 
 function uniqNames(rows: Report[]): string[] {
   return [...new Set(rows.map((r) => r.stockName || r.title))];
+}
+
+/** 시총(원) → "513.5조" / "8,234억". */
+function fmtCap(won: number): string {
+  if (won >= 1e12) return `${(won / 1e12).toFixed(1)}조`;
+  return `${Math.round(won / 1e8).toLocaleString("ko-KR")}억`;
 }
 
 function fmtTime(iso: string): string {

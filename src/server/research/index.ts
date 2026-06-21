@@ -3,13 +3,35 @@ import { db, hasDb } from "../db/client.js";
 import { researchReports, settings } from "../db/schema.js";
 import type { ReportRow, ResearchList } from "../../shared/research.js";
 import { COVERAGE_WORKDAYS, MAJOR_THRESHOLD } from "../../shared/research.js";
-import { fetchListRange, fetchDetail } from "./naver.js";
+import { fetchListRange, fetchDetail, fetchMarketCap } from "./naver.js";
+import { complete, hasLLM, FILTER_MODEL } from "../analysis/anthropic.js";
 
 const META_KEY = "researchMeta";
 /** Calendar days of history to fetch/keep — covers the 5-working-day window + TP context. */
 const LOOKBACK_DAYS = 10;
-/** Cap on read-page (TP/opinion) fetches per run, so a backfill doesn't hammer Naver. */
+/** Cap on read-page (TP/opinion/summary) fetches per run, so a backfill doesn't hammer Naver. */
 const MAX_DETAIL = 160;
+/** Cap on 시총 fetches per run. */
+const MAX_MARKETCAP = 250;
+
+/** 주요 내용 — condense a report's read-page text to one line via the LLM (DeepSeek). */
+async function summarize(title: string, body: string): Promise<string | null> {
+  if (!hasLLM() || body.trim().length < 40) return null;
+  try {
+    const out = await complete({
+      model: FILTER_MODEL(),
+      system:
+        "너는 증권사 리포트를 핵심만 요약하는 한국어 어시스턴트다. 광고·메뉴·네비게이션·면책문구는 무시하고, " +
+        "리포트의 핵심 논지/근거/실적·전망을 1문장(최대 90자)으로 압축한다. 숫자·종목명은 보존하고 군더더기 없이 평서문으로 쓴다.",
+      user: `제목: ${title}\n\n페이지 내용:\n${body}`,
+      maxTokens: 200,
+    });
+    const s = out.replace(/\s+/g, " ").trim();
+    return s ? s.slice(0, 200) : null;
+  } catch {
+    return null;
+  }
+}
 
 interface ResearchMeta {
   collectedAt: string | null;
@@ -52,10 +74,27 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
       r.targetPrice = d.targetPrice;
       r.targetPriceNum = d.targetPriceNum;
       r.opinion = d.opinion;
+      r.summary = await summarize(r.title, d.bodyText); // 주요 내용 (LLM 한 줄)
     } catch {
-      /* leave TP/opinion empty for this report */
+      /* leave fields empty for this report */
     }
   });
+
+  // 현재 시총 — 최근(2일) 리포트의 종목만, capped + concurrency-limited (Naver 종목 페이지).
+  const capFrom = ymd(new Date(Date.now() - 2 * 86_400_000));
+  const codes = [
+    ...new Set(rows.filter((r) => r.stockCode && r.reportDate >= capFrom).map((r) => r.stockCode!)),
+  ].slice(0, MAX_MARKETCAP);
+  const capMap = new Map<string, number>();
+  await mapLimit(codes, 4, async (code) => {
+    try {
+      const mc = await fetchMarketCap(code);
+      if (mc) capMap.set(code, mc);
+    } catch {
+      /* skip a stock */
+    }
+  });
+  for (const r of rows) if (r.stockCode && capMap.has(r.stockCode)) r.marketCap = capMap.get(r.stockCode) ?? null;
 
   let inserted = 0;
   for (const r of rows) {
@@ -66,6 +105,8 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
           reportDate: r.reportDate,
           category: r.category,
           title: r.title,
+          summary: r.summary ?? null,
+          marketCap: r.marketCap ?? null,
           stockName: r.stockName,
           stockCode: r.stockCode,
           targetPrice: r.targetPrice,
@@ -85,6 +126,8 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
             ...(r.targetPriceNum != null ? { targetPrice: r.targetPrice, targetPriceNum: r.targetPriceNum } : {}),
             ...(r.opinion != null ? { opinion: r.opinion } : {}),
             ...(r.stockCode != null ? { stockCode: r.stockCode } : {}),
+            ...(r.summary != null ? { summary: r.summary } : {}),
+            ...(r.marketCap != null ? { marketCap: r.marketCap } : {}),
           },
         });
       inserted++;
@@ -171,6 +214,8 @@ export async function listResearch(dateInput?: string): Promise<ResearchList> {
       reportDate: r.reportDate,
       category: r.category,
       title: r.title,
+      summary: r.summary,
+      marketCap: r.marketCap,
       stockName: r.stockName,
       stockCode: r.stockCode,
       targetPrice: r.targetPrice,

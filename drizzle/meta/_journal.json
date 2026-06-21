@@ -64,6 +64,13 @@
       "when": 1781070000000,
       "tag": "0008_research_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1781080000000,
+      "tag": "0009_research_summary_marketcap",
+      "breakpoints": true
     }
   ]
 }

@@ -220,6 +220,10 @@ export const researchReports = mysqlTable(
     category: varchar("category", { length: 24 }).notNull(),
     /** 헤드라인(제목). */
     title: text("title").notNull(),
+    /** 주요 내용 — 리포트 본문 LLM 한 줄 요약. */
+    summary: text("summary"),
+    /** 현재 시가총액(원), 네이버 종목 페이지. */
+    marketCap: bigint("market_cap", { mode: "number" }),
     stockName: varchar("stock_name", { length: 120 }),
     stockCode: varchar("stock_code", { length: 16 }),
     /** 적정가격(TP), 원문 표시 문자열. */

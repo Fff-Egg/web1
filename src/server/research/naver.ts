@@ -47,6 +47,9 @@ export interface ParsedReport {
   externalId: string;
   /** Read-page URL — used to enrich company reports with TP/opinion (not stored). */
   detailUrl?: string;
+  /** Filled by the collector after enrichment. */
+  summary?: string | null;
+  marketCap?: number | null;
 }
 
 /**
@@ -76,8 +79,10 @@ export async function fetchListRange(fromDate: string, toDate: string, maxPagesP
   return out;
 }
 
-/** Fetch a report's read page and extract 목표주가(TP) + 투자의견. */
-export async function fetchDetail(url: string): Promise<{ targetPrice: string | null; targetPriceNum: number | null; opinion: string | null }> {
+/** Fetch a report's read page and extract 목표주가(TP) + 투자의견 + body text (for 요약). */
+export async function fetchDetail(
+  url: string,
+): Promise<{ targetPrice: string | null; targetPriceNum: number | null; opinion: string | null; bodyText: string }> {
   const html = await fetchHtml(url);
   // The read page shows 목표주가 / 투자의견 as labelled fields near the top.
   const tpRaw = html.match(/목표주가[\s\S]{0,120}?([\d][\d,]{2,})\s*원?/)?.[1] ?? null;
@@ -85,7 +90,40 @@ export async function fetchDetail(url: string): Promise<{ targetPrice: string | 
     html
       .match(/투자의견[\s\S]{0,120}?(적극매수|매수|매도|중립|보유|비중확대|비중축소|Strong\s*Buy|Trading\s*Buy|Outperform|Marketperform|Buy|Hold|Sell|Neutral)/i)?.[1]
       ?.trim() ?? null;
-  return { targetPrice: tpRaw ? stripTags(tpRaw) : null, targetPriceNum: parseNum(tpRaw ?? ""), opinion };
+  return {
+    targetPrice: tpRaw ? stripTags(tpRaw) : null,
+    targetPriceNum: parseNum(tpRaw ?? ""),
+    opinion,
+    bodyText: bodyTextOf(html),
+  };
+}
+
+/**
+ * Current 시가총액 for a stock (원), from the Naver 종목 main page (#_market_sum,
+ * e.g. "513조 4,567" 억원). Same host (finance.naver.com) as the report pages.
+ */
+export async function fetchMarketCap(code: string): Promise<number | null> {
+  const html = await fetchHtml(`${BASE}/item/main.naver?code=${code}`);
+  const raw = html.match(/id=["']_market_sum["'][^>]*>([\s\S]*?)<\/em>/i)?.[1];
+  return raw ? parseMarketCap(stripTags(raw)) : null;
+}
+
+/** "513조 4,567" / "8,234" (억원) → number(원). */
+function parseMarketCap(raw: string): number | null {
+  const t = raw.replace(/[,\s]/g, "");
+  const jo = t.match(/(\d+)조/);
+  if (jo) {
+    const eok = t.match(/조(\d+)/)?.[1];
+    return Number(jo[1]) * 1e12 + (eok ? Number(eok) * 1e8 : 0);
+  }
+  const eok = (t.match(/(\d+)억/) ?? t.match(/(\d+)/))?.[1];
+  return eok ? Number(eok) * 1e8 : null;
+}
+
+/** Visible text of a page body (scripts/styles dropped), capped for LLM input. */
+function bodyTextOf(html: string): string {
+  const body = html.match(/<body[\s\S]*?<\/body>/i)?.[0] ?? html;
+  return stripTags(body.replace(/<(script|style)[\s\S]*?<\/\1>/gi, " ")).slice(0, 2500);
 }
 
 // ─── list page parsing ──────────────────────────────────────────────
