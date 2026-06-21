@@ -5,6 +5,7 @@ import { feedRouter } from "./feed.js";
 import { digestRouter } from "./digest.js";
 import { manualRouter } from "./manual.js";
 import { marketRouter } from "./market.js";
+import { researchRouter } from "./research.js";
 
 export const appRouter = router({
   health: publicProcedure.query(() => ({ ok: true, ts: Date.now() })),
@@ -14,6 +15,7 @@ export const appRouter = router({
   digest: digestRouter,
   manual: manualRouter,
   market: marketRouter,
+  research: researchRouter,
 });
 
 export type AppRouter = typeof appRouter;

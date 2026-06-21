@@ -57,6 +57,13 @@
       "when": 1781060000000,
       "tag": "0007_filter_feedback",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1781070000000,
+      "tag": "0008_research_reports",
+      "breakpoints": true
     }
   ]
 }

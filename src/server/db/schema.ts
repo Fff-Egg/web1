@@ -205,6 +205,44 @@ export const filterFeedback = mysqlTable(
 );
 
 /**
+ * research_reports — daily broker research reports (증권사 리포트), collected from
+ * 한경 컨센서스 (consensus.hankyung.com). One row per report. `external_id` (the
+ * report's PDF idx, or a date|broker|title hash) is unique to dedupe re-collection.
+ * Coverage counting + TP-상향 tier-up are computed at read time from these rows.
+ */
+export const researchReports = mysqlTable(
+  "research_reports",
+  {
+    id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+    /** 작성일, YYYY-MM-DD. */
+    reportDate: varchar("report_date", { length: 10 }).notNull(),
+    /** 분류: 기업/산업/시황/경제/채권/파생/기타. */
+    category: varchar("category", { length: 24 }).notNull(),
+    /** 헤드라인(제목). */
+    title: text("title").notNull(),
+    stockName: varchar("stock_name", { length: 120 }),
+    stockCode: varchar("stock_code", { length: 16 }),
+    /** 적정가격(TP), 원문 표시 문자열. */
+    targetPrice: varchar("target_price", { length: 48 }),
+    /** 적정가격 숫자(원) — TP 상향 판정용. */
+    targetPriceNum: bigint("target_price_num", { mode: "number" }),
+    /** 투자의견. */
+    opinion: varchar("opinion", { length: 48 }),
+    /** 증권사/제공출처. */
+    broker: varchar("broker", { length: 120 }),
+    pdfUrl: varchar("pdf_url", { length: 1024 }),
+    source: varchar("source", { length: 16 }).notNull().default("hankyung"),
+    externalId: varchar("external_id", { length: 200 }).notNull(),
+    createdAt: timestamp("created_at").notNull().defaultNow(),
+  },
+  (t) => ({
+    externalUnq: uniqueIndex("research_external_unq").on(t.externalId),
+    dateIdx: index("research_date_idx").on(t.reportDate),
+    codeIdx: index("research_code_idx").on(t.stockCode),
+  }),
+);
+
+/**
  * settings — singleton-ish key/value config edited from the dashboard.
  * The analysis instructions ("지침") live here under key="analysis" so the
  * user can change how articles are analyzed without touching code.
@@ -269,6 +307,8 @@ export type Digest = typeof digests.$inferSelect;
 export type NewDigest = typeof digests.$inferInsert;
 export type FilterFeedback = typeof filterFeedback.$inferSelect;
 export type NewFilterFeedback = typeof filterFeedback.$inferInsert;
+export type ResearchReport = typeof researchReports.$inferSelect;
+export type NewResearchReport = typeof researchReports.$inferInsert;
 
 /**
  * Cumulative "learned memo" distilled from feedback, stored under settings
