@@ -14,6 +14,8 @@
  * the parser targets Naver's known markup and runs live on Railway (outbound open).
  */
 
+import type { ParsedReport } from "./types.js";
+
 const BASE = "https://finance.naver.com";
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36";
@@ -24,33 +26,11 @@ interface ListDef {
   /** Whether the list has a 종목명 column (company reports). */
   stock: boolean;
 }
+// 기업·산업 리포트만 수집.
 const LISTS: ListDef[] = [
   { path: "/research/company_list.naver", category: "기업", stock: true },
   { path: "/research/industry_list.naver", category: "산업", stock: false },
-  { path: "/research/market_info_list.naver", category: "시황", stock: false },
-  { path: "/research/invest_list.naver", category: "투자", stock: false },
-  { path: "/research/economy_list.naver", category: "경제", stock: false },
-  { path: "/research/debenture_list.naver", category: "채권", stock: false },
 ];
-
-export interface ParsedReport {
-  reportDate: string;
-  category: string;
-  title: string;
-  stockName: string | null;
-  stockCode: string | null;
-  targetPrice: string | null;
-  targetPriceNum: number | null;
-  opinion: string | null;
-  broker: string | null;
-  pdfUrl: string | null;
-  externalId: string;
-  /** Read-page URL — used to enrich company reports with TP/opinion (not stored). */
-  detailUrl?: string;
-  /** Filled by the collector after enrichment. */
-  summary?: string | null;
-  marketCap?: number | null;
-}
 
 /**
  * Fetch list rows (no TP yet) across all categories with 작성일 in [fromDate, toDate]
@@ -164,6 +144,7 @@ function parseListPage(html: string, def: ListDef): ParsedReport[] {
     const stockName = def.stock ? blankToNull(stripTags(stockCell)) : null;
 
     out.push({
+      source: "naver",
       reportDate,
       category: def.category,
       title,

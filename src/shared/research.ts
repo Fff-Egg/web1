@@ -18,6 +18,8 @@ export const COVERAGE_WORKDAYS = 5;
 
 export interface ReportRow {
   id: number;
+  /** 출처: "naver" | "hankyung". */
+  source: string;
   /** 작성일, YYYY-MM-DD. */
   reportDate: string;
   category: string;

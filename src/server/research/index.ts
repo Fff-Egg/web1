@@ -1,10 +1,15 @@
-import { and, desc, eq, gte, isNotNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNotNull, lte } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { researchReports, settings } from "../db/schema.js";
 import type { ReportRow, ResearchList } from "../../shared/research.js";
 import { COVERAGE_WORKDAYS, MAJOR_THRESHOLD } from "../../shared/research.js";
 import { fetchListRange, fetchDetail, fetchMarketCap } from "./naver.js";
+import { fetchHankyung } from "./hankyung.js";
+import { ALLOWED_CATEGORIES, type ParsedReport } from "./types.js";
 import { complete, hasLLM, FILTER_MODEL } from "../analysis/anthropic.js";
+
+const ALLOWED = [...ALLOWED_CATEGORIES];
+const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 const META_KEY = "researchMeta";
 /** Calendar days of history to fetch/keep — covers the 5-working-day window + TP context. */
@@ -50,23 +55,42 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
   const fromStr = ymd(new Date(Date.now() - LOOKBACK_DAYS * 86_400_000));
   const toStr = ymd(new Date());
 
-  let rows;
+  // 네이버 + 한경 둘 다에서 수집, 기업·산업만.
+  let naverRows: ParsedReport[] = [];
+  let hkRows: ParsedReport[] = [];
+  const errs: string[] = [];
   try {
-    rows = await fetchListRange(fromStr, toStr);
+    naverRows = await fetchListRange(fromStr, toStr);
   } catch (e) {
-    const error = `네이버 증권 리포트 수집 실패: ${e instanceof Error ? e.message : String(e)}`;
+    errs.push(`네이버: ${msg(e)}`);
+  }
+  try {
+    hkRows = await fetchHankyung(fromStr, toStr);
+  } catch (e) {
+    errs.push(`한경: ${msg(e)}`);
+  }
+  const rows = [...naverRows, ...hkRows].filter((r) => ALLOWED_CATEGORIES.has(r.category));
+  if (rows.length === 0) {
+    const error = errs.length
+      ? `리포트 수집 실패 — ${errs.join(" / ")}`
+      : "수집된 리포트가 없습니다 (페이지 구조 변경 가능)";
     await setMeta({ collectedAt: (await getMeta()).collectedAt, error });
     return { inserted: 0, error };
   }
 
-  // Enrich only company reports we haven't already enriched (TP already in DB).
+  // 한경 행에 종목코드가 없으면 네이버의 (종목명→코드)로 채워 출처 간 종목 키를 통일.
+  const nameToCode = new Map<string, string>();
+  for (const r of rows) if (r.stockName && r.stockCode) nameToCode.set(r.stockName, r.stockCode);
+  for (const r of rows) if (!r.stockCode && r.stockName && nameToCode.has(r.stockName)) r.stockCode = nameToCode.get(r.stockName) ?? null;
+
+  // 네이버 종목 리포트만 read 페이지로 TP/의견/요약 보강(한경은 목록에 TP/의견이 있음).
   const enrichedRows = await db
     .select({ e: researchReports.externalId })
     .from(researchReports)
     .where(and(gte(researchReports.reportDate, fromStr), isNotNull(researchReports.targetPriceNum)));
   const enriched = new Set(enrichedRows.map((r) => r.e));
   const toEnrich = rows
-    .filter((r) => r.category === "기업" && r.detailUrl && !enriched.has(r.externalId))
+    .filter((r) => r.source === "naver" && r.category === "기업" && r.detailUrl && !enriched.has(r.externalId))
     .slice(0, MAX_DETAIL);
   await mapLimit(toEnrich, 4, async (r) => {
     try {
@@ -114,7 +138,7 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
           opinion: r.opinion,
           broker: r.broker,
           pdfUrl: r.pdfUrl,
-          source: "naver",
+          source: r.source,
           externalId: r.externalId,
         })
         // Only overwrite TP/opinion/code when we have a fresh non-null value, so a
@@ -138,9 +162,9 @@ export async function collectResearch(): Promise<{ inserted: number; error: stri
 
   await setMeta({
     collectedAt: new Date().toISOString(),
-    error: rows.length === 0 ? "수집된 리포트가 없습니다 (페이지 구조 변경 가능)" : null,
+    error: errs.length ? `일부 출처 실패 — ${errs.join(" / ")}` : null,
   });
-  return { inserted, error: null };
+  return { inserted, error: errs.length ? errs.join(" / ") : null };
 }
 
 /** Run an async fn over items with bounded concurrency. */
@@ -170,6 +194,7 @@ export async function listResearch(dateInput?: string): Promise<ResearchList> {
   const dateRows = await db
     .selectDistinct({ d: researchReports.reportDate })
     .from(researchReports)
+    .where(inArray(researchReports.category, ALLOWED))
     .orderBy(desc(researchReports.reportDate))
     .limit(90);
   const dates = dateRows.map((r) => r.d);
@@ -180,10 +205,12 @@ export async function listResearch(dateInput?: string): Promise<ResearchList> {
 
   // Load a window of rows (selected date back LOOKBACK_DAYS) for coverage + TP context.
   const fromDate = ymd(new Date(parseDate(date).getTime() - LOOKBACK_DAYS * 86_400_000));
-  const rows = await db
-    .select()
-    .from(researchReports)
-    .where(and(gte(researchReports.reportDate, fromDate), lte(researchReports.reportDate, date)));
+  const rows = (
+    await db
+      .select()
+      .from(researchReports)
+      .where(and(gte(researchReports.reportDate, fromDate), lte(researchReports.reportDate, date)))
+  ).filter((r) => ALLOWED_CATEGORIES.has(r.category));
 
   const keyOf = (r: { stockCode: string | null; stockName: string | null }): string =>
     (r.stockCode || r.stockName || "").trim();
@@ -192,16 +219,21 @@ export async function listResearch(dateInput?: string): Promise<ResearchList> {
   const windowDates = new Set(
     [...new Set(rows.map((r) => r.reportDate))].sort().reverse().slice(0, COVERAGE_WORKDAYS),
   );
-  const coverage = new Map<string, number>();
+  // Count distinct (증권사 + 작성일) per stock so the same report from two sources
+  // (네이버 + 한경) isn't double-counted.
+  const coverage = new Map<string, Set<string>>();
   for (const r of rows) {
     const k = keyOf(r);
-    if (k && windowDates.has(r.reportDate)) coverage.set(k, (coverage.get(k) ?? 0) + 1);
+    if (!k || !windowDates.has(r.reportDate)) continue;
+    let set = coverage.get(k);
+    if (!set) coverage.set(k, (set = new Set()));
+    set.add(`${r.broker ?? ""}|${r.reportDate}`);
   }
 
   const todays = rows.filter((r) => r.reportDate === date);
   const reports: ReportRow[] = todays.map((r) => {
     const k = keyOf(r);
-    const coverageCount = k ? coverage.get(k) ?? 0 : 0;
+    const coverageCount = k ? coverage.get(k)?.size ?? 0 : 0;
     let tpRaised = false;
     if (r.targetPriceNum && k && r.broker) {
       const priors = rows
@@ -211,6 +243,7 @@ export async function listResearch(dateInput?: string): Promise<ResearchList> {
     }
     return {
       id: r.id,
+      source: r.source,
       reportDate: r.reportDate,
       category: r.category,
       title: r.title,

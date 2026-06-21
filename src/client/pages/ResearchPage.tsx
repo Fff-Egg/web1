@@ -32,7 +32,7 @@ export function ResearchPage() {
         <div>
           <h2 className="text-lg font-semibold">증권사 리포트</h2>
           <p className="text-sm text-slate-500">
-            네이버 증권 · {data?.collectedAt ? `수집 ${fmtTime(data.collectedAt)}` : "하루 1회 자동 수집"}
+            네이버 + 한경 컨센서스 · 기업·산업 · {data?.collectedAt ? `수집 ${fmtTime(data.collectedAt)}` : "하루 1회 자동 수집"}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -98,6 +98,9 @@ function ReportCard({ r }: { r: Report }) {
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3">
       <div className="flex flex-wrap items-center gap-1.5">
+        <Badge className={r.source === "hankyung" ? "bg-emerald-100 text-emerald-700" : "bg-sky-100 text-sky-700"}>
+          {sourceLabel(r.source)}
+        </Badge>
         {r.tpRaised && <Badge className="bg-rose-100 text-rose-700">TP상향</Badge>}
         {r.isMajor && <Badge className="bg-indigo-100 text-indigo-700">주요 {r.coverageCount}회</Badge>}
         {!r.isMajor && r.coverageCount > 1 && (
@@ -194,6 +197,10 @@ function orderedCategories(data: ResearchList): string[] {
 
 function uniqNames(rows: Report[]): string[] {
   return [...new Set(rows.map((r) => r.stockName || r.title))];
+}
+
+function sourceLabel(s: string): string {
+  return s === "hankyung" ? "한경" : s === "naver" ? "네이버" : s;
 }
 
 /** 시총(원) → "513.5조" / "8,234억". */
