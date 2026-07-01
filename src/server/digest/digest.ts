@@ -149,6 +149,16 @@ function safeUrl(u: string | null | undefined): string | null {
 }
 
 /**
+ * Where a [N] footnote should jump on CLICK: straight to the original (new tab).
+ * Telegram has no external original → the Feed deep-link (?article=id, opens 보관함).
+ * null = no link available, so the citation falls back to the 참조 원문 list (#ref-N).
+ */
+function citeHref(it: DigestItem): string | null {
+  if (it.provider === "telegram") return `?article=${it.id}`;
+  return safeUrl(it.url);
+}
+
+/**
  * Parse the inside of a citation bracket into in-range article numbers.
  * Supports "3", grouped "3, 5" / "3,5", and ranges "3-5" / "3–5".
  * Out-of-range and non-numeric segments are dropped; order/dedup preserved.
@@ -192,7 +202,14 @@ function linkifyRefs(md: string, rows: DigestItem[]): string {
         const tip = escHtml(`${it.title ?? "(제목없음)"} — 출처: ${it.source}`);
         const idAttr = seen.has(n) ? "" : ` id="cite-${n}"`;
         seen.add(n);
-        return `<sup class="cite"${idAttr} data-tip="${tip}"><a href="#ref-${n}">[${n}]</a></sup>`;
+        // Click the [N] to open the original directly in a new tab (hover still peeks
+        // via data-tip). Only when there's no link at all do we fall back to the
+        // 참조 원문 list (#ref-N), which the client intercepts to scroll down.
+        const href = citeHref(it);
+        const linkAttrs = href
+          ? `href="${escHtml(href)}" target="_blank" rel="noopener noreferrer"`
+          : `href="#ref-${n}"`;
+        return `<sup class="cite"${idAttr} data-tip="${tip}"><a ${linkAttrs}>[${n}]</a></sup>`;
       })
       .join("");
   });
@@ -437,7 +454,7 @@ async function synthesizeFromFeed(
     "반드시 위 입력의 글 번호만 대괄호 숫자로 단다(예: [3]). 한 글을 여러 번 언급해도 같은 번호를 쓴다. " +
     "'나머지 한 줄 정리'·'기타' 같은 목록을 포함해 글을 가리키는 모든 항목에 번호를 빠짐없이 단다(누락 금지). " +
     "한 줄에서 여러 글을 묶을 때는 글마다 번호를 단다: [3][5] 또는 [3, 5] 형식(범위 [3-5]도 가능). " +
-    "시스템이 이 번호를 윗첨자 각주로 바꿔 하단 '참조 원문' 목록(원문 링크 포함)으로 연결한다. " +
+    "시스템이 이 번호를 윗첨자 각주로 바꿔 클릭 시 원문(새 탭)으로 바로 연결하고, 하단 '참조 원문' 목록에도 링크를 남긴다. " +
     "'[제목](링크)' 형태가 떠올라도 절대 쓰지 말고 번호만 남겨라.";
   const system =
     "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
