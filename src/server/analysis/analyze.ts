@@ -66,6 +66,7 @@ function threadsBlock(threads: ThreadBrief[]): string {
   return (
     `\n[논지 지도 — 내가 추적 중인 투자 논지(스레드)]\n${list}\n` +
     `이 글이 위 논지 중 하나라도 강화/약화/반증하면 signals에 적는다(관련 없으면 빈 배열). ` +
+    `관련이 분명한 스레드만 최소한으로 적고, note는 30자 이내 한 줄로 짧게(요약 먼저, 신호는 간결히). ` +
     `어느 스레드에도 안 맞지만 새 논지로 추적할 가치가 있으면 newThread로 제안한다(아니면 null).\n` +
     `- verdict: 강화 | 약화 | 반증 | 중립 중 하나.\n` +
     `- tier(증거 강도): 확정(사실) | 경영진주장 | 추론 | 추측 중 하나.\n`
@@ -74,8 +75,8 @@ function threadsBlock(threads: ThreadBrief[]): string {
 
 /** Extra JSON fields appended to the 1st-pass contract when threads exist. */
 const THESIS_OUTPUT = `,
-  "signals": [{"threadId": 위 목록의 id 숫자, "verdict": "강화|약화|반증|중립", "tier": "확정|경영진주장|추론|추측", "note": "한 줄 근거(한국어)"}],
-  "newThread": null 또는 {"name": "새 논지 이름", "thesis": "한 줄 명제", "verdict": "강화|약화|반증|중립", "tier": "확정|경영진주장|추론|추측", "note": "한 줄 근거"}`;
+  "signals": [{"threadId": 위 목록의 id 숫자, "verdict": "강화|약화|반증|중립", "tier": "확정|경영진주장|추론|추측", "note": "30자 이내 근거(한국어)"}],
+  "newThread": null 또는 {"name": "새 논지 이름", "thesis": "한 줄 명제", "verdict": "강화|약화|반증|중립", "tier": "확정|경영진주장|추론|추측", "note": "30자 이내 근거"}`;
 
 function parseThesis(parsed: Record<string, unknown> | null): ExtractedThesis | undefined {
   if (!parsed) return undefined;
@@ -105,6 +106,32 @@ function parseThesis(parsed: Record<string, unknown> | null): ExtractedThesis | 
   }
   if (signals.length === 0 && !newThread) return undefined;
   return { signals, newThread };
+}
+
+/**
+ * Regex salvage for a truncated/unparseable filter answer. The thesis fields can
+ * push the output past the token cap and cut the JSON mid-array — JSON.parse then
+ * fails and we'd lose the summary too. Recover the three scalar fields (they're
+ * emitted first) so a broken signals tail never costs us the summary.
+ */
+function salvageClassification(text: string): Record<string, unknown> | null {
+  const rel = /"relevant"\s*:\s*(true|false)/.exec(text);
+  const imp = /"important"\s*:\s*(true|false)/.exec(text);
+  const sum = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (!rel && !imp && !sum) return null;
+  let summary: string | undefined;
+  if (sum) {
+    try {
+      summary = JSON.parse(`"${sum[1]}"`) as string; // unescape \n, \" …
+    } catch {
+      summary = sum[1];
+    }
+  }
+  return {
+    ...(rel ? { relevant: rel[1] === "true" } : {}),
+    ...(imp ? { important: imp[1] === "true" } : {}),
+    ...(summary !== undefined ? { summary } : {}),
+  };
 }
 
 /**
@@ -158,9 +185,17 @@ export async function filterRelevant(
     model: cfg.filterModel || FILTER_MODEL(),
     system,
     user,
-    maxTokens: 600,
+    // The thesis fields (signals[] + newThread) can add several hundred tokens on
+    // top of the summary — 600 truncated the JSON and silently dropped summaries.
+    maxTokens: Number(process.env.FILTER_MAX_TOKENS ?? (threads.length > 0 ? 1400 : 600)),
   });
-  const parsed = parseJsonLoose<Record<string, unknown>>(text);
+  let parsed = parseJsonLoose<Record<string, unknown>>(text);
+  if (!parsed) {
+    parsed = salvageClassification(text);
+    if (parsed) {
+      console.warn(`[analyze] filter JSON broken for article ${article.id} — salvaged scalar fields.`);
+    }
+  }
   let summary = typeof parsed?.summary === "string" ? (parsed.summary as string) : "";
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
   const relevant = forceAll || !parsed || parsed.relevant !== false;
