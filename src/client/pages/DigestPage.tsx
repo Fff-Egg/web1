@@ -251,16 +251,63 @@ export function DigestPage() {
   const isCombined = (d: DigestSummary) =>
     (d.meta as { source?: string } | null | undefined)?.source === "digests";
   // Auto digests run twice a day; legacy autos (no slot in meta) were the boundary (evening) run.
-  const slotLabel = (d: DigestSummary) =>
-    (d.meta as { slot?: string } | null | undefined)?.slot === "midday" ? midH : evH;
-  const optLabel = (d: DigestSummary) =>
-    `${d.title ?? d.periodStart ?? ""}` +
-    `${isAuto(d) ? ` · ${slotLabel(d)}` : ""}` +
-    `${d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd ? ` (${d.periodStart}~${d.periodEnd})` : ""}` +
-    `${isCombined(d) ? " · 종합" : ""}`;
-  const autos = (list.data ?? []).filter(isAuto);
-  const manuals = (list.data ?? []).filter((d) => !isAuto(d));
-  const selected = list.data?.find((d) => d.id === selectedId);
+  const isMidday = (d: DigestSummary) => (d.meta as { slot?: string } | null | undefined)?.slot === "midday";
+
+  // ── Date navigator (◀ 날짜 ▶ + that day's slot chips) — replaces the one huge
+  // dropdown, which stopped scaling once 2 autos/day piled up. A digest lives on
+  // its label date (periodEnd); ranged manuals anchor on their end date.
+  const dateOf = (d: DigestSummary): string =>
+    d.periodEnd ??
+    d.periodStart ??
+    new Date(d.createdAt).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  const digestDates = useMemo(
+    () => [...new Set((list.data ?? []).map(dateOf))].sort((a, b) => (a < b ? 1 : -1)),
+    [list.data],
+  );
+  const [viewDate, setViewDate] = useState<string>("");
+  // Default to the newest date once the list loads.
+  useEffect(() => {
+    if (!viewDate && digestDates.length > 0) setViewDate(digestDates[0]);
+  }, [digestDates, viewDate]);
+  // When the selection changes from elsewhere (new digest generated, 지금 실행),
+  // follow it to its date — but only once per id, so browsing isn't fought.
+  const syncedIdRef = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    if (selectedId === undefined || syncedIdRef.current === selectedId) return;
+    syncedIdRef.current = selectedId;
+    const sel = list.data?.find((d) => d.id === selectedId);
+    if (sel) setViewDate(dateOf(sel));
+  }, [selectedId, list.data]);
+
+  const digestsOn = useMemo(() => {
+    const rank = (d: DigestSummary) => (isAuto(d) ? (isMidday(d) ? 0 : 1) : 2);
+    return (list.data ?? [])
+      .filter((d) => dateOf(d) === viewDate)
+      .sort((a, b) => rank(a) - rank(b) || +new Date(a.createdAt) - +new Date(b.createdAt));
+  }, [list.data, viewDate]);
+
+  /** Jump to a date and auto-open its most recent digest (1-click browsing). */
+  const gotoDate = (date: string) => {
+    setViewDate(date);
+    const on = (list.data ?? []).filter((d) => dateOf(d) === date);
+    if (on.length > 0) {
+      const best = on.reduce((a, b) => (+new Date(a.createdAt) >= +new Date(b.createdAt) ? a : b));
+      syncedIdRef.current = best.id; // already on this date — don't re-snap
+      setSelectedId(best.id);
+    }
+  };
+  // digestDates is newest-first: older = first entry before viewDate, newer = last after.
+  const olderDate = digestDates.find((d) => d < viewDate);
+  const newerDate = [...digestDates].reverse().find((d) => d > viewDate);
+
+  const chipLabel = (d: DigestSummary) => {
+    if (isAuto(d)) return isMidday(d) ? `☀️ 낮분 ${midH}` : `🌙 저녁분 ${evH}`;
+    const range =
+      d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd
+        ? ` (${d.periodStart.slice(5)}~${d.periodEnd.slice(5)})`
+        : "";
+    return `✍️ ${d.title ?? "수동"}${range}${isCombined(d) ? " · 종합" : ""}`;
+  };
 
   // Show the ACTUAL time window the picked dates resolve to (date D = [(D-1) evH,
   // D evH)), so the boundary-hour mapping is obvious instead of having to pick
@@ -447,50 +494,77 @@ export function DigestPage() {
         </div>
       </section>
 
-      {/* Saved digests — auto (boundary/midday) and manual grouped separately */}
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="text-sm text-slate-500">저장된 다이제스트:</span>
-        <select
-          value={selectedId ?? ""}
-          onChange={(e) => setSelectedId(e.target.value ? Number(e.target.value) : undefined)}
-          className="min-w-0 max-w-full truncate rounded border border-slate-300 px-2 py-1 text-sm"
-        >
-          {(!list.data || list.data.length === 0) && <option value="">(없음)</option>}
-          {autos.length > 0 && (
-            <optgroup label={`🤖 자동 (${midH}·${evH})`}>
-              {autos.map((d) => (
-                <option key={d.id} value={d.id}>{optLabel(d)}</option>
-              ))}
-            </optgroup>
+      {/* Saved digests — date navigator: ◀ 날짜 ▶ + that day's slot chips. */}
+      <section className="rounded-lg border border-slate-200 bg-white p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-sm font-semibold text-slate-600">저장된 다이제스트</span>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => olderDate && gotoDate(olderDate)}
+              disabled={!olderDate}
+              title="이전 날짜"
+              className="rounded border border-slate-300 px-2 py-1 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-30"
+            >
+              ◀
+            </button>
+            <input
+              type="date"
+              value={viewDate}
+              onChange={(e) => e.target.value && gotoDate(e.target.value)}
+              className="rounded border border-slate-300 px-2 py-1 text-sm"
+            />
+            <button
+              onClick={() => newerDate && gotoDate(newerDate)}
+              disabled={!newerDate}
+              title="다음 날짜"
+              className="rounded border border-slate-300 px-2 py-1 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-30"
+            >
+              ▶
+            </button>
+            {digestDates[0] && viewDate !== digestDates[0] && (
+              <button
+                onClick={() => gotoDate(digestDates[0])}
+                className="ml-1 rounded border border-slate-300 px-2 py-1 text-xs font-medium text-slate-600 hover:bg-slate-50"
+              >
+                최신으로
+              </button>
+            )}
+          </div>
+          <span className="ml-auto text-xs text-slate-400">총 {list.data?.length ?? 0}건</span>
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          {digestsOn.length === 0 && (
+            <span className="text-sm text-slate-400">
+              이 날짜의 다이제스트가 없습니다 — ◀ ▶ 로 이동하세요.
+            </span>
           )}
-          {manuals.length > 0 && (
-            <optgroup label="✍️ 수동">
-              {manuals.map((d) => (
-                <option key={d.id} value={d.id}>{optLabel(d)}</option>
-              ))}
-            </optgroup>
+          {digestsOn.map((d) => (
+            <button
+              key={d.id}
+              onClick={() => {
+                syncedIdRef.current = d.id;
+                setSelectedId(d.id);
+              }}
+              className={
+                "rounded-full border px-3 py-1 text-sm " +
+                (selectedId === d.id
+                  ? "border-slate-900 bg-slate-900 font-medium text-white"
+                  : "border-slate-300 bg-white text-slate-700 hover:bg-slate-50")
+              }
+            >
+              {chipLabel(d)}
+            </button>
+          ))}
+          {selectedId !== undefined && (
+            <button
+              onClick={() => remove.mutate(selectedId)}
+              className="ml-auto shrink-0 text-xs text-slate-400 hover:text-red-600"
+            >
+              🗑 휴지통으로
+            </button>
           )}
-        </select>
-        {selected && (
-          <span
-            className={
-              "rounded-full px-2 py-0.5 text-xs font-medium " +
-              (isAuto(selected) ? "bg-indigo-100 text-indigo-700" : "bg-slate-100 text-slate-600")
-            }
-          >
-            {isAuto(selected) ? `자동 · ${slotLabel(selected)}` : "수동"}
-            {isCombined(selected) ? " · 저장본 종합" : ""}
-          </span>
-        )}
-        {selectedId !== undefined && (
-          <button
-            onClick={() => remove.mutate(selectedId)}
-            className="text-xs text-slate-400 hover:text-red-600"
-          >
-            🗑 휴지통으로
-          </button>
-        )}
-      </div>
+        </div>
+      </section>
 
       {list.data && list.data.length === 0 && (
         <p className="text-slate-500">
