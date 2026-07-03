@@ -38,8 +38,8 @@ export interface LiquiditySnapshot {
   history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[] };
 }
 
-/** Fetch one FRED series as a plain single-column CSV → date(ms) → value ($T). */
-async function fetchSeries(id: SeriesId, cosd: string, timeoutMs: number): Promise<Map<number, number>> {
+/** One FRED series → plain single-column CSV → date(ms) → value ($T). One attempt. */
+async function fetchSeriesOnce(id: SeriesId, cosd: string, timeoutMs: number): Promise<Map<number, number>> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let csv: string;
@@ -48,12 +48,18 @@ async function fetchSeries(id: SeriesId, cosd: string, timeoutMs: number): Promi
       headers: { "User-Agent": UA, Accept: "text/csv,*/*" },
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error(`FRED ${id} HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     csv = await res.text();
+  } catch (e) {
+    // Normalize the AbortController's terminal error into a clear timeout note.
+    if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
+      throw new Error(`타임아웃(${Math.round(timeoutMs / 1000)}초 무응답)`);
+    }
+    throw e;
   } finally {
     clearTimeout(t);
   }
-  if (csv.startsWith("PK")) throw new Error(`FRED ${id}: 예상치 못한 ZIP 응답 (단일 시리즈 요청 필요)`);
+  if (csv.startsWith("PK")) throw new Error("예상치 못한 ZIP 응답");
 
   const out = new Map<number, number>();
   const lines = csv.trim().split(/\r?\n/);
@@ -69,17 +75,40 @@ async function fetchSeries(id: SeriesId, cosd: string, timeoutMs: number): Promi
   return out;
 }
 
-export async function fetchLiquidity(timeoutMs = 20_000): Promise<LiquiditySnapshot> {
+/** Fetch one series with a single retry (cold connections / transient drops). */
+async function fetchSeries(id: SeriesId, cosd: string, timeoutMs: number): Promise<Map<number, number>> {
+  try {
+    return await fetchSeriesOnce(id, cosd, timeoutMs);
+  } catch {
+    return fetchSeriesOnce(id, cosd, timeoutMs);
+  }
+}
+
+export async function fetchLiquidity(timeoutMs = 12_000): Promise<LiquiditySnapshot> {
   const cosd = isoDate(new Date(Date.now() - 400 * 24 * 60 * 60_000));
 
-  // WALCL + WTREGEN are required (net can't be computed without them); RRP and
-  // WRESBAL are optional (a missing one just leaves reserves/rrp null or RRP=0).
-  const [walcl, tga, rrpMap, wresbal] = await Promise.all([
+  // All four settled independently, so one dead series yields a precise note
+  // instead of a single opaque "aborted". WALCL + WTREGEN are required.
+  const settled = await Promise.allSettled([
     fetchSeries("WALCL", cosd, timeoutMs),
     fetchSeries("WTREGEN", cosd, timeoutMs),
-    fetchSeries("RRPONTSYD", cosd, timeoutMs).catch(() => new Map<number, number>()),
-    fetchSeries("WRESBAL", cosd, timeoutMs).catch(() => new Map<number, number>()),
+    fetchSeries("RRPONTSYD", cosd, timeoutMs),
+    fetchSeries("WRESBAL", cosd, timeoutMs),
   ]);
+  const fails: string[] = [];
+  const take = (i: number, id: SeriesId): Map<number, number> => {
+    const r = settled[i];
+    if (r.status === "fulfilled") return r.value;
+    fails.push(`${id} ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
+    return new Map<number, number>();
+  };
+  const walcl = take(0, "WALCL");
+  const tga = take(1, "WTREGEN");
+  const rrpMap = take(2, "RRPONTSYD");
+  const wresbal = take(3, "WRESBAL");
+  if (walcl.size === 0 || tga.size === 0) {
+    throw new Error(fails.length ? fails.join(" · ") : "WALCL/TGA 응답이 비어 있음");
+  }
 
   // RRP daily → sorted ascending, for last-known-on-or-before lookups.
   const rrpPts = [...rrpMap.entries()].sort((a, b) => a[0] - b[0]);
