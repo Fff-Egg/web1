@@ -42,12 +42,17 @@ export interface LiquiditySnapshot {
   history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[] };
 }
 
-/** Primary: TradingView chart WS (`FRED:<id>`), raw closes → $T map. */
+/**
+ * Primary: TradingView chart WS (`FRED:<id>`), raw closes → $T map.
+ * ⚠️ TradingView serves these FRED series in **actual dollars** (not FRED's
+ * millions/billions), so everything divides by 1e12 to reach $T. Non-positive
+ * closes (placeholder/empty bars) are dropped — these levels are always large & positive.
+ */
 async function fetchViaTradingView(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
   const closes = await fetchCloses(`FRED:${id}`, timeoutMs);
   const out = new Map<number, number>();
   for (const p of closes) {
-    if (Number.isFinite(p.v)) out.set(p.t, p.v / TO_TRILLIONS[id]);
+    if (Number.isFinite(p.v) && p.v > 0) out.set(p.t, p.v / 1e12);
   }
   return out;
 }

@@ -339,16 +339,32 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
             {liq.rrp !== null && <span>RRP ${liq.rrp.toFixed(2)}T</span>}
             {liq.asOf && <span>· {new Date(liq.asOf).toLocaleDateString("ko-KR")} 기준</span>}
           </div>
-          <ChartBlock>
-            <MultiLineChart
-              series={[
-                { points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" },
-                { points: data.history.reserves, color: "#f59e0b", label: "지급준비금" },
-              ]}
-              decimals={2}
-              suffix="T"
-            />
-          </ChartBlock>
+          {/* Two stacked single-line charts, each auto-scaled to its own range —
+              a shared overlay wasted vertical space (net ~$5.8T vs reserves ~$3T
+              sit ~3T apart, so each line only used a sliver of the axis). */}
+          <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
+            <div>
+              <div className="mb-1 text-xs font-medium text-teal-700">순유동성 · 최근 1년</div>
+              <MultiLineChart
+                series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
+                decimals={2}
+                suffix="T"
+                height={120}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-amber-600">
+                지급준비금 · 최근 1년{" "}
+                <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
+              </div>
+              <MultiLineChart
+                series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
+                decimals={2}
+                suffix="T"
+                height={120}
+              />
+            </div>
+          </div>
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
             ⚠️ <strong>뒤에서 물이 차오르나 빠지나</strong>를 보는 배경 지표입니다. 이걸 보고 사고팔지 마세요 —
             AI·반도체 집중장에선 이 지표와 지수가 몇 달씩 <strong>반대로</strong> 간 전례(2023)가 있습니다. 레벨보다
