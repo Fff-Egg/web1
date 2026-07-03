@@ -177,6 +177,18 @@ export async function fetchSymbol(symbol: string, timeoutMs = 22_000): Promise<S
   return { ...toSeries(bars), name, resolved };
 }
 
+/**
+ * Raw daily closes for any symbol (e.g. "FRED:WALCL") — no rounding, no year
+ * slicing; for collectors that post-process units themselves (liquidity.ts).
+ * Empty array = unreachable / unknown symbol (fetchBars never rejects).
+ */
+export async function fetchCloses(symbol: string, timeoutMs = 22_000): Promise<SeriesPoint[]> {
+  const { bars } = await fetchBars(symbol, timeoutMs);
+  return bars
+    .filter((b) => Array.isArray(b.v) && typeof b.v[0] === "number" && typeof b.v[4] === "number")
+    .map((b) => ({ t: b.v[0] * 1000, v: b.v[4] }));
+}
+
 export interface CandleResult {
   /** Canonical symbol it resolved to (e.g. "NASDAQ:AAPL"), or the input. */
   resolved: string | null;

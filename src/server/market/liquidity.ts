@@ -1,8 +1,9 @@
 import type { LiquidityQuote, SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
+import { fetchCloses } from "./tradingview.js";
 
 /**
- * US net-liquidity backdrop from FRED (free, no API key).
+ * US net-liquidity backdrop:
  *
  *   net liquidity = 연준자산(WALCL) − 역레포(RRPONTSYD) − TGA(WTREGEN)
  *
@@ -10,14 +11,17 @@ import { sliceLastYear } from "../../shared/market.js";
  * macro-context gauge — NOT a timing signal (it decoupled hard from the S&P in
  * the 2023 AI rally). The card labels it as such.
  *
- * ⚠️ Each series is fetched INDIVIDUALLY. FRED's fredgraph.csv bundles a
- * multi-id request into a ZIP (separate CSVs per frequency) whenever the ids mix
- * frequencies — and these do (RRPONTSYD is daily; the others are weekly). A
- * single-id request always returns a plain CSV, so we fetch one series each and
- * combine. Bonus: one dead series no longer kills the rest.
+ * ⚠️ Source routing: fred.stlouisfed.org silently DROPS connections from
+ * Railway's datacenter IPs (every series times out unanswered), so the PRIMARY
+ * path is TradingView's chart WebSocket — it mirrors the full FRED catalog as
+ * `FRED:<ID>` symbols and already works from Railway (S5FI/NDFI use the same
+ * pipe). Direct FRED CSV is kept as a fallback for environments where it is
+ * reachable. Note fredgraph.csv quirk: multi-id requests mixing frequencies
+ * return a ZIP, so the fallback fetches one id per request.
  *
- * ⚠️ FRED unit quirk: WALCL / WTREGEN / WRESBAL are in **millions** of USD;
- * RRPONTSYD is in **billions**. All normalized to $T (trillions) below.
+ * ⚠️ FRED unit quirk (verified against live CSV): WALCL / WTREGEN / WRESBAL are
+ * in **millions** USD; RRPONTSYD is in **billions**. TradingView serves the same
+ * raw units. All normalized to $T (trillions) below.
  */
 
 const IDS = ["WALCL", "RRPONTSYD", "WTREGEN", "WRESBAL"] as const;
@@ -38,8 +42,19 @@ export interface LiquiditySnapshot {
   history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[] };
 }
 
-/** One FRED series → plain single-column CSV → date(ms) → value ($T). One attempt. */
-async function fetchSeriesOnce(id: SeriesId, cosd: string, timeoutMs: number): Promise<Map<number, number>> {
+/** Primary: TradingView chart WS (`FRED:<id>`), raw closes → $T map. */
+async function fetchViaTradingView(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
+  const closes = await fetchCloses(`FRED:${id}`, timeoutMs);
+  const out = new Map<number, number>();
+  for (const p of closes) {
+    if (Number.isFinite(p.v)) out.set(p.t, p.v / TO_TRILLIONS[id]);
+  }
+  return out;
+}
+
+/** Fallback: direct FRED single-id CSV (plain CSV only when one id per request). */
+async function fetchViaFredCsv(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
+  const cosd = isoDate(new Date(Date.now() - 400 * 24 * 60 * 60_000));
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let csv: string;
@@ -48,18 +63,17 @@ async function fetchSeriesOnce(id: SeriesId, cosd: string, timeoutMs: number): P
       headers: { "User-Agent": UA, Accept: "text/csv,*/*" },
       signal: ctrl.signal,
     });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`FRED HTTP ${res.status}`);
     csv = await res.text();
   } catch (e) {
-    // Normalize the AbortController's terminal error into a clear timeout note.
     if (e instanceof Error && (e.name === "AbortError" || /aborted/i.test(e.message))) {
-      throw new Error(`타임아웃(${Math.round(timeoutMs / 1000)}초 무응답)`);
+      throw new Error(`FRED 타임아웃(${Math.round(timeoutMs / 1000)}초 무응답)`);
     }
     throw e;
   } finally {
     clearTimeout(t);
   }
-  if (csv.startsWith("PK")) throw new Error("예상치 못한 ZIP 응답");
+  if (csv.startsWith("PK")) throw new Error("FRED: 예상치 못한 ZIP 응답");
 
   const out = new Map<number, number>();
   const lines = csv.trim().split(/\r?\n/);
@@ -70,63 +84,57 @@ async function fetchSeriesOnce(id: SeriesId, cosd: string, timeoutMs: number): P
     const raw = valStr?.trim();
     if (!raw || raw === ".") continue;
     const n = Number(raw);
-    if (Number.isFinite(n)) out.set(ts, n / TO_TRILLIONS[id]); // → $T
+    if (Number.isFinite(n)) out.set(ts, n / TO_TRILLIONS[id]);
   }
   return out;
 }
 
-/** Fetch one series with a single retry (cold connections / transient drops). */
-async function fetchSeries(id: SeriesId, cosd: string, timeoutMs: number): Promise<Map<number, number>> {
+/** One series: TradingView first (works from Railway), FRED CSV as fallback. */
+async function fetchSeries(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
+  const tv = await fetchViaTradingView(id, timeoutMs).catch(() => new Map<number, number>());
+  if (tv.size > 0) return tv;
   try {
-    return await fetchSeriesOnce(id, cosd, timeoutMs);
-  } catch {
-    return fetchSeriesOnce(id, cosd, timeoutMs);
+    return await fetchViaFredCsv(id, timeoutMs);
+  } catch (e) {
+    throw new Error(`TradingView 응답 없음 + ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
-export async function fetchLiquidity(timeoutMs = 12_000): Promise<LiquiditySnapshot> {
-  const cosd = isoDate(new Date(Date.now() - 400 * 24 * 60 * 60_000));
-
-  // All four settled independently, so one dead series yields a precise note
-  // instead of a single opaque "aborted". WALCL + WTREGEN are required.
-  const settled = await Promise.allSettled([
-    fetchSeries("WALCL", cosd, timeoutMs),
-    fetchSeries("WTREGEN", cosd, timeoutMs),
-    fetchSeries("RRPONTSYD", cosd, timeoutMs),
-    fetchSeries("WRESBAL", cosd, timeoutMs),
-  ]);
+export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnapshot> {
+  // Two at a time: the snapshot batch already opens 3 anonymous TV connections
+  // (S5FI/NDFI/custom); keep the total burst modest to avoid rate limits.
   const fails: string[] = [];
-  const take = (i: number, id: SeriesId): Map<number, number> => {
-    const r = settled[i];
-    if (r.status === "fulfilled") return r.value;
-    fails.push(`${id} ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`);
-    return new Map<number, number>();
-  };
-  const walcl = take(0, "WALCL");
-  const tga = take(1, "WTREGEN");
-  const rrpMap = take(2, "RRPONTSYD");
-  const wresbal = take(3, "WRESBAL");
+  const get = (id: SeriesId) =>
+    fetchSeries(id, timeoutMs).catch((e: unknown) => {
+      fails.push(`${id} ${e instanceof Error ? e.message : String(e)}`);
+      return new Map<number, number>();
+    });
+  const [walcl, tga] = await Promise.all([get("WALCL"), get("WTREGEN")]);
+  const [rrpMap, wresbal] = await Promise.all([get("RRPONTSYD"), get("WRESBAL")]);
   if (walcl.size === 0 || tga.size === 0) {
     throw new Error(fails.length ? fails.join(" · ") : "WALCL/TGA 응답이 비어 있음");
   }
 
-  // RRP daily → sorted ascending, for last-known-on-or-before lookups.
+  // Sorted point lists for carry-forward lookups. TGA/RRP values are taken as
+  // the last known value on-or-before each WALCL date — robust to the small
+  // date/timezone misalignments between TV bars and FRED weekly observations.
+  const tgaPts = [...tga.entries()].sort((a, b) => a[0] - b[0]);
   const rrpPts = [...rrpMap.entries()].sort((a, b) => a[0] - b[0]);
-  const rrpOnOrBefore = (ts: number): number => {
-    let v = 0;
-    for (const [t, val] of rrpPts) {
+  const lastOnOrBefore = (pts: [number, number][], ts: number): number | null => {
+    let v: number | null = null;
+    for (const [t, val] of pts) {
       if (t > ts) break;
       v = val;
     }
     return v;
   };
 
-  // Net liquidity on WALCL's weekly dates (need a matching TGA point).
   const netLiquidity: SeriesPoint[] = [];
   for (const [ts, wa] of [...walcl.entries()].sort((a, b) => a[0] - b[0])) {
-    const tg = tga.get(ts);
-    if (tg === undefined) continue;
-    netLiquidity.push({ t: ts, v: round2(wa - rrpOnOrBefore(ts) - tg) });
+    const tg = lastOnOrBefore(tgaPts, ts);
+    if (tg === null) continue; // before the first TGA observation
+    const rrp = lastOnOrBefore(rrpPts, ts) ?? 0;
+    netLiquidity.push({ t: ts, v: round2(wa - rrp - tg) });
   }
   const reserves: SeriesPoint[] = [...wresbal.entries()]
     .map(([t, v]) => ({ t, v: round2(v) }))
@@ -134,7 +142,7 @@ export async function fetchLiquidity(timeoutMs = 12_000): Promise<LiquiditySnaps
 
   const net = sliceLastYear(netLiquidity);
   const res = sliceLastYear(reserves);
-  if (net.length === 0) throw new Error("FRED 순유동성 계산 결과가 비어 있습니다 (WALCL/TGA 날짜 불일치)");
+  if (net.length === 0) throw new Error("순유동성 계산 결과가 비어 있습니다 (WALCL/TGA 날짜 불일치)");
 
   const last = net[net.length - 1];
   const back4 = net.length > 4 ? net[net.length - 5] : null;
@@ -143,16 +151,12 @@ export async function fetchLiquidity(timeoutMs = 12_000): Promise<LiquiditySnaps
     net4wChange: back4 ? round2(last.v - back4.v) : null,
     reserves: res.length ? res[res.length - 1].v : null,
     rrp: rrpPts.length ? round2(rrpPts[rrpPts.length - 1][1]) : null,
-    tga: lastVal(tga),
+    tga: tgaPts.length ? round2(tgaPts[tgaPts.length - 1][1]) : null,
     asOf: new Date(last.t).toISOString(),
   };
   return { quote, history: { netLiquidity: net, reserves: res } };
 }
 
-function lastVal(m: Map<number, number>): number | null {
-  const pts = [...m.entries()].sort((a, b) => a[0] - b[0]);
-  return pts.length ? round2(pts[pts.length - 1][1]) : null;
-}
 function round2(v: number): number {
   return Math.round(v * 100) / 100;
 }
