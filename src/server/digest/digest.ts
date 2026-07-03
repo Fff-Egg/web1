@@ -239,7 +239,13 @@ function sourceLinks(rows: DigestItem[]): string {
     const back = `<a href="#cite-${n}" class="ref-back" title="본문으로">↩</a>`;
     return `  <li id="ref-${n}">${main} ${back}</li>`;
   });
-  return `\n<h2>참조 원문</h2>\n<ol class="digest-refs">\n${items.join("\n")}\n</ol>\n`;
+  // Collapsed by default (native <details>): [N] now jumps straight to the source,
+  // so this list is a bibliography/목차, kept out of the way but still available.
+  return (
+    `\n<details class="digest-refs-wrap">\n` +
+    `<summary>참조 원문 (${rows.length})</summary>\n` +
+    `<ol class="digest-refs">\n${items.join("\n")}\n</ol>\n</details>\n`
+  );
 }
 
 export interface GenerateDigestOpts {
@@ -270,21 +276,28 @@ const MAP_MAX_ITEMS = (): number => Math.max(5, Number(process.env.DIGEST_MAP_IT
 const MAP_MAX_CHARS = (): number => Math.max(10_000, Number(process.env.DIGEST_MAP_CHARS ?? 45_000));
 const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 3000);
 const MAP_CONCURRENCY = 3;
-const ITEM_BODY_CHARS = 1500;
+/** Chars of each pick's body sent to the map/synthesis prompt. Raise to feed
+ *  more of long articles (their conclusions/numbers sit past the cut). */
+const ITEM_BODY_CHARS = (): number => Number(process.env.DIGEST_ITEM_CHARS ?? 2500);
 
-/** Content size of one item as packed into a map prompt. */
+/** Content size of one item as packed into a map prompt (title + 요약 + clipped body). */
 function itemSize(it: Pick<DigestItem, "title" | "body" | "summary">): number {
-  const body = it.body ?? it.summary ?? "";
-  return (it.title?.length ?? 0) + Math.min(body.length, ITEM_BODY_CHARS) + 60; // + envelope
+  const bodyLen = Math.min((it.body ?? "").length, ITEM_BODY_CHARS());
+  return (it.title?.length ?? 0) + (it.summary?.length ?? 0) + bodyLen + 80; // + envelope
 }
 
-/** One item as presented to the LLM — [N] is the GLOBAL citation number. */
+/** One item as presented to the LLM — [N] is the GLOBAL citation number. The 1차
+ *  요약 (dense) rides alongside the body excerpt so a long article's gist survives
+ *  even when its tail is clipped. The URL is omitted on purpose: the citation rule
+ *  forbids writing links, so feeding URLs is pure wasted tokens. */
 function renderItem(it: DigestItem, n: number): string {
+  const summary = it.summary?.trim();
+  const body = clip(it.body, ITEM_BODY_CHARS());
   return (
     `[${n}] 제목: ${it.title ?? "(제목없음)"}\n` +
     `출처: ${it.source}\n` +
-    `원문: ${it.url ?? "(링크없음)"}\n` +
-    `본문:\n${clip(it.body ?? it.summary, ITEM_BODY_CHARS)}`
+    (summary ? `요약: ${summary}\n` : "") +
+    `본문:\n${body || summary || "(내용 없음)"}`
   );
 }
 
@@ -434,6 +447,9 @@ async function fetchDigestsInRange(startDate: string, endDate: string): Promise<
 function stripDigestHtml(md: string): string {
   return md
     .replace(/<sup class="cite"[^>]*>[\s\S]*?<\/sup>/g, "")
+    // New collapsible wrapper, plus the legacy <h2>참조 원문</h2>…</ol> form for
+    // digests saved before this change.
+    .replace(/\n*<details class="digest-refs-wrap">[\s\S]*?<\/details>\s*/g, "")
     .replace(/\n*<h2>참조 원문<\/h2>[\s\S]*?<\/ol>\s*/g, "")
     .trim();
 }

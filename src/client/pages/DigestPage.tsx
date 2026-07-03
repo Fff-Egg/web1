@@ -151,6 +151,9 @@ export function DigestPage() {
   const jumpTo = (scope: HTMLElement, targetId: string) => {
     const el = document.getElementById(targetId);
     if (!el) return;
+    // The 참조 원문 list is inside a collapsed <details>; expand it so a jump to a
+    // ref (#ref-N fallback for link-less items) actually lands somewhere visible.
+    el.closest("details")?.setAttribute("open", "");
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     markActiveRef(scope, el);
     if (selectedId !== undefined) {
