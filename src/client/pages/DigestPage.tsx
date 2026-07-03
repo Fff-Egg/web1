@@ -306,7 +306,16 @@ export function DigestPage() {
       d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd
         ? ` (${d.periodStart.slice(5)}~${d.periodEnd.slice(5)})`
         : "";
-    return `✍️ ${d.title ?? "수동"}${range}${isCombined(d) ? " · 종합" : ""}`;
+    // Manual digests carry their creation time — several untitled manuals on one
+    // date are indistinguishable otherwise.
+    const created = new Date(d.createdAt).toLocaleString("ko-KR", {
+      timeZone: "Asia/Seoul",
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    return `✍️ ${d.title ?? "수동"}${range}${isCombined(d) ? " · 종합" : ""} · ${created}`;
   };
 
   // Show the ACTUAL time window the picked dates resolve to (date D = [(D-1) evH,

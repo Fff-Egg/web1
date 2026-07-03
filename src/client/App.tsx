@@ -27,22 +27,24 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "thesis", label: "논지 지도" },
 ];
 
-const TAB_KEY = "feedwatch.activeTab";
-
 export function App() {
-  // Remember the last tab across refreshes; default to Feed. A digest deep link
-  // (?article=<id>, opened in a new tab) lands on 보관함, where telegram (and
-  // other saved originals) are read.
-  const [tab, setTab] = useState<Tab>(() => {
-    if (typeof window !== "undefined" && new URLSearchParams(window.location.search).get("article")) {
-      return "archive";
-    }
-    const saved = typeof localStorage !== "undefined" ? localStorage.getItem(TAB_KEY) : null;
-    return saved && TABS.some((t) => t.id === saved) ? (saved as Tab) : "feed";
-  });
+  // Every load starts on 시황분석. A digest deep link (?article=<id>, opened in a
+  // new tab) lands on 보관함 instead, where telegram (and other saved originals)
+  // are read.
+  const [tab, setTab] = useState<Tab>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("article")
+      ? "archive"
+      : "market",
+  );
+  // Drop the ?article param once routed: ArchivePage captures it in its initial
+  // state, and leaving it in the URL would hijack every refresh back to 보관함.
   useEffect(() => {
-    localStorage.setItem(TAB_KEY, tab);
-  }, [tab]);
+    const u = new URL(window.location.href);
+    if (u.searchParams.has("article")) {
+      u.searchParams.delete("article");
+      window.history.replaceState(null, "", u.pathname + u.search + u.hash);
+    }
+  }, []);
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 
