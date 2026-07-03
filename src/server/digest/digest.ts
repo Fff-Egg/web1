@@ -72,18 +72,50 @@ export function kstRangeBounds(startDate: string, endDate: string): { start: Dat
   return { start, end };
 }
 
-/** The two daily auto-digest runs split date D's window [(D-1)H, D·H) at the
- *  midday hour M. The M o'clock inside the window is on day D if M<H, else on day
- *  D-1 (e.g. H=07,M=17 → split at (D-1) 17:00). No gap, no overlap. */
+/** The two daily auto-digest runs split a day window [(D-1)H, D·H) at the midday
+ *  hour M. Each digest is LABELED with its generation day (the day you read it):
+ *  - 낮분 (midday, M시 생성): label X = the day the M o'clock run fires.
+ *  - 아침분 (07시/boundary 생성, meta.slot='evening' for legacy compat): label D =
+ *    the window-end day — which IS its generation day, since it fires at D H시.
+ *  So a date tab shows [아침분: 어제 M시~오늘 H시] + [낮분: 오늘 H시~오늘 M시].
+ *  No gap, no overlap across consecutive labels. */
 export type DigestSlot = "midday" | "evening";
 
+function kstAt(date: string, hour: number): Date {
+  return new Date(`${date}T${String(hour).padStart(2, "0")}:00:00+09:00`);
+}
+
 export function slotBounds(date: string, slot: DigestSlot): { start: Date; end: Date } {
-  const day = kstRangeBounds(date, date);
   const H = DIGEST_HOUR();
   const M = middayHour();
-  const dAtM = new Date(`${date}T${String(M).padStart(2, "0")}:00:00+09:00`);
+  if (slot === "midday") {
+    // date = the 낮분's generation day X; its window ends at X M시 and starts at
+    // the window boundary before it (same day if M≥H, else the previous day).
+    const end = kstAt(date, M);
+    const start = M < H ? kstAt(addDaysKst(date, -1), H) : kstAt(date, H);
+    return { start, end };
+  }
+  // 아침분: date = window-end day D; covers [split, D H시).
+  const day = kstRangeBounds(date, date);
+  const dAtM = kstAt(date, M);
   const mid = M < H ? dAtM : new Date(dAtM.getTime() - 24 * 60 * 60 * 1000);
-  return slot === "midday" ? { start: day.start, end: mid } : { start: mid, end: day.end };
+  return { start: mid, end: day.end };
+}
+
+/** Generation/label day of the CURRENT window's 낮분 — the calendar day its M시
+ *  split falls on (M≥H: the day before the window-end label; M<H: same day). */
+export function middayLabelDate(): string {
+  const wd = currentWindowDate();
+  return middayHour() < DIGEST_HOUR() ? wd : addDaysKst(wd, -1);
+}
+
+/** 낮분 existence for generation-day X — also accepts the legacy label (X+1, the
+ *  window-end date used before 낮분 moved to generation-day labeling), so old rows
+ *  keep suppressing re-generation (boot catch-up / boundary backfill). */
+export async function hasMiddayFor(date: string): Promise<boolean> {
+  if (await hasAutoDigestFor(date, "midday")) return true;
+  if (middayHour() >= DIGEST_HOUR() && (await hasAutoDigestFor(addDaysKst(date, 1), "midday"))) return true;
+  return false;
 }
 
 /** True if an auto digest already exists for this KST date — optionally for one
@@ -641,10 +673,10 @@ export async function generateDigest(
 
 type DigestRunResult = { id: number; title: string; itemCount: number; trashed: number } | null;
 
-/** 14시 cron: generate the midday digest (어제21시~오늘14시) if it doesn't exist
- *  yet. NEVER sweeps and never touches the filter memo — that's the 21시 run. */
-export async function runMiddayDigest(date = currentWindowDate()): Promise<DigestRunResult> {
-  if (await hasAutoDigestFor(date, "midday")) return null;
+/** M시 cron: generate the 낮분 digest (오늘 H시~M시, label = 생성일) if it doesn't
+ *  exist yet. NEVER sweeps and never touches the filter memo — that's the boundary run. */
+export async function runMiddayDigest(date = middayLabelDate()): Promise<DigestRunResult> {
+  if (await hasMiddayFor(date)) return null;
   return generateDigest({ auto: true, slot: "midday", start: date });
 }
 
@@ -661,8 +693,11 @@ export async function runDailyDigests(date = kstToday()): Promise<{
   eveningExisted: boolean;
   swept: number;
 }> {
-  const middayExisted = await hasAutoDigestFor(date, "midday");
-  const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: date });
+  // 낮분 backfill targets ITS generation day — the day the window's M시 fell on
+  // (M≥H: yesterday relative to this morning's boundary label).
+  const middayDate = middayHour() < DIGEST_HOUR() ? date : addDaysKst(date, -1);
+  const middayExisted = await hasMiddayFor(middayDate);
+  const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: middayDate });
   const eveningExisted = await hasAutoDigestFor(date, "evening");
   const evening = eveningExisted ? null : await generateDigest({ auto: true, slot: "evening", start: date });
   let swept = 0;

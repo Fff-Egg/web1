@@ -280,7 +280,8 @@ export function DigestPage() {
   }, [selectedId, list.data]);
 
   const digestsOn = useMemo(() => {
-    const rank = (d: DigestSummary) => (isAuto(d) ? (isMidday(d) ? 0 : 1) : 2);
+    // Chronological within the date: 아침분(07시 생성) → 낮분(14시 생성) → 수동.
+    const rank = (d: DigestSummary) => (isAuto(d) ? (isMidday(d) ? 1 : 0) : 2);
     return (list.data ?? [])
       .filter((d) => dateOf(d) === viewDate)
       .sort((a, b) => rank(a) - rank(b) || +new Date(a.createdAt) - +new Date(b.createdAt));
@@ -301,7 +302,7 @@ export function DigestPage() {
   const newerDate = [...digestDates].reverse().find((d) => d > viewDate);
 
   const chipLabel = (d: DigestSummary) => {
-    if (isAuto(d)) return isMidday(d) ? `☀️ 낮분 ${midH}` : `🌙 저녁분 ${evH}`;
+    if (isAuto(d)) return isMidday(d) ? `☀️ 낮분 ${midH}` : `🌅 아침분 ${evH}`;
     const range =
       d.periodStart && d.periodEnd && d.periodStart !== d.periodEnd
         ? ` (${d.periodStart.slice(5)}~${d.periodEnd.slice(5)})`
@@ -445,7 +446,7 @@ export function DigestPage() {
             {runEvening.isPending ? "실행 중…" : `🕘 지금 ${evH} 작업 실행`}
           </button>
           <span className="ml-2 text-xs text-slate-400">
-            낮분 보충 + 저녁분({midH}~{evH}) 다이제스트 + 하루 창 전체 피드 정리 · {evH} 이후 보충용
+            아침분(어제 {midH}~오늘 {evH}) + 어제 낮분 보충 + 하루 창 전체 피드 정리 · {evH} 이후 보충용
           </span>
           {runEvening.data && (
             <>
@@ -453,7 +454,7 @@ export function DigestPage() {
                 {(() => {
                   const r = runEvening.data;
                   if (r.tooEarly)
-                    return `아직 ${evH}(KST) 전입니다 — 지금 실행하면 저녁분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
+                    return `아직 ${evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
                   const part = (
                     label: string,
                     gen: { title: string; itemCount: number } | null,
@@ -461,7 +462,7 @@ export function DigestPage() {
                   ) => (gen ? `${label} 생성(${gen.itemCount}건)` : existed ? `${label} 이미 있음` : `${label} 새 글 없음`);
                   return (
                     `오늘(${r.date}) 실행: ${part("낮분", r.midday, r.middayExisted)} · ` +
-                    `${part("저녁분", r.evening, r.eveningExisted)} · 피드 ${r.swept}건 휴지통으로.`
+                    `${part("아침분", r.evening, r.eveningExisted)} · 피드 ${r.swept}건 휴지통으로.`
                   );
                 })()}
                 {" "}

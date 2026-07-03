@@ -5,10 +5,11 @@ import {
   kstToday,
   kstHour,
   hasAutoDigestFor,
+  hasMiddayFor,
   runMiddayDigest,
   runDailyDigests,
   middayHour,
-  currentWindowDate,
+  middayLabelDate,
   slotBounds,
 } from "./digest/digest.js";
 import { feedbackRepo } from "./repo/feedback.js";
@@ -61,9 +62,9 @@ async function catchUpRoutines(digestHour: number): Promise<void> {
       console.log(`[scheduler] catch-up: ${digestHour}:00 boundary run was missed — running now.`);
       await runEveningRoutine(); // backfills the midday분 too
     }
-    // Midday run for the CURRENT window, if its midday split time has passed.
-    const wd = currentWindowDate();
-    if (Date.now() >= slotBounds(wd, "midday").end.getTime() && !(await hasAutoDigestFor(wd, "midday"))) {
+    // 낮분 for the CURRENT window (label = its generation day), if its M시 has passed.
+    const md = middayLabelDate();
+    if (Date.now() >= slotBounds(md, "midday").end.getTime() && !(await hasMiddayFor(md))) {
       console.log(`[scheduler] catch-up: midday run was missed — running now.`);
       await runMiddayRoutine();
     }

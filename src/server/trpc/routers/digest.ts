@@ -11,8 +11,9 @@ import {
   sweepWindow,
   runDailyDigests,
   runMiddayDigest,
-  hasAutoDigestFor,
+  hasMiddayFor,
   middayHour,
+  middayLabelDate,
   digestHour,
   currentWindowDate,
   slotBounds,
@@ -163,11 +164,11 @@ export const digestRouter = router({
    *  sweeps. Refused before that slot's split time (running early would cut the slot
    *  short and the cron would then skip it). */
   runMidday: publicProcedure.mutation(async () => {
-    const date = currentWindowDate();
+    const date = middayLabelDate();
     if (Date.now() < slotBounds(date, "midday").end.getTime()) {
       return { date, tooEarly: true, existed: false, digest: null };
     }
-    const existed = await hasAutoDigestFor(date, "midday");
+    const existed = await hasMiddayFor(date);
     const digest = existed ? null : await runMiddayDigest(date);
     return { date, tooEarly: false, existed, digest };
   }),
