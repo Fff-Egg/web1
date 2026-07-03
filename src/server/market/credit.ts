@@ -49,7 +49,7 @@ interface CreditRow {
  */
 export async function fetchCreditSnapshot(timeoutMs = 20_000): Promise<CreditSnapshot> {
   const to = ymd(new Date());
-  const from = ymd(new Date(Date.now() - 400 * 24 * 60 * 60_000));
+  const from = ymd(new Date(Date.now() - 1850 * 24 * 60 * 60_000));
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);

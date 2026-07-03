@@ -171,8 +171,12 @@ export interface MarketSnapshot {
   errors: string[];
 }
 
-/** Keep only points within the last `days` (default ~1 year), ascending by time. */
-export function sliceLastYear(points: SeriesPoint[], days = 370): SeriesPoint[] {
+/** Default stored-history window (~5 years) so the 월/년 timeframe toggles have
+ *  depth. Sources with less raw data just return whatever they have. */
+export const HISTORY_DAYS = 1825;
+
+/** Keep only points within the last `days` (default ~5 years), ascending by time. */
+export function sliceLastYear(points: SeriesPoint[], days = HISTORY_DAYS): SeriesPoint[] {
   const cutoff = Date.now() - days * 24 * 60 * 60_000;
   return points.filter((p) => p.t >= cutoff).sort((a, b) => a.t - b.t);
 }

@@ -4,7 +4,7 @@ import { api } from "../data/client.js";
 import type { MarketSnapshot } from "../data/client.js";
 import { fearGreedLabelKo, TIMEFRAMES, TIMEFRAME_LABEL } from "../../shared/market.js";
 import type { SeriesPoint, Timeframe } from "../../shared/market.js";
-import { MultiLineChart } from "./MarketChart.js";
+import { InteractiveLineChart } from "./InteractiveLineChart.js";
 import { CandleChart } from "./CandleChart.js";
 
 const COL = {
@@ -68,7 +68,6 @@ export function MarketPage() {
             color={COL.ndfi}
             quote={data.breadth.ndfi}
             history={data.history.ndfi}
-            domain={[0, 100]}
             decimals={1}
             suffix="%"
             defLow={25}
@@ -81,7 +80,6 @@ export function MarketPage() {
             color={COL.s5fi}
             quote={data.breadth.s5fi}
             history={data.history.s5fi}
-            domain={[0, 100]}
             decimals={1}
             suffix="%"
             defLow={25}
@@ -148,6 +146,89 @@ export function MarketPage() {
           </ul>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Timeframe (resolution) toggle for line charts — 일/주/월/년 ─────
+type LineTf = "D" | "W" | "M" | "Y";
+const TF_LABEL: Record<LineTf, string> = { D: "일", W: "주", M: "월", Y: "년" };
+const TF_ORDER: LineTf[] = ["D", "W", "M", "Y"];
+
+/** Downsample a daily series to weekly/monthly/yearly by keeping the last point
+ *  in each bucket. "일" returns the data as-is. */
+function resample(points: SeriesPoint[], tf: LineTf): SeriesPoint[] {
+  if (tf === "D" || points.length === 0) return points;
+  const bucket = (t: number): string => {
+    const d = new Date(t);
+    if (tf === "Y") return `${d.getUTCFullYear()}`;
+    if (tf === "M") return `${d.getUTCFullYear()}-${d.getUTCMonth()}`;
+    return `w${Math.floor(t / (7 * 24 * 60 * 60_000))}`; // ISO-ish week bucket
+  };
+  const last = new Map<string, SeriesPoint>();
+  for (const p of [...points].sort((a, b) => a.t - b.t)) last.set(bucket(p.t), p);
+  return [...last.values()].sort((a, b) => a.t - b.t);
+}
+
+function useLineTf(id: string): [LineTf, (t: LineTf) => void] {
+  const [tf, setTf] = useState<LineTf>(() => {
+    try {
+      const r = localStorage.getItem(`mkt.tf.${id}`);
+      return r === "W" || r === "M" || r === "Y" ? r : "D";
+    } catch {
+      return "D";
+    }
+  });
+  const set = (t: LineTf) => {
+    setTf(t);
+    try {
+      localStorage.setItem(`mkt.tf.${id}`, t);
+    } catch {
+      /* ignore */
+    }
+  };
+  return [tf, set];
+}
+
+/** A line chart with a 일/주/월/년 toggle + wheel-zoom/pan/crosshair interaction. */
+function LineChartBlock({
+  id,
+  series,
+  baselines = [],
+  decimals = 1,
+  suffix = "",
+  height = 150,
+}: {
+  id: string;
+  series: { points: SeriesPoint[]; color: string; label: string }[];
+  baselines?: number[];
+  decimals?: number;
+  suffix?: string;
+  height?: number;
+}) {
+  const [tf, setTf] = useLineTf(id);
+  const rs = series.map((s) => ({ ...s, points: resample(s.points, tf) }));
+  return (
+    <div className="mt-4 border-t border-slate-100 pt-3">
+      <div className="mb-1 flex items-center justify-between">
+        <span className="text-xs text-slate-400">휠=확대 · 드래그=이동</span>
+        <div className="flex gap-0.5">
+          {TF_ORDER.map((t) => (
+            <button
+              key={t}
+              onClick={() => setTf(t)}
+              className={
+                "rounded px-1.5 py-0.5 text-xs font-medium " +
+                (tf === t ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100")
+              }
+            >
+              {TF_LABEL[t]}
+            </button>
+          ))}
+        </div>
+      </div>
+      {/* key={tf} remounts on resolution change so the viewport resets cleanly. */}
+      <InteractiveLineChart key={tf} series={rs} baselines={baselines} decimals={decimals} suffix={suffix} height={height} />
     </div>
   );
 }
@@ -247,7 +328,6 @@ function MetricCard({
   color,
   quote,
   history,
-  domain,
   decimals = 1,
   suffix = "",
   defLow,
@@ -259,7 +339,6 @@ function MetricCard({
   color: string;
   quote: Quote | null;
   history: SeriesPoint[];
-  domain?: [number, number];
   decimals?: number;
   suffix?: string;
   defLow: number | null;
@@ -290,15 +369,13 @@ function MetricCard({
             )}
           </div>
           {quote.note && <div className="mt-0.5 text-xs text-slate-400">{quote.note}</div>}
-          <ChartBlock>
-            <MultiLineChart
-              series={[{ points: history, color, label: title }]}
-              domain={domain}
-              baselines={baselines}
-              decimals={decimals}
-              suffix={suffix}
-            />
-          </ChartBlock>
+          <LineChartBlock
+            id={id}
+            series={[{ points: history, color, label: title }]}
+            baselines={baselines}
+            decimals={decimals}
+            suffix={suffix}
+          />
           <RefControls lines={lines} onChange={setLines} />
         </>
       )}
@@ -342,28 +419,27 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
           {/* Two stacked single-line charts, each auto-scaled to its own range —
               a shared overlay wasted vertical space (net ~$5.8T vs reserves ~$3T
               sit ~3T apart, so each line only used a sliver of the axis). */}
-          <div className="mt-4 space-y-3 border-t border-slate-100 pt-3">
-            <div>
-              <div className="mb-1 text-xs font-medium text-teal-700">순유동성 · 최근 1년</div>
-              <MultiLineChart
-                series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
-                decimals={2}
-                suffix="T"
-                height={120}
-              />
+          <div className="mt-1">
+            <div className="text-xs font-medium text-teal-700">순유동성</div>
+            <LineChartBlock
+              id="netLiquidity"
+              series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
+              decimals={2}
+              suffix="T"
+              height={130}
+            />
+          </div>
+          <div className="mt-3">
+            <div className="text-xs font-medium text-amber-600">
+              지급준비금 <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
             </div>
-            <div>
-              <div className="mb-1 text-xs font-medium text-amber-600">
-                지급준비금 · 최근 1년{" "}
-                <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
-              </div>
-              <MultiLineChart
-                series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
-                decimals={2}
-                suffix="T"
-                height={120}
-              />
-            </div>
+            <LineChartBlock
+              id="reserves"
+              series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
+              decimals={2}
+              suffix="T"
+              height={130}
+            />
           </div>
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
             ⚠️ <strong>뒤에서 물이 차오르나 빠지나</strong>를 보는 배경 지표입니다. 이걸 보고 사고팔지 마세요 —
@@ -402,14 +478,12 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
             <Stat label="1달 전" value={fg.month} />
             <Stat label="1년 전" value={fg.year} />
           </dl>
-          <ChartBlock>
-            <MultiLineChart
-              series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
-              domain={[0, 100]}
-              baselines={baselines}
-              decimals={0}
-            />
-          </ChartBlock>
+          <LineChartBlock
+            id="fearGreed"
+            series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
+            baselines={baselines}
+            decimals={0}
+          />
           <RefControls lines={lines} onChange={setLines} />
         </div>
       )}
@@ -535,15 +609,6 @@ function fmtNum(v: number): string {
   if (abs >= 1000) return v.toLocaleString("en-US", { maximumFractionDigits: 0 });
   if (abs >= 100) return v.toFixed(1);
   return v.toFixed(2);
-}
-
-function ChartBlock({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="mt-4 border-t border-slate-100 pt-3">
-      <div className="mb-1 text-xs text-slate-400">최근 1년</div>
-      {children}
-    </div>
-  );
 }
 
 function Stat({ label, value }: { label: string; value: number | null }) {

@@ -21,7 +21,7 @@ import { sliceLastYear } from "../../shared/market.js";
  */
 const WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F";
 
-const BARS = 400; // ~1.5 trading years; sliced to 1y after.
+const BARS = 1300; // ~5 trading years of daily bars (for the 월/년 timeframes).
 
 function frame(m: string, p: unknown[]): string {
   const j = JSON.stringify({ m, p });
