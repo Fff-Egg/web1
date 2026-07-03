@@ -23,6 +23,8 @@ const EMPTY_HISTORY: MarketHistory = {
   creditKosdaq: [],
   netLiquidity: [],
   reserves: [],
+  tga: [],
+  rrp: [],
 };
 
 /** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
@@ -81,7 +83,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     }),
     fetchLiquidity().catch((e: unknown) => {
       errors.push(`미국 순유동성(FRED) 수집 실패: ${msg(e)}`);
-      return { quote: null, history: { netLiquidity: [], reserves: [] } };
+      return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] } };
     }),
   ]);
 
@@ -97,6 +99,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.creditKosdaq = credit.history.kosdaq;
   history.netLiquidity = liquidity.history.netLiquidity;
   history.reserves = liquidity.history.reserves;
+  history.tga = liquidity.history.tga;
+  history.rrp = liquidity.history.rrp;
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -127,6 +131,8 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.creditKosdaq === undefined) snap.history.creditKosdaq = [];
   if (snap.history.netLiquidity === undefined) snap.history.netLiquidity = [];
   if (snap.history.reserves === undefined) snap.history.reserves = [];
+  if (snap.history.tga === undefined) snap.history.tga = [];
+  if (snap.history.rrp === undefined) snap.history.rrp = [];
   if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
   if (snap.liquidity === undefined) snap.liquidity = null;
   return snap;

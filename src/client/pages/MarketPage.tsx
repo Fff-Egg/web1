@@ -420,7 +420,9 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
               a shared overlay wasted vertical space (net ~$5.8T vs reserves ~$3T
               sit ~3T apart, so each line only used a sliver of the axis). */}
           <div className="mt-1">
-            <div className="text-xs font-medium text-teal-700">순유동성</div>
+            <div className="text-xs font-medium text-teal-700">
+              순유동성 <span className="font-normal text-slate-400">(연준자산 − RRP − TGA · ↑확대 ↓축소)</span>
+            </div>
             <LineChartBlock
               id="netLiquidity"
               series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
@@ -439,6 +441,34 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
               decimals={2}
               suffix="T"
               height={130}
+            />
+          </div>
+          <div className="mt-3">
+            <div className="text-xs font-medium text-rose-600">
+              TGA (재무부 계정){" "}
+              <span className="font-normal text-slate-400">↑오르면 유동성 흡수(드레인) · ↓내리면 방출 — 순유동성과 역방향</span>
+            </div>
+            <LineChartBlock
+              id="tga"
+              series={[{ points: data.history.tga, color: "#e11d48", label: "TGA" }]}
+              decimals={2}
+              suffix="T"
+              height={130}
+            />
+          </div>
+          <div className="mt-3">
+            <div className="text-xs font-medium text-slate-500">
+              RRP (역레포){" "}
+              <span className="font-normal text-slate-400">
+                ↑흡수 ↓방출 · 2026 현재 ~0으로 소진(사라진 게 아니라 값이 0에 가까움)
+              </span>
+            </div>
+            <LineChartBlock
+              id="rrp"
+              series={[{ points: data.history.rrp, color: "#64748b", label: "RRP" }]}
+              decimals={3}
+              suffix="T"
+              height={110}
             />
           </div>
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">

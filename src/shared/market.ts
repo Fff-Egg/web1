@@ -137,9 +137,12 @@ export interface MarketHistory {
   /** 신용거래융자 잔고 history (조원), KOSPI / KOSDAQ. */
   creditKospi: SeriesPoint[];
   creditKosdaq: SeriesPoint[];
-  /** US 순유동성 ($T, weekly) and reserve balances ($T, weekly), overlaid. */
+  /** US 순유동성 ($T, weekly) and its drivers, each its own line so the trend of
+   *  each is visible (TGA ↑ = 유동성 흡수, ↓ = 방출; RRP near-zero in 2026). */
   netLiquidity: SeriesPoint[];
   reserves: SeriesPoint[];
+  tga: SeriesPoint[];
+  rrp: SeriesPoint[];
 }
 
 export interface MarketSnapshot {

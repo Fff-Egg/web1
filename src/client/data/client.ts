@@ -667,6 +667,8 @@ const SAMPLE_MARKET: MarketSnapshot = {
     creditKosdaq: sampleSeries(9.8, 1),
     netLiquidity: sampleSeries(5.7, 0.15),
     reserves: sampleSeries(3.2, 0.1),
+    tga: sampleSeries(0.8, 0.15),
+    rrp: sampleSeries(0.02, 0.01),
   },
   errors: [],
 };

@@ -39,7 +39,7 @@ const TO_TRILLIONS: Record<SeriesId, number> = {
 
 export interface LiquiditySnapshot {
   quote: LiquidityQuote | null;
-  history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[] };
+  history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[]; tga: SeriesPoint[]; rrp: SeriesPoint[] };
 }
 
 /**
@@ -147,6 +147,8 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
 
   const net = sliceLastYear(netLiquidity);
   const res = sliceLastYear(reserves);
+  const tgaHist = sliceLastYear(tgaPts.map(([t, v]) => ({ t, v: round2(v) })));
+  const rrpHist = sliceLastYear(rrpPts.map(([t, v]) => ({ t, v: round2(v) })));
   if (net.length === 0) throw new Error("순유동성 계산 결과가 비어 있습니다 (WALCL/TGA 날짜 불일치)");
 
   const last = net[net.length - 1];
@@ -159,7 +161,7 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
     tga: tgaPts.length ? round2(tgaPts[tgaPts.length - 1][1]) : null,
     asOf: new Date(last.t).toISOString(),
   };
-  return { quote, history: { netLiquidity: net, reserves: res } };
+  return { quote, history: { netLiquidity: net, reserves: res, tga: tgaHist, rrp: rrpHist } };
 }
 
 function round2(v: number): number {
