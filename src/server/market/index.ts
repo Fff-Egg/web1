@@ -6,6 +6,7 @@ import { fetchFearGreed } from "./cnn.js";
 import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
 import { fetchAdr, fetchAdrHistory } from "./adr.js";
 import { fetchCreditSnapshot } from "./credit.js";
+import { fetchLiquidity } from "./liquidity.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
 const CUSTOM_SYMBOL_KEY = "marketCustomSymbol";
@@ -20,6 +21,8 @@ const EMPTY_HISTORY: MarketHistory = {
   kosdaqAdr: [],
   creditKospi: [],
   creditKosdaq: [],
+  netLiquidity: [],
+  reserves: [],
 };
 
 /** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
@@ -51,7 +54,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   const history: MarketHistory = { ...EMPTY_HISTORY };
   const customSymbol = await getCustomSymbol();
 
-  const [fg, breadth, custom, adr, adrHist, credit] = await Promise.all([
+  const [fg, breadth, custom, adr, adrHist, credit, liquidity] = await Promise.all([
     fetchFearGreed().catch((e: unknown) => {
       errors.push(`Fear & Greed 수집 실패: ${msg(e)}`);
       return null;
@@ -76,6 +79,10 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
       errors.push(`신용잔고(KOFIA) 수집 실패: ${msg(e)}`);
       return { kospi: null, kosdaq: null, history: { kospi: [], kosdaq: [] } };
     }),
+    fetchLiquidity().catch((e: unknown) => {
+      errors.push(`미국 순유동성(FRED) 수집 실패: ${msg(e)}`);
+      return { quote: null, history: { netLiquidity: [], reserves: [] } };
+    }),
   ]);
 
   if (fg) history.fearGreed = fg.history;
@@ -88,6 +95,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.kosdaqAdr = adrHist.kosdaq;
   history.creditKospi = credit.history.kospi;
   history.creditKosdaq = credit.history.kosdaq;
+  history.netLiquidity = liquidity.history.netLiquidity;
+  history.reserves = liquidity.history.reserves;
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -99,6 +108,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     },
     adr,
     credit: { kospi: credit.kospi, kosdaq: credit.kosdaq },
+    liquidity: liquidity.quote,
     history,
     errors,
   };
@@ -115,7 +125,10 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.custom === undefined) snap.history.custom = [];
   if (snap.history.creditKospi === undefined) snap.history.creditKospi = [];
   if (snap.history.creditKosdaq === undefined) snap.history.creditKosdaq = [];
+  if (snap.history.netLiquidity === undefined) snap.history.netLiquidity = [];
+  if (snap.history.reserves === undefined) snap.history.reserves = [];
   if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
+  if (snap.liquidity === undefined) snap.liquidity = null;
   return snap;
 }
 

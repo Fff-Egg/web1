@@ -136,6 +136,8 @@ export function MarketPage() {
         </div>
       )}
 
+      {data && <LiquidityCard data={data} />}
+
       {data && data.errors.length > 0 && (
         <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
           <p className="font-medium">일부 소스 수집 실패</p>
@@ -298,6 +300,60 @@ function MetricCard({
             />
           </ChartBlock>
           <RefControls lines={lines} onChange={setLines} />
+        </>
+      )}
+    </Card>
+  );
+}
+
+/**
+ * 미국 순유동성 — the macro liquidity backdrop (Fed BS − RRP − TGA), overlaid
+ * with reserve balances. Deliberately NOT a MetricCard: weekly/lagging, no
+ * reference lines (no meaningful threshold), and a caution note — it's context,
+ * NOT a buy/sell signal (it decoupled from the S&P during the 2023 AI rally).
+ * Placed full-width at the bottom, lowest visual priority.
+ */
+function LiquidityCard({ data }: { data: MarketSnapshot }) {
+  const liq = data.liquidity;
+  return (
+    <Card title="미국 순유동성" subtitle="연준자산 − 역레포(RRP) − TGA · 주간·후행">
+      {!liq ? (
+        <Missing />
+      ) : (
+        <>
+          <div className="mb-2 inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+            주간·후행 · 매매 신호 아님
+          </div>
+          <div className="flex items-baseline gap-2">
+            <span className="text-3xl font-bold text-slate-800">${liq.net.toFixed(2)}T</span>
+            {liq.net4wChange !== null && (
+              <span className={`text-sm font-medium ${deltaColor(liq.net4wChange)}`}>
+                {arrow(liq.net4wChange)} {Math.abs(liq.net4wChange).toFixed(2)}T
+                <span className="ml-0.5 text-xs text-slate-400">(4주)</span>
+              </span>
+            )}
+          </div>
+          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400">
+            {liq.reserves !== null && <span>지급준비금 ${liq.reserves.toFixed(2)}T</span>}
+            {liq.tga !== null && <span>TGA ${liq.tga.toFixed(2)}T</span>}
+            {liq.rrp !== null && <span>RRP ${liq.rrp.toFixed(2)}T</span>}
+            {liq.asOf && <span>· {new Date(liq.asOf).toLocaleDateString("ko-KR")} 기준</span>}
+          </div>
+          <ChartBlock>
+            <MultiLineChart
+              series={[
+                { points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" },
+                { points: data.history.reserves, color: "#f59e0b", label: "지급준비금" },
+              ]}
+              decimals={2}
+              suffix="T"
+            />
+          </ChartBlock>
+          <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
+            ⚠️ <strong>뒤에서 물이 차오르나 빠지나</strong>를 보는 배경 지표입니다. 이걸 보고 사고팔지 마세요 —
+            AI·반도체 집중장에선 이 지표와 지수가 몇 달씩 <strong>반대로</strong> 간 전례(2023)가 있습니다. 레벨보다
+            <strong> 4주 변화(방향)</strong>를 보세요.
+          </p>
         </>
       )}
     </Card>

@@ -64,6 +64,27 @@ export interface CreditQuote {
   prevValue: number | null;
 }
 
+/**
+ * US net-liquidity gauge — the macro liquidity backdrop the other indicators lack.
+ * All levels in $T (trillion USD). Net = 연준자산(WALCL) − 역레포(RRPONTSYD) − TGA(WTREGEN).
+ * These FRED series are WEEKLY (Wed level, published Thu) and LAGGING — a slow
+ * context axis, NOT a buy/sell timing signal. See MarketPage's caution note.
+ */
+export interface LiquidityQuote {
+  /** Net liquidity level, $T. */
+  net: number;
+  /** 4-week change in net liquidity, $T (the impulse — matters more than the level). */
+  net4wChange: number | null;
+  /** Reserve balances (WRESBAL), $T — bank-level liquidity, overlaid on the chart. */
+  reserves: number | null;
+  /** RRP (RRPONTSYD), $T — near-zero in 2026; shown as context only. */
+  rrp: number | null;
+  /** TGA (WTREGEN), $T. */
+  tga: number | null;
+  /** As-of date of the latest weekly point (ISO). */
+  asOf: string | null;
+}
+
 /** One point on a daily history line: timestamp (ms) + value. */
 export interface SeriesPoint {
   /** Epoch milliseconds (UTC) of the trading day. */
@@ -116,6 +137,9 @@ export interface MarketHistory {
   /** 신용거래융자 잔고 history (조원), KOSPI / KOSDAQ. */
   creditKospi: SeriesPoint[];
   creditKosdaq: SeriesPoint[];
+  /** US 순유동성 ($T, weekly) and reserve balances ($T, weekly), overlaid. */
+  netLiquidity: SeriesPoint[];
+  reserves: SeriesPoint[];
 }
 
 export interface MarketSnapshot {
@@ -139,6 +163,8 @@ export interface MarketSnapshot {
     kospi: CreditQuote | null;
     kosdaq: CreditQuote | null;
   };
+  /** US 순유동성 (Fed BS − RRP − TGA), weekly · lagging · 매크로 배경 지표. */
+  liquidity: LiquidityQuote | null;
   /** ~1 year of daily history for each metric (empty arrays if unavailable). */
   history: MarketHistory;
   /** Human-readable notes about any source that failed (Korean). */

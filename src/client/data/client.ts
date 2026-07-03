@@ -655,6 +655,7 @@ const SAMPLE_MARKET: MarketSnapshot = {
     kospi: { value: 12.4, prevValue: 12.2 },
     kosdaq: { value: 9.8, prevValue: 9.9 },
   },
+  liquidity: { net: 5.72, net4wChange: -0.08, reserves: 3.22, rrp: 0.02, tga: 0.81, asOf: new Date().toISOString() },
   history: {
     fearGreed: sampleSeries(50, 18),
     custom: sampleSeries(18, 6),
@@ -664,6 +665,8 @@ const SAMPLE_MARKET: MarketSnapshot = {
     kosdaqAdr: sampleSeries(90, 22),
     creditKospi: sampleSeries(12, 1.2),
     creditKosdaq: sampleSeries(9.8, 1),
+    netLiquidity: sampleSeries(5.7, 0.15),
+    reserves: sampleSeries(3.2, 0.1),
   },
   errors: [],
 };
