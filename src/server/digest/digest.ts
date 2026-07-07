@@ -620,9 +620,22 @@ export async function generateDigest(
   // the creation moment — midnight rollover, matching the date you'd naturally look
   // under: made 밤 10시 7/7 → "7/7" (that day's window, already closed at 07시), made
   // 새벽 1시 7/8 → "7/8". An explicit `start` (past-date backfill) wins.
-  const startDate = opts.start ?? kstToday();
+  //
+  // Robustness: a STALE cached client (pre-fix) still defaults its date field to the
+  // old currentWindowDate — the still-OPEN future window (after 07시, "내일"). Nobody
+  // deliberately backfills a window that hasn't closed yet, so treat that exact value
+  // as the "지금 만들기" default too and re-date it to the creation day. (Before the
+  // 07시 boundary currentWindowDate == kstToday, so this is a no-op then.) This makes
+  // the filing date correct even if Railway hasn't redeployed or the browser is cached.
+  const manualNow = !opts.auto && !opts.slot && !opts.fromDigests;
+  const looksLikeStaleDefault =
+    manualNow &&
+    opts.start != null &&
+    (opts.end ?? opts.start) === opts.start &&
+    opts.start === currentWindowDate();
+  const startDate = opts.start == null || looksLikeStaleDefault ? kstToday() : opts.start;
   // Slot runs are single-day by definition (they split one day's window).
-  const endDate = opts.slot ? startDate : opts.end ?? startDate;
+  const endDate = opts.slot || looksLikeStaleDefault ? startDate : opts.end ?? startDate;
   const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
   const { start, end } = opts.slot ? slotBounds(startDate, opts.slot) : kstRangeBounds(startDate, endDate);
   const cfg = await settingsRepo.getAnalysisConfig();
