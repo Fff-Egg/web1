@@ -616,7 +616,10 @@ export async function generateDigest(
     console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
   }
-  const startDate = opts.start ?? kstToday();
+  // Manual digests with no explicit date land in the window of the CREATION moment
+  // (currentWindowDate: after the 07시 boundary → 다음날), so "지금 만든" digest is
+  // filed under the date we'll read it. An explicit `start` (past-date backfill) wins.
+  const startDate = opts.start ?? currentWindowDate();
   // Slot runs are single-day by definition (they split one day's window).
   const endDate = opts.slot ? startDate : opts.end ?? startDate;
   const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);

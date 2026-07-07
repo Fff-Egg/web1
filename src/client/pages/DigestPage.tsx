@@ -48,14 +48,14 @@ export function DigestPage() {
     }
   }, [list.data, selectedId]);
 
-  // Default the make-digest dates to the currently-OPEN window (once, on load), so
-  // "생성" digests today's live feed (07시~지금) instead of the already-swept window
-  // that the calendar date maps to under the 07시 boundary.
-  const datedRef = useRef(false);
+  // Keep the make-digest dates on the currently-OPEN window (창 = 만든 시각 기준;
+  // 07시 경계 이후엔 다음날) UNLESS the user manually picks a date. So an untouched
+  // manual digest is filed under the creation-moment window date — the server
+  // recomputes it at generate time (see the mutation below), staying precise.
+  const dateDirty = useRef(false);
   useEffect(() => {
     const cur = schedule.data?.currentWindowDate;
-    if (datedRef.current || !cur) return;
-    datedRef.current = true;
+    if (!cur || dateDirty.current) return;
     setStart(cur);
     setEnd(cur);
   }, [schedule.data]);
@@ -66,7 +66,15 @@ export function DigestPage() {
   };
 
   const generate = useMutation({
-    mutationFn: () => api.generateDigest({ start, end, title: title || undefined, fromDigests }),
+    // Untouched date → omit it so the SERVER dates the digest by the creation moment
+    // (currentWindowDate). Manually-picked date (past-date backfill) is sent explicitly.
+    mutationFn: () =>
+      api.generateDigest({
+        start: dateDirty.current ? start : undefined,
+        end: dateDirty.current ? end : undefined,
+        title: title || undefined,
+        fromDigests,
+      }),
     onMutate: () => {
       genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
       setGenState("pending");
@@ -346,7 +354,10 @@ export function DigestPage() {
             <input
               type="date"
               value={start}
-              onChange={(e) => setStart(e.target.value)}
+              onChange={(e) => {
+                dateDirty.current = true;
+                setStart(e.target.value);
+              }}
               className="mt-0.5 block rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </label>
@@ -355,7 +366,10 @@ export function DigestPage() {
             <input
               type="date"
               value={end}
-              onChange={(e) => setEnd(e.target.value)}
+              onChange={(e) => {
+                dateDirty.current = true;
+                setEnd(e.target.value);
+              }}
               className="mt-0.5 block rounded border border-slate-300 px-2 py-1 text-sm"
             />
           </label>
