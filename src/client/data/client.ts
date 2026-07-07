@@ -159,7 +159,7 @@ export interface DataApi {
   digestPurgeAll(): Promise<void>;
   /** Run hours (KST): midday (2nd run) + evening (boundary/sweep), plus the
    *  currently-open window's date (for the manual-digest form default). */
-  digestSchedule(): Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string }>;
+  digestSchedule(): Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string; today: string }>;
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
@@ -325,7 +325,7 @@ function makeTrpcApi(): DataApi {
     digestPurgeMany: async (ids) => { await client.digest.purgeMany.mutate({ ids }); },
     digestPurgeAll: async () => { await client.digest.purgeAll.mutate(); },
     digestSchedule: () =>
-      client.digest.schedule.query() as Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string }>,
+      client.digest.schedule.query() as Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string; today: string }>,
     listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
@@ -491,7 +491,12 @@ function makeStaticApi(): DataApi {
     async digestPurgeMany() {},
     async digestPurgeAll() {},
     async digestSchedule() {
-      return { middayHour: 17, eveningHour: 7, currentWindowDate: new Date().toLocaleDateString("en-CA") };
+      return {
+        middayHour: 17,
+        eveningHour: 7,
+        currentWindowDate: new Date().toLocaleDateString("en-CA"),
+        today: new Date().toLocaleDateString("en-CA"),
+      };
     },
     async listDigests() {
       return [

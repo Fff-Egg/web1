@@ -616,10 +616,11 @@ export async function generateDigest(
     console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
   }
-  // Manual digests with no explicit date land in the window of the CREATION moment
-  // (currentWindowDate: after the 07시 boundary → 다음날), so "지금 만든" digest is
-  // filed under the date we'll read it. An explicit `start` (past-date backfill) wins.
-  const startDate = opts.start ?? currentWindowDate();
+  // Manual digests with no explicit date are filed under the CALENDAR day (KST) of
+  // the creation moment — midnight rollover, matching the date you'd naturally look
+  // under: made 밤 10시 7/7 → "7/7" (that day's window, already closed at 07시), made
+  // 새벽 1시 7/8 → "7/8". An explicit `start` (past-date backfill) wins.
+  const startDate = opts.start ?? kstToday();
   // Slot runs are single-day by definition (they split one day's window).
   const endDate = opts.slot ? startDate : opts.end ?? startDate;
   const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);

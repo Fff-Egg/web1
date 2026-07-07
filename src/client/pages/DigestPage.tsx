@@ -54,7 +54,7 @@ export function DigestPage() {
   // recomputes it at generate time (see the mutation below), staying precise.
   const dateDirty = useRef(false);
   useEffect(() => {
-    const cur = schedule.data?.currentWindowDate;
+    const cur = schedule.data?.today;
     if (!cur || dateDirty.current) return;
     setStart(cur);
     setEnd(cur);
@@ -67,7 +67,7 @@ export function DigestPage() {
 
   const generate = useMutation({
     // Untouched date → omit it so the SERVER dates the digest by the creation moment
-    // (currentWindowDate). Manually-picked date (past-date backfill) is sent explicitly.
+    // (KST calendar day, midnight rollover). Manually-picked date (past-date backfill) is sent explicitly.
     mutationFn: () =>
       api.generateDigest({
         start: dateDirty.current ? start : undefined,

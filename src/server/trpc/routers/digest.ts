@@ -158,6 +158,9 @@ export const digestRouter = router({
     middayHour: middayHour(),
     eveningHour: digestHour(),
     currentWindowDate: currentWindowDate(),
+    // KST calendar day (midnight rollover) — the manual-digest form defaults here so
+    // a digest is filed under the day you actually made it.
+    today: kstToday(),
   })),
 
   /** Run the midday 작업 now: 낮분 다이제스트만 (current window's midday slot) — NEVER
