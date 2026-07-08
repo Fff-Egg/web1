@@ -58,13 +58,18 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
   // One-time hint for mapping: dump the columns we actually got.
   console.log(`[forcedLiq] KOFIA 증시자금 첫 행 키:`, JSON.stringify(rows[0]).slice(0, 400));
 
-  // Pick the first candidate column whose values look like a percentage.
-  const plausible = (k: string) =>
-    rows.filter((r) => typeof num(r[k]) === "number").length > rows.length * 0.5 &&
-    rows.every((r) => {
-      const v = num(r[k]);
-      return v === null || (v >= 0 && v <= 30);
-    });
+  // Pick the ratio column by its MEDIAN (not every row). TMPV7 is the verified
+  // 미수금대비 반대매매 비중(%) — median a few %, but a single capitulation day can
+  // spike past 30%. An every-row `<=30` gate would reject the whole column on one
+  // such day (and take 반대매매 down with it); a median gate keeps those spikes,
+  // which is exactly what S2 looks for. The 원-scale amount columns (TMPV5/6) have
+  // billion-sized medians and are correctly excluded.
+  const plausible = (k: string) => {
+    const vals = rows.map((r) => num(r[k])).filter((v): v is number => v !== null);
+    if (vals.length < rows.length * 0.5) return false;
+    const median = [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)];
+    return median >= 0 && median <= 30;
+  };
   const ratioKey = RATIO_KEYS.find(plausible);
   if (!ratioKey) throw new Error("KOFIA 증시자금: 반대매매 비중 컬럼을 식별하지 못함 (컬럼 매핑 필요)");
 
@@ -72,7 +77,8 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
   for (const r of rows) {
     const ts = parseYmd(r.TMPV1);
     const v = num(r[ratioKey]);
-    if (ts !== null && v !== null) out.push({ t: ts, v: Math.round(v * 100) / 100 });
+    // Keep any real ratio (incl. big spikes); drop only parse garbage / 원-scale.
+    if (ts !== null && v !== null && v >= 0 && v <= 100) out.push({ t: ts, v: Math.round(v * 100) / 100 });
   }
   return sliceLastYear(out, DAYS);
 }

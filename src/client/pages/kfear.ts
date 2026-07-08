@@ -236,6 +236,11 @@ interface Built {
 const nn = (v: number): number | null => (Number.isFinite(v) ? v : null);
 const fmtPct = (v: number): string => (Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—");
 const fmtPctile = (v: number): string => (Number.isFinite(v) ? `${(v * 100).toFixed(0)}%ile` : "—");
+/** M/D from a UTC-epoch trading-day timestamp. */
+const fmtMD = (t: number): string => {
+  const d = new Date(t);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+};
 
 /**
  * 한 시장(코스피 or 코스닥)의 3신호 + FEAR를 계산. price는 그 시장 지수 종가,
@@ -329,6 +334,20 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   let s2Max = 0;
   for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) if (Number.isFinite(liqPct[j])) s2Max = Math.max(s2Max, liqPct[j]);
   const s2Level = upperTailLevel(s2Max);
+  // 가장 최근 상위5% 스파이크가 언제였는지 — S2 충족/미충족 이유를 보여주려고(6일 창 안/밖).
+  let lastSpikeIdx = -1;
+  for (let i = L; i >= 0; i--) {
+    if (liqPct[i] >= SPIKE_PCT) {
+      lastSpikeIdx = i;
+      break;
+    }
+  }
+  const spikeAgo = lastSpikeIdx < 0 ? Infinity : L - lastSpikeIdx;
+  const s2Note =
+    lastSpikeIdx < 0
+      ? "최근 상위5% 스파이크 없음"
+      : `최근 상위5% ${fmtMD(dates[lastSpikeIdx])}(${liqA[lastSpikeIdx].toFixed(1)}%·${spikeAgo}일전)` +
+        (s2[L] ? " · 2일↓ 충족" : spikeAgo > SPIKE_LOOKBACK - 1 ? " · 6일창 밖" : " · 꺾임 대기");
   const s3Level: CapLevel =
     dispPct[L] <= 0.01 || disp[L] <= 88 ? 3 : dispPct[L] <= 0.05 || disp[L] <= 92 ? 2 : dispPct[L] <= 0.15 || disp[L] <= 96 ? 1 : 0;
 
@@ -346,8 +365,8 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       key: "S2 반대매매",
       met: s2[L],
       value: Number.isFinite(liqA[L]) ? `${liqA[L].toFixed(1)}%` : "—",
-      criteria: "비중 1년 상위5% 스파이크 & 2일 연속↓",
-      detail: `비중 1년 ${fmtPctile(liqPct[L])}${spike[L] ? " · 상위5% 스파이크" : ""}${s2[L] ? " · 2일↓" : ""}`,
+      criteria: "비중 1년 상위5% 스파이크(6일내) & 2일 연속↓",
+      detail: `비중 1년 ${fmtPctile(liqPct[L])} · ${s2Note}`,
       level: s2Level,
     },
     {
