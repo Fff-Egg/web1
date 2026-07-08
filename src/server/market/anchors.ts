@@ -102,6 +102,13 @@ export function assertAnchorSum(
   }
 }
 
+/** 소프트 버전: 앵커 날짜가 있는데 값이 틀리면 true(throw 대신 호출부가 그 시리즈만
+ *  드롭할 때 씀 — 예: 코스닥만 이상하면 코스피는 살림). 날짜 없거나 빈 시리즈면 false. */
+export function anchorViolated(series: SeriesPoint[], y: number, m: number, d: number, expected: number, tol: number, tolMs: number): boolean {
+  if (!series || series.length === 0) return false;
+  return anyNear(series, y, m, d, expected, tol, tolMs) === false;
+}
+
 interface AnchorSpec {
   label: string;
   y: number;

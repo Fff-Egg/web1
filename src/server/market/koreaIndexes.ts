@@ -1,7 +1,7 @@
 import type { SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 import { fetchCloses } from "./tradingview.js";
-import { assertAnchor, TZ_TOL_MS } from "./anchors.js";
+import { assertAnchor, anchorViolated, TZ_TOL_MS } from "./anchors.js";
 
 /**
  * KOSPI / KOSDAQ index daily closes for the K-공포지수 대시보드.
@@ -43,12 +43,16 @@ export async function fetchKoreaIndexes(
   assertAnchor(kospiClose, 2026, 6, 23, 8203.84, 45, TZ_TOL_MS, "코스피 종가");
   assertAnchor(kospiClose, 2026, 7, 8, 7246.79, 45, TZ_TOL_MS, "코스피 종가");
 
-  // 코스닥은 검증된 정확 앵커값이 아직 없어 스케일 sanity band만(오종목이면 스케일이
-  // 완전히 다름 — 지수는 대략 300~4000). 벗어나면 코스닥만 드롭(코스피는 유지).
+  // 코스닥은 불일치 시 **코스닥만 드롭**(코스피는 유지 — 한 심볼 문제로 둘 다 안 죽임).
+  // 정밀 앵커(Investing 실측): 07-08=785.00, 07-07=831.23. + sanity band(200~4000)로
+  // 앵커일이 창 밖(먼 미래)일 때의 오종목도 커버.
   const kqLast = kosdaqClose.at(-1)?.v;
-  const kosdaqOut = kqLast !== undefined && (kqLast < 200 || kqLast > 4000) ? [] : kosdaqClose;
-  if (kosdaqOut.length === 0 && kosdaqClose.length > 0) {
-    console.warn(`[koreaIndexes] 코스닥 종가 이상치 ${kqLast} — KRX:KOSDAQ 오종목 의심, 드롭`);
+  const kqBad =
+    anchorViolated(kosdaqClose, 2026, 7, 8, 785.0, 8, TZ_TOL_MS) ||
+    anchorViolated(kosdaqClose, 2026, 7, 7, 831.23, 8, TZ_TOL_MS) ||
+    (kqLast !== undefined && (kqLast < 200 || kqLast > 4000));
+  if (kqBad && kosdaqClose.length > 0) {
+    console.warn(`[koreaIndexes] 코스닥 종가 앵커 불일치/이상치 (최근 ${kqLast}) — KRX:KOSDAQ 오종목 의심, 드롭`);
   }
-  return { kospiClose, kosdaqClose: kosdaqOut };
+  return { kospiClose, kosdaqClose: kqBad ? [] : kosdaqClose };
 }

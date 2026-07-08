@@ -81,18 +81,24 @@ export interface KFearResult {
 
 // ── 시계열 헬퍼 (pandas 동작 이식) ──
 
-/** source 값을 targetDates에 맞춰 정렬 (target 이하 최근값; 첫 관측 전은 NaN).
- *  레퍼런스는 `reindex(px.index).ffill()`(정확한 날짜 매칭 후 ffill)이지만, 여기선
- *  **as-of(≤)** 방식을 쓴다 — 같은 거래일 달력이면 결과가 동일하고(신용·지수 모두
- *  한국 거래일), TradingView 바 타임스탬프와 KOFIA 자정-UTC 규약이 어긋나도 전체가
- *  NaN으로 무너지지 않게(정확 매칭보다 견고) 하기 위함. 최악의 경우도 신용 1일 시프트
- *  정도라 느리게 움직이는 신용잔고 신호엔 영향이 미미하다. */
+const DAY_MS = 86400000;
+/**
+ * KST 거래일 정수 키. 소스마다 타임스탬프 규약이 달라도(KOFIA=Date.UTC 자정,
+ * TradingView 일봉=UTC자정 or 전일 15:00Z=KST자정) **같은 거래일이면 같은 키**가 되게
+ * +9h 후 날짜로 내림. 이걸로 정렬하면 TV 규약이 무엇이든 KOFIA와 결정적으로 맞아,
+ * "지수-앞선 하루가 ffill로 붙어 KOFIA가 1일 밀리는" 문제가 사라진다.
+ */
+const kstDay = (t: number) => Math.floor((t + 9 * 3600000) / DAY_MS);
+
+/** source 값을 targetDates에 맞춰 정렬 (KST 거래일 기준 as-of: target 거래일 이하 최근값,
+ *  첫 관측 전은 NaN). 레퍼런스 `reindex(px.index).ffill()`와 동치이되 tz 규약 차이에 견고. */
 function alignFfill(targetDates: number[], source: SeriesPoint[]): number[] {
   const out = new Array<number>(targetDates.length).fill(NaN);
   let j = 0;
   let last = NaN;
   for (let i = 0; i < targetDates.length; i++) {
-    while (j < source.length && source[j].t <= targetDates[i]) {
+    const key = kstDay(targetDates[i]);
+    while (j < source.length && kstDay(source[j].t) <= key) {
       last = source[j].v;
       j++;
     }
@@ -278,11 +284,13 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   // KOFIA가 ffill(전일값 반복)되어 S2의 "2일 연속↓" 같은 신호가 flat으로 깨진다.
   // → "오늘"(평가 기준일)을 KOFIA가 실제로 존재하는 마지막 거래일에 맞춘다
   // (문서 6-5: 가장 최근 available 날짜 = 기준일). 그 이후 지수-앞선 ffill 구간은 제외.
-  const lastKofia = Math.min(
-    credit.length ? credit[credit.length - 1].t : Infinity,
-    liq.length ? liq[liq.length - 1].t : Infinity,
+  // KST 거래일 키로 자른다(tz 규약 무관하게 결정적). 지수를 KOFIA 최신 거래일까지만 남겨,
+  // 지수-앞선 하루가 ffill로 신호를 흐리지 않게.
+  const lastKofiaKey = Math.min(
+    credit.length ? kstDay(credit[credit.length - 1].t) : Infinity,
+    liq.length ? kstDay(liq[liq.length - 1].t) : Infinity,
   );
-  const priceEff = Number.isFinite(lastKofia) ? price.filter((p) => p.t <= lastKofia) : price;
+  const priceEff = Number.isFinite(lastKofiaKey) ? price.filter((p) => kstDay(p.t) <= lastKofiaKey) : price;
   if (priceEff.length < DISP_N) return empty;
 
   const dates = priceEff.map((p) => p.t);
