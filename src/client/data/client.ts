@@ -649,6 +649,9 @@ const SAMPLE_MARKET: MarketSnapshot = {
     reserves: sampleSeries(3.2, 0.1),
     tga: sampleSeries(0.8, 0.15),
     rrp: sampleSeries(0.02, 0.01),
+    kospiClose: sampleSeries(8200, 400),
+    vkospi: sampleSeries(30, 12),
+    forcedLiqRatio: sampleSeries(2, 1.2),
   },
   errors: [],
 };

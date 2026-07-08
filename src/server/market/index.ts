@@ -7,6 +7,8 @@ import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
 import { fetchAdr, fetchAdrHistory } from "./adr.js";
 import { fetchCreditSnapshot } from "./credit.js";
 import { fetchLiquidity } from "./liquidity.js";
+import { fetchKoreaIndexes } from "./capitulation.js";
+import { fetchForcedLiqRatio } from "./forcedLiq.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
 const CUSTOM_SYMBOL_KEY = "marketCustomSymbol";
@@ -25,6 +27,9 @@ const EMPTY_HISTORY: MarketHistory = {
   reserves: [],
   tga: [],
   rrp: [],
+  kospiClose: [],
+  vkospi: [],
+  forcedLiqRatio: [],
 };
 
 /** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
@@ -56,7 +61,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   const history: MarketHistory = { ...EMPTY_HISTORY };
   const customSymbol = await getCustomSymbol();
 
-  const [fg, breadth, custom, adr, adrHist, credit, liquidity] = await Promise.all([
+  const [fg, breadth, custom, adr, adrHist, credit, liquidity, koreaIdx, forcedLiq] = await Promise.all([
     fetchFearGreed().catch((e: unknown) => {
       errors.push(`Fear & Greed 수집 실패: ${msg(e)}`);
       return null;
@@ -85,6 +90,14 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
       errors.push(`미국 순유동성(FRED) 수집 실패: ${msg(e)}`);
       return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] }, errors: [] };
     }),
+    fetchKoreaIndexes().catch((e: unknown) => {
+      errors.push(`코스피/VKOSPI 수집 실패: ${msg(e)}`);
+      return { kospiClose: [], vkospi: [] };
+    }),
+    fetchForcedLiqRatio().catch((e: unknown) => {
+      errors.push(`반대매매 비중(KOFIA) 수집 실패: ${msg(e)}`);
+      return [] as typeof history.forcedLiqRatio;
+    }),
   ]);
   // Partial liquidity failures (e.g. RRP only) don't throw — surface them too.
   for (const e of liquidity.errors) errors.push(`미국 순유동성 일부 시리즈 실패: ${e}`);
@@ -103,6 +116,9 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.reserves = liquidity.history.reserves;
   history.tga = liquidity.history.tga;
   history.rrp = liquidity.history.rrp;
+  history.kospiClose = koreaIdx.kospiClose;
+  history.vkospi = koreaIdx.vkospi;
+  history.forcedLiqRatio = forcedLiq;
 
   return {
     fetchedAt: new Date().toISOString(),
@@ -135,6 +151,9 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.reserves === undefined) snap.history.reserves = [];
   if (snap.history.tga === undefined) snap.history.tga = [];
   if (snap.history.rrp === undefined) snap.history.rrp = [];
+  if (snap.history.kospiClose === undefined) snap.history.kospiClose = [];
+  if (snap.history.vkospi === undefined) snap.history.vkospi = [];
+  if (snap.history.forcedLiqRatio === undefined) snap.history.forcedLiqRatio = [];
   if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
   if (snap.liquidity === undefined) snap.liquidity = null;
   return snap;
