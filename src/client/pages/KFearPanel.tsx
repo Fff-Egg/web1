@@ -66,11 +66,30 @@ function MarketCard({ m }: { m: MarketFear }) {
       </div>
       {/* 최종 권장 비중 = depth × 등급계수 (코스닥 단독이면 상한). */}
       <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
-        <div className="flex items-baseline justify-between">
+        <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs font-medium text-slate-500">권장 비중</span>
-          <span className="text-2xl font-bold tabular-nums text-slate-800">
-            {m.sizing.pct}%
-            {m.sizing.capped && <span className="ml-1 align-middle text-[10px] font-semibold text-amber-600">단독 상한</span>}
+          <span className="flex items-baseline gap-1.5">
+            {/* 코스닥 동반/단독 레짐 — 비중 % 바로 옆(대칭 유지, 중간 전폭 블록 제거). */}
+            {showRegimeOk && (
+              <span
+                className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700"
+                title="시장 전반 공포(코스피 동반) — 과거 이 조합의 신뢰 높음"
+              >
+                ✓ 동반
+              </span>
+            )}
+            {showRegimeWarn && (
+              <span
+                className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
+                title="코스피 미동반 — 코스닥 단독 약세 가능성(과거 이 조합의 6개월 기대수익 낮음)"
+              >
+                ⚠ 단독
+              </span>
+            )}
+            <span className="text-2xl font-bold tabular-nums text-slate-800">
+              {m.sizing.pct}%
+              {m.sizing.capped && <span className="ml-1 align-middle text-[10px] font-semibold text-amber-600">단독 상한</span>}
+            </span>
           </span>
         </div>
         <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-400">
@@ -102,17 +121,6 @@ function MarketCard({ m }: { m: MarketFear }) {
         })}
         {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=20%</span>}
       </div>
-
-      {showRegimeWarn && (
-        <div className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
-          ⚠️ 코스피 미동반 — 코스닥 단독 약세 가능성(과거 이 조합의 6개월 기대수익 낮음)
-        </div>
-      )}
-      {showRegimeOk && (
-        <div className="mt-2 rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-700">
-          ✓ 시장 전반 공포(코스피 동반) — 과거 이 조합의 신뢰 높음
-        </div>
-      )}
 
       {/* 3신호 */}
       <ul className="mt-2 divide-y divide-slate-100">
