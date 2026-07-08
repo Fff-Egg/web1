@@ -68,6 +68,28 @@ function MarketCard({ m }: { m: MarketFear }) {
         <span>권장 사이징: <span className="font-medium text-slate-600">{m.size}</span></span>
         <span>{m.nOn}/3 신호</span>
       </div>
+      {/* 사이징 사다리 — 신용 낙폭(depth)이 깊을수록 큰 분할. 도달한 단계 강조. */}
+      <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+        <span className="text-slate-400">
+          신용 {m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—"} →
+        </span>
+        {[
+          { label: "1차", th: -8, alloc: "40%" },
+          { label: "2차", th: -15, alloc: "70%" },
+          { label: "3차", th: -25, alloc: "100%" },
+        ].map((t) => {
+          const reached = m.creditDd !== null && m.creditDd * 100 <= t.th;
+          return (
+            <span
+              key={t.label}
+              className={"rounded px-1.5 py-0.5 " + (reached ? "bg-red-100 font-semibold text-red-700" : "bg-slate-100 text-slate-400")}
+            >
+              {t.label} ≤{t.th}% <span className="font-normal opacity-70">≈{t.alloc}</span>
+            </span>
+          );
+        })}
+        {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=소액 탐색 ≤20%</span>}
+      </div>
 
       {showRegimeWarn && (
         <div className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
