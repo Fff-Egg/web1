@@ -274,10 +274,19 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       { key: "S3 이격도60", met: false, value: "—", criteria: "이격도 ≤92 or 1년 하위5%", detail: "데이터 없음", level: 0 },
     ],
   };
-  if (price.length < DISP_N) return empty;
+  // KOFIA(신용·반대매매)는 T+1 공표라 지수보다 하루+ 뒤처진다. 지수가 앞선 날은
+  // KOFIA가 ffill(전일값 반복)되어 S2의 "2일 연속↓" 같은 신호가 flat으로 깨진다.
+  // → "오늘"(평가 기준일)을 KOFIA가 실제로 존재하는 마지막 거래일에 맞춘다
+  // (문서 6-5: 가장 최근 available 날짜 = 기준일). 그 이후 지수-앞선 ffill 구간은 제외.
+  const lastKofia = Math.min(
+    credit.length ? credit[credit.length - 1].t : Infinity,
+    liq.length ? liq[liq.length - 1].t : Infinity,
+  );
+  const priceEff = Number.isFinite(lastKofia) ? price.filter((p) => p.t <= lastKofia) : price;
+  if (priceEff.length < DISP_N) return empty;
 
-  const dates = price.map((p) => p.t);
-  const close = price.map((p) => p.v);
+  const dates = priceEff.map((p) => p.t);
+  const close = priceEff.map((p) => p.v);
   const n = close.length;
   const creditA = alignFfill(dates, credit);
   const liqA = alignFfill(dates, liq);
@@ -355,15 +364,13 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     }
   }
   const spikeAgo = lastSpikeIdx < 0 ? Infinity : L - lastSpikeIdx;
-  // "꺾임"은 지금 2거래일 연속 하락을 뜻함. 미충족 이유를 구분해 보여준다: 6일 창 밖 /
-  // 최신 반대매매 미공표(KOFIA T+1이라 오늘=전일값 ffill로 flat) / 단순 연속↓ 아님.
+  // "꺾임"은 기준일 기준 2거래일 연속 하락. 미충족이면 이유를 구분: 스파이크가 6일
+  // 창을 벗어남 / 아직 2일 연속 하락이 아님.
   const s2Reason = s2[L]
     ? "2일 연속↓ 충족"
     : spikeAgo > SPIKE_LOOKBACK - 1
       ? "6일 창 밖"
-      : liqA[L] === liqA[L - 1]
-        ? "최신 반대매매 미공표(전일값 유지)"
-        : "아직 2일 연속↓ 아님";
+      : "아직 2일 연속↓ 아님";
   const s2Note =
     lastSpikeIdx < 0
       ? "최근 상위5% 스파이크 없음"
