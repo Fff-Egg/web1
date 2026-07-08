@@ -1,6 +1,6 @@
 import type { CreditQuote, SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
-import { assertAnchor } from "./anchors.js";
+import { assertAnchor, assertAnchorSum } from "./anchors.js";
 
 /**
  * 신용거래융자 잔고 (Korean margin-loan balance) for KOSPI / KOSDAQ.
@@ -105,9 +105,12 @@ export async function fetchCreditSnapshot(timeoutMs = 20_000): Promise<CreditSna
   const ks = sliceLastYear(kospi);
   const kq = sliceLastYear(kosdaq);
   // HARD 앵커: ×8 보정이 맞는지 실측값으로 검문. 게이트웨이가 배수를 바꾸거나(1배 복귀
-  // 등) 컬럼이 이동하면 여기서 throw → 신용잔고를 통째 거부(8배 뻥튀기가 화면에 안 뜸).
-  // 2026-07-07 유가 = 29.074973조 (KOFIA 실화면 대조). 그 날짜가 창에 없으면 no-op.
+  // 등) 컬럼이 이동하면 throw → 신용잔고 통째 거부(8배 뻥튀기가 화면에 안 뜸).
+  // 유가·코스닥 **둘 다** + **합계**까지 검문(한 컬럼만 스케일 틀어지는 사고 차단).
+  // 2026-07-07 유가 29.074973 / 코스닥 7.990423조, 06-24 전체 38.632824조 (실화면 대조).
   assertAnchor(ks, 2026, 7, 7, 29.074973, 0.05, 0, "신용융자 유가(조)");
+  assertAnchor(kq, 2026, 7, 7, 7.990423, 0.05, 0, "신용융자 코스닥(조)");
+  assertAnchorSum(ks, kq, 2026, 6, 24, 38.632824, 0.1, 0, "신용융자 전체(조)");
   return { kospi: toQuote(ks), kosdaq: toQuote(kq), history: { kospi: ks, kosdaq: kq } };
 }
 

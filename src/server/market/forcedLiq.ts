@@ -85,8 +85,11 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
     if (ratioKey) how = "앵커(07-07=2.2) 매칭";
   }
   if (!ratioKey) {
-    ratioKey = RATIO_KEYS.find(medianPlausible);
-    if (ratioKey) how = "중앙값 폴백(앵커 날짜 없음)";
+    // 앵커 날짜가 창 밖일 때(먼 미래)의 폴백. 컬럼 재정렬에도 견고하도록 RATIO_KEYS만이
+    // 아니라 응답의 모든 TMPV* 컬럼을 중앙값으로 스캔한다.
+    const allCols = [...RATIO_KEYS, ...Object.keys(rows[0] ?? {}).filter((k) => k.startsWith("TMPV") && k !== "TMPV1")];
+    ratioKey = allCols.find(medianPlausible);
+    if (ratioKey) how = "중앙값 폴백(전 TMPV 스캔·앵커 날짜 없음)";
   }
   console.log(`[forcedLiq] 반대매매 컬럼 = ${ratioKey ?? "식별 실패"} (${how || "실패"})`);
   if (!ratioKey) throw new Error("KOFIA 증시자금: 반대매매 비중 컬럼을 식별하지 못함 (컬럼 매핑 필요)");

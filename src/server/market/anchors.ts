@@ -4,52 +4,46 @@ import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
  * 데이터 정합성 앵커 — 실제 KOFIA 화면 / KRX에서 확인한 고정 기준값.
  *
  * 파싱·단위·심볼이 조용히 바뀌면 아래 값에서 어긋난다. 그럼 모든 하류 신호가
- * 무의미해지므로, 스냅샷 수집 때마다 대조해 **불일치 시 시끄럽게 경고**한다
- * (throw가 아니라 errors[]로 노출 — 한 앵커가 틀려도 나머지는 보되, 사용자가 즉시
- * 인지하도록). 날짜는 KST 달력일. 시리즈 t는 KOFIA=Date.UTC(자정), 지수=바 ms.
+ * 무의미해지므로 두 겹으로 막는다:
+ *  1) assertAnchor / assertAnchorSum — 각 수집기가 자기 시리즈를 검문, 불일치 시
+ *     **throw**해서 그 소스를 통째 거부(빈 시리즈 → 화면엔 '수집 실패'만, 이상값 X).
+ *  2) checkAnchors — 스냅샷 레벨 소프트 경고(staleness 등) errors[]로 노출.
+ *
+ * 날짜 매칭은 **밀리초 허용오차(tolMs)**로 한다: KOFIA는 정확한 Date.UTC(자정)이라
+ * tolMs=0(정확 일치)로, 지수(TradingView)는 바 타임스탬프가 tz로 몇 시간 밀릴 수
+ * 있어 tolMs=TZ_TOL_MS(20h)로 — 같은 세션 봉(≤15h 오프셋)은 매칭하되 **인접 거래일
+ * (≥24h)은 절대 안 잡는다**(그래야 앵커일 봉이 아직 없을 때 옆날 봉을 잘못 잡아
+ * false-throw하는 사고를 막음).
  */
 
-interface AnchorSpec {
-  label: string;
-  y: number;
-  m: number;
-  d: number;
-  expected: number;
-  tol: number; // 시리즈 단위 절대 허용오차
-  tolDays: number; // 날짜 매칭 허용(지수는 tz 오차 대비 ±1)
-  series: (h: MarketSnapshot["history"]) => SeriesPoint[] | undefined;
-}
-
-/** 유가+코스닥 신용융자 전체는 별도 취급(두 시리즈 합산). */
-const ANCHORS: AnchorSpec[] = [
-  { label: "신용융자 유가(조)", y: 2026, m: 7, d: 7, expected: 29.074973, tol: 0.05, tolDays: 0, series: (h) => h.creditKospi },
-  { label: "반대매매 비중(%)", y: 2026, m: 7, d: 7, expected: 2.2, tol: 0.2, tolDays: 0, series: (h) => h.forcedLiqRatio },
-  { label: "반대매매 비중(%)", y: 2026, m: 6, d: 24, expected: 7.5, tol: 0.4, tolDays: 0, series: (h) => h.forcedLiqRatio },
-  { label: "코스피 종가", y: 2026, m: 6, d: 23, expected: 8203.84, tol: 45, tolDays: 1, series: (h) => h.kospiClose },
-  { label: "코스피 종가", y: 2026, m: 7, d: 8, expected: 7246.79, tol: 45, tolDays: 1, series: (h) => h.kospiClose },
-];
-
 const DAY = 86400000;
+/** 지수 앵커 tz 허용(20h): 같은 세션 봉만 잡고 인접 거래일(≥24h)은 배제. */
+export const TZ_TOL_MS = 20 * 3600000;
 
-/** 대상 달력일(±tolDays) 중 가장 가까운 점의 값. 없으면 null(아직 수집 안 됨). */
-function valueOn(series: SeriesPoint[], y: number, m: number, d: number, tolDays: number): number | null {
+const pad = (n: number) => String(n).padStart(2, "0");
+const isoDay = (t: number) => {
+  const dd = new Date(t);
+  return `${dd.getUTCFullYear()}-${pad(dd.getUTCMonth() + 1)}-${pad(dd.getUTCDate())}`;
+};
+
+/** 대상일 ±tolMs 안에서 target에 가장 가까운 점의 값(없으면 null). */
+function valueOn(series: SeriesPoint[], y: number, m: number, d: number, tolMs: number): number | null {
   const target = Date.UTC(y, m - 1, d);
   let best: { dt: number; v: number } | null = null;
   for (const p of series) {
     const dt = Math.abs(p.t - target);
-    if (dt <= tolDays * DAY && (!best || dt < best.dt)) best = { dt, v: p.v };
+    if (dt <= tolMs && (!best || dt < best.dt)) best = { dt, v: p.v };
   }
   return best ? best.v : null;
 }
 
-/** 대상 달력일(±tolDays) 안에 expected(±tol)에 맞는 점이 하나라도 있는가.
- *  true = 통과, false = 그 날짜대는 있는데 값이 다 틀림(불일치), null = 그 날짜 자체가
- *  창에 없음(검증 불가). tz 오프셋(몇 시간~하루)에도 견고하게 "근처 아무 봉이나 맞으면 OK". */
-function anyNear(series: SeriesPoint[], y: number, m: number, d: number, expected: number, tol: number, tolDays: number): boolean | null {
+/** 대상일 ±tolMs 안에 expected(±tol)에 맞는 점이 하나라도 있는가.
+ *  true=통과, false=그 날짜대는 있으나 값이 다 틀림, null=그 날짜 자체가 없음(검증불가). */
+function anyNear(series: SeriesPoint[], y: number, m: number, d: number, expected: number, tol: number, tolMs: number): boolean | null {
   const target = Date.UTC(y, m - 1, d);
   let sawDate = false;
   for (const p of series) {
-    if (Math.abs(p.t - target) <= tolDays * DAY) {
+    if (Math.abs(p.t - target) <= tolMs) {
       sawDate = true;
       if (Math.abs(p.v - expected) <= tol) return true;
     }
@@ -58,11 +52,9 @@ function anyNear(series: SeriesPoint[], y: number, m: number, d: number, expecte
 }
 
 /**
- * HARD 앵커 검문소 — 각 수집기가 자기 시리즈를 검증. 앵커 날짜가 데이터에 **있는데**
- * 값이 어긋나면 **throw**해서 그 소스를 통째로 거부한다(수집 실패 처리 → 빈 시리즈 →
- * 화면엔 '수집 실패'만, 틀린 숫자는 절대 안 뜸). 앵커 날짜가 아직 없거나 시리즈가
- * 비었으면 no-op(검증 불가 시 통과). "×8 배수 변경·TMPV 컬럼 이동·심볼 변경"을
- * 화면에 이상값이 뜨기 전에 차단하는 게 목적.
+ * HARD 앵커 검문소 — 앵커 날짜가 데이터에 **있는데** 값이 어긋나면 throw.
+ * 날짜가 아직 없거나(오늘/미래·휴장) 시리즈가 비었으면 no-op(검증 불가 시 통과 —
+ * 오탐 방지). "×8 배수 변경·TMPV 컬럼 이동·심볼 변경"을 화면에 뜨기 전에 차단.
  */
 export function assertAnchor(
   series: SeriesPoint[],
@@ -71,47 +63,92 @@ export function assertAnchor(
   d: number,
   expected: number,
   tol: number,
-  tolDays: number,
+  tolMs: number,
   label: string,
 ): void {
   if (!series || series.length === 0) return;
-  const ok = anyNear(series, y, m, d, expected, tol, tolDays);
+  const ok = anyNear(series, y, m, d, expected, tol, tolMs);
   if (ok === false) {
-    const target = Date.UTC(y, m - 1, d);
-    const nearest = series
-      .filter((p) => Math.abs(p.t - target) <= tolDays * DAY)
-      .sort((a, b) => Math.abs(a.t - target) - Math.abs(b.t - target))[0];
+    const v = valueOn(series, y, m, d, tolMs);
     throw new Error(
-      `앵커 불일치 [${label}] ${y}-${pad(m)}-${pad(d)}: 계산 ${nearest?.v.toFixed(3) ?? "?"} vs 기준 ${expected}` +
+      `앵커 불일치 [${label}] ${y}-${pad(m)}-${pad(d)}: 계산 ${v?.toFixed(3) ?? "?"} vs 기준 ${expected}` +
         ` — 파싱/단위/심볼 변경으로 데이터 신뢰 불가 → 저장 거부`,
     );
   }
 }
 
-const pad = (n: number) => String(n).padStart(2, "0");
-const isoDay = (t: number) => {
-  const dd = new Date(t);
-  return `${dd.getUTCFullYear()}-${pad(dd.getUTCMonth() + 1)}-${pad(dd.getUTCDate())}`;
-};
+/** 두 시리즈 합의 앵커(예: 유가+코스닥 = 신용융자 전체). 둘 다 그 날짜가 있고 합이
+ *  어긋나면 throw — 한 컬럼만 스케일이 틀어지는(예: 코스닥만 ×1) 사고를 잡는다. */
+export function assertAnchorSum(
+  a: SeriesPoint[],
+  b: SeriesPoint[],
+  y: number,
+  m: number,
+  d: number,
+  expected: number,
+  tol: number,
+  tolMs: number,
+  label: string,
+): void {
+  if (!a?.length || !b?.length) return;
+  const va = valueOn(a, y, m, d, tolMs);
+  const vb = valueOn(b, y, m, d, tolMs);
+  if (va === null || vb === null) return;
+  if (Math.abs(va + vb - expected) > tol) {
+    throw new Error(
+      `앵커 불일치 [${label}] ${y}-${pad(m)}-${pad(d)}: 계산 ${(va + vb).toFixed(3)} vs 기준 ${expected}` +
+        ` — 컬럼별 단위/스케일 불일치 의심 → 저장 거부`,
+    );
+  }
+}
 
-/**
- * 앵커 대조 + 지수 staleness 검사. 경고 문자열 배열을 반환(빈 배열 = 정상).
- * - 시리즈가 비어있으면(수집 실패) 건너뜀 — 그 실패는 다른 곳에서 이미 errors에 남음.
- * - 날짜가 창 밖이면(아직 미수집) 건너뜀.
- */
+interface AnchorSpec {
+  label: string;
+  y: number;
+  m: number;
+  d: number;
+  expected: number;
+  tol: number;
+  tolMs: number;
+  series: (h: MarketSnapshot["history"]) => SeriesPoint[] | undefined;
+}
+
+/** 소프트 경고용(2차 방어). 1차 hard assert가 이미 거른 뒤라 대부분 통과하지만,
+ *  staleness처럼 수집기 단독으로 못 보는 것과 belt-and-suspenders용. */
+const ANCHORS: AnchorSpec[] = [
+  { label: "신용융자 유가(조)", y: 2026, m: 7, d: 7, expected: 29.074973, tol: 0.05, tolMs: 0, series: (h) => h.creditKospi },
+  { label: "신용융자 코스닥(조)", y: 2026, m: 7, d: 7, expected: 7.990423, tol: 0.05, tolMs: 0, series: (h) => h.creditKosdaq },
+  { label: "반대매매 비중(%)", y: 2026, m: 7, d: 7, expected: 2.2, tol: 0.2, tolMs: 0, series: (h) => h.forcedLiqRatio },
+  { label: "반대매매 비중(%)", y: 2026, m: 6, d: 24, expected: 7.5, tol: 0.4, tolMs: 0, series: (h) => h.forcedLiqRatio },
+  { label: "코스피 종가", y: 2026, m: 6, d: 23, expected: 8203.84, tol: 45, tolMs: TZ_TOL_MS, series: (h) => h.kospiClose },
+  { label: "코스피 종가", y: 2026, m: 7, d: 8, expected: 7246.79, tol: 45, tolMs: TZ_TOL_MS, series: (h) => h.kospiClose },
+];
+
+/** 앵커 대조 + 지수 staleness. 경고 문자열 배열 반환(빈 배열 = 정상). */
 export function checkAnchors(snap: MarketSnapshot): string[] {
   const h = snap.history;
   const warns: string[] = [];
 
+  const evaluated = new Set<SeriesPoint[]>();
   for (const a of ANCHORS) {
     const s = a.series(h);
     if (!s || s.length === 0) continue;
-    const v = valueOn(s, a.y, a.m, a.d, a.tolDays);
+    const v = valueOn(s, a.y, a.m, a.d, a.tolMs);
     if (v === null) continue;
+    evaluated.add(s);
     if (Math.abs(v - a.expected) > a.tol) {
-      warns.push(
-        `⚠️ 앵커 불일치 [${a.label}] ${a.y}-${pad(a.m)}-${pad(a.d)}: 계산 ${v.toFixed(3)} vs 기준 ${a.expected} — 파싱/단위/심볼 변경 의심`,
-      );
+      warns.push(`⚠️ 앵커 불일치 [${a.label}] ${a.y}-${pad(a.m)}-${pad(a.d)}: 계산 ${v.toFixed(3)} vs 기준 ${a.expected} — 파싱/단위/심볼 변경 의심`);
+    }
+  }
+  // 앵커 기준일이 모두 데이터 창 밖(먼 미래에 밀려남)이면 검증 자체가 무력 — "있는데 못
+  // 잰 것"과 "전부 정상"을 구별해 알림(새 앵커 필요 신호). throw는 아님(정상 노후화).
+  for (const [name, s] of [
+    ["신용융자", h.creditKospi],
+    ["반대매매", h.forcedLiqRatio],
+    ["코스피 종가", h.kospiClose],
+  ] as const) {
+    if (s && s.length > 0 && !evaluated.has(s)) {
+      warns.push(`ℹ️ [${name}] 앵커 기준일이 모두 데이터 창 밖 — 정합성 검증 불가(새 앵커 추가 필요)`);
     }
   }
 
@@ -124,8 +161,7 @@ export function checkAnchors(snap: MarketSnapshot): string[] {
     }
   }
 
-  // 지수(TV)는 실시간, KOFIA는 T+1 → 지수가 KOFIA보다 오래되면 TradingView WS가 조용히
-  // 멈춘 것(종가 고정 → F3·F4 왜곡). 2일 넘게 뒤처지면 경고.
+  // 지수(TV)는 실시간, KOFIA는 T+1 → 지수가 2일 넘게 뒤처지면 WS 멈춤 의심.
   const idxLast = h.kospiClose?.at(-1)?.t;
   const kofiaLast = h.forcedLiqRatio?.at(-1)?.t;
   if (idxLast && kofiaLast && idxLast < kofiaLast - 2 * DAY) {

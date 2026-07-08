@@ -1,7 +1,7 @@
 import type { SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 import { fetchCloses } from "./tradingview.js";
-import { assertAnchor } from "./anchors.js";
+import { assertAnchor, TZ_TOL_MS } from "./anchors.js";
 
 /**
  * KOSPI / KOSDAQ index daily closes for the K-공포지수 대시보드.
@@ -38,9 +38,17 @@ export async function fetchKoreaIndexes(
     firstWithData(KOSDAQ_SYMBOLS, timeoutMs),
   ]);
   // HARD 앵커: 심볼이 바뀌거나 엉뚱한 종목이 잡히면 throw → 지수 통째 거부(F3·F4가
-  // 틀린 종가로 계산되는 걸 차단). tz 오프셋 대비 ±1일 창에서 "근처 봉 중 하나라도
-  // 기준값이면 통과". 코스피 2026-06-23=8203.84, 2026-07-08=7246.79 (KRX 실측).
-  assertAnchor(kospiClose, 2026, 6, 23, 8203.84, 45, 1, "코스피 종가");
-  assertAnchor(kospiClose, 2026, 7, 8, 7246.79, 45, 1, "코스피 종가");
-  return { kospiClose, kosdaqClose };
+  // 틀린 종가로 계산되는 걸 차단). tz 오프셋(≤~15h)은 잡되 인접 거래일(≥24h)은 배제
+  // (TZ_TOL_MS). 코스피 2026-06-23=8203.84, 2026-07-08=7246.79 (KRX 실측).
+  assertAnchor(kospiClose, 2026, 6, 23, 8203.84, 45, TZ_TOL_MS, "코스피 종가");
+  assertAnchor(kospiClose, 2026, 7, 8, 7246.79, 45, TZ_TOL_MS, "코스피 종가");
+
+  // 코스닥은 검증된 정확 앵커값이 아직 없어 스케일 sanity band만(오종목이면 스케일이
+  // 완전히 다름 — 지수는 대략 300~4000). 벗어나면 코스닥만 드롭(코스피는 유지).
+  const kqLast = kosdaqClose.at(-1)?.v;
+  const kosdaqOut = kqLast !== undefined && (kqLast < 200 || kqLast > 4000) ? [] : kosdaqClose;
+  if (kosdaqOut.length === 0 && kosdaqClose.length > 0) {
+    console.warn(`[koreaIndexes] 코스닥 종가 이상치 ${kqLast} — KRX:KOSDAQ 오종목 의심, 드롭`);
+  }
+  return { kospiClose, kosdaqClose: kosdaqOut };
 }

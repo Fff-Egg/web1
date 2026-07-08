@@ -291,6 +291,12 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const creditA = alignFfill(dates, credit);
   const liqA = alignFfill(dates, liq);
 
+  // 신용 히스토리 커버리지: 최근 252창에 유한 신용값이 PEAK_MINP 미만이면 peak/DD가 NaN이
+  // 되어 S1이 '조용히 항상 미충족'·F1이 NaN이 된다(부분수집 사고). '데이터 부족'으로 명시.
+  let creditFinite252 = 0;
+  for (let i = Math.max(0, n - PCT_WIN); i < n; i++) if (Number.isFinite(creditA[i])) creditFinite252++;
+  const creditSparse = creditFinite252 < PEAK_MINP;
+
   // S1 신용잔고
   const peak = rollMax(creditA, PCT_WIN, PEAK_MINP);
   const creditDd = new Array<number>(n).fill(NaN);
@@ -385,9 +391,11 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     {
       key: "S1 신용청산",
       met: s1[L],
-      value: Number.isFinite(creditDd[L]) ? `DD ${fmtPct(creditDd[L])}` : "—",
+      value: creditSparse ? "—" : Number.isFinite(creditDd[L]) ? `DD ${fmtPct(creditDd[L])}` : "—",
       criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓",
-      detail: `피크대비 ${fmtPct(creditDd[L])} · 10일 ${fmtPct(credit10d[L])} · 지수10일 ${fmtPct(idx10d[L])}`,
+      detail: creditSparse
+        ? "⚠️ 신용잔고 히스토리 부족 — S1/F1 비활성(수집 확인)"
+        : `피크대비 ${fmtPct(creditDd[L])} · 10일 ${fmtPct(credit10d[L])} · 지수10일 ${fmtPct(idx10d[L])}`,
       level: s1Level,
     },
     {
