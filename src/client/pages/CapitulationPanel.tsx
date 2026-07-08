@@ -1,6 +1,14 @@
 import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
-import { computeCapitulation } from "./capitulation.js";
+import { computeCapitulation, CAP_LEVELS } from "./capitulation.js";
+
+/** 공포 강도(0 관망 → 3 심각) 색상 — O/X와 별개로 기준 대비 깊이를 한눈에. */
+const LEVEL_CLS = [
+  "bg-slate-100 text-slate-400",
+  "bg-amber-100 text-amber-700",
+  "bg-orange-100 text-orange-700",
+  "bg-red-100 text-red-700",
+];
 
 /**
  * 캐피출레이션 바닥 감지 — 시황분석 맨 아래. 4개 경험칙 신호(신용잔고 급감 /
@@ -45,10 +53,18 @@ export function CapitulationPanel({ data }: { data: MarketSnapshot }) {
             </span>
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
-                <span className="text-sm font-medium text-slate-700">{s.key}</span>
+                <div className="flex min-w-0 items-center gap-1.5">
+                  <span className="text-sm font-medium text-slate-700">{s.key}</span>
+                  {s.hasData && (
+                    <span className={"shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold " + LEVEL_CLS[s.level]}>
+                      {CAP_LEVELS[s.level]}
+                    </span>
+                  )}
+                </div>
                 <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-800">{s.value}</span>
               </div>
-              <div className="text-xs text-slate-400">{s.detail}</div>
+              {s.criteria && <div className="text-[11px] text-slate-400">조건: {s.criteria}</div>}
+              <div className="text-xs text-slate-500">{s.detail}</div>
             </div>
           </li>
         ))}
