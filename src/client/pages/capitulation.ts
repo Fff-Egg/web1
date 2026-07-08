@@ -58,8 +58,31 @@ function pctChange(s: SeriesPoint[], k: number): number | null {
   return (cur / prev - 1) * 100;
 }
 
-const last252 = (s: SeriesPoint[]) => s.slice(-252).map((p) => p.v);
+/** Rolling ~1-year window (252 trading days), non-finite values dropped so a
+ *  stray 0/NaN day can't distort the percentile denominator. */
+const last252 = (s: SeriesPoint[]) => s.slice(-252).map((p) => p.v).filter((v) => Number.isFinite(v));
 const na: SignalResult = { key: "", hasData: false, met: false, value: "—", detail: "데이터 없음" };
+
+/** Lookback for "recent spike". Wider than the 2-day peak-out run so a spike
+ *  that prints a couple days before price/vol actually rolls over still counts
+ *  (반대매매·VKOSPI 저점은 흔히 T+2로 지연됨). */
+const SPIKE_WINDOW = 8;
+
+/**
+ * Length of the strictly-declining tail, counted newest → older. Series are
+ * ascending (past→newest, from sliceLastYear), so s[n-1] is today's value and a
+ * declining tail means s[n-1] < s[n-2] < … Explicit indices (not s.at(-1)/-2/-3)
+ * remove any ambiguity about which end is newest, and a non-finite point breaks
+ * the run rather than silently comparing NaN.
+ */
+function decliningRun(s: SeriesPoint[]): number {
+  let run = 0;
+  for (let i = s.length - 1; i > 0; i--) {
+    if (Number.isFinite(s[i].v) && Number.isFinite(s[i - 1].v) && s[i].v < s[i - 1].v) run++;
+    else break;
+  }
+  return run;
+}
 
 /** ① 신용잔고 고점 대비 -8~10% 급감 (지수 하락 동행 필수). */
 function creditSignal(h: MarketSnapshot["history"]): SignalResult {
@@ -82,20 +105,16 @@ function creditSignal(h: MarketSnapshot["history"]): SignalResult {
   };
 }
 
-/** 최근 스파이크(≥95%ile)가 있었고 지금 2일 연속 감소 중인가 (피크아웃). */
+/** 최근 스파이크(≥95%ile)가 있었고 지금 2거래일 연속 감소 중인가 (피크아웃). */
 function spikeThenPeakOut(s: SeriesPoint[]): { spike: boolean; peakOut: boolean; pctNow: number } {
   const win = last252(s);
   const cur = s.at(-1)!.v;
   const pctNow = percentile(win, cur);
-  // 최근 6거래일 내 95%ile 이상 스파이크가 있었나.
-  const recent = s.slice(-6).map((p) => p.v);
-  const spike = recent.some((v) => percentile(win, v) >= 0.95);
-  // 지금 2일 연속 감소.
-  const a = s.at(-1)?.v ?? 0;
-  const b = s.at(-2)?.v ?? a;
-  const c = s.at(-3)?.v ?? b;
-  const declining2 = a < b && b < c;
-  return { spike, peakOut: spike && declining2, pctNow };
+  // 최근 SPIKE_WINDOW 거래일 내 95%ile 이상 스파이크가 있었나.
+  const spike = s.slice(-SPIKE_WINDOW).some((p) => percentile(win, p.v) >= 0.95);
+  // 스파이크 후 2거래일 연속 감소 = 피크아웃.
+  const peakOut = spike && decliningRun(s) >= 2;
+  return { spike, peakOut, pctNow };
 }
 
 /** ② 미수 반대매매 비중 스파이크 → 피크아웃. */
@@ -119,12 +138,10 @@ function vkospiSignal(h: MarketSnapshot["history"]): SignalResult {
   const win = last252(s);
   const cur = s.at(-1)!.v;
   const pctNow = percentile(win, cur);
-  const recentHigh = s.slice(-6).some((p) => percentile(win, p.v) >= 0.95);
+  const recentHigh = s.slice(-SPIKE_WINDOW).some((p) => percentile(win, p.v) >= 0.95);
   const max20 = Math.max(...s.slice(-20).map((p) => p.v));
   const down20 = cur <= max20 * 0.8;
-  const a = s.at(-1)!.v, b = s.at(-2)?.v ?? a, c = s.at(-3)?.v ?? b, d = s.at(-4)?.v ?? c;
-  const down3 = a < b && b < c && c < d;
-  const met = recentHigh && (down20 || down3);
+  const met = recentHigh && (down20 || decliningRun(s) >= 3);
   return {
     key: "③ VKOSPI",
     hasData: true,

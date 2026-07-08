@@ -12,8 +12,11 @@ import { fetchCloses } from "./tradingview.js";
  */
 
 const KOSPI_SYMBOLS = ["KRX:KOSPI", "TVC:KOSPI"];
-const VKOSPI_SYMBOLS = ["KRX:KSVKOSPI", "KRX:VKOSPI", "KRX:VKOSPI200"];
-const DAYS = 500;
+const VKOSPI_SYMBOLS = ["KRX:KSVKOSPI", "KRX:VKOSPI", "KRX:VKOSPI200", "ECONOMICS:KRVIX"];
+// 이격도(60) needs 60-day SMA warmup (drops the first 59 closes) BEFORE its own
+// 252-day percentile window can fill, i.e. ~311 trading days ≈ 450+ calendar
+// days. 750 calendar days (~510 trading days) leaves comfortable margin.
+const DAYS = 750;
 
 async function firstWithData(symbols: string[], timeoutMs: number): Promise<SeriesPoint[]> {
   for (const sym of symbols) {
