@@ -66,8 +66,16 @@ export async function fetchCreditSnapshot(timeoutMs = 20_000): Promise<CreditSna
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`KOFIA getMetaDataList HTTP ${res.status}`);
-    const json = (await res.json()) as { ds1?: CreditRow[] };
+    const json = (await res.json()) as { ds1?: CreditRow[] } & Record<string, unknown>;
     rows = json.ds1 ?? [];
+    // One-time mapping aid (KOFIA is unreachable from the sandbox): dump the
+    // newest row's raw columns. The card's inflated numbers (유가 36 vs 실제 ~29,
+    // 코스닥 10 vs ~7.9) suggest TMPV3/TMPV4 may be 신용공여(신용거래융자+예탁담보융자)
+    // totals rather than 신용거래융자 alone — this log reveals which TMPV column
+    // equals the real 신용거래융자 유가/코스닥 so the mapping can be corrected.
+    // The gateway returns newest-first, so ds1[0] carries today's values.
+    console.log("[credit] KOFIA 응답 데이터셋 키:", Object.keys(json));
+    console.log("[credit] 최신 행 원본:", JSON.stringify(rows[0]));
   } finally {
     clearTimeout(t);
   }
