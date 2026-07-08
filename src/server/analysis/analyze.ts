@@ -319,10 +319,6 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         analyzed++;
         return;
       }
-      // Record 논지 지도 signals (best-effort; never blocks the analysis row).
-      if (thesis && threadList.length > 0) {
-        await thesisRepo.storeSignals(article.id, thesis, threadList);
-      }
       // 1st-pass pick (with its summary). Deep analysis only when enabled.
       const deep = deepPerArticle ? await deepAnalyze(article, cfg) : null;
       await db.insert(analyses).values({
@@ -337,6 +333,12 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         impact: deep?.impact ?? "neutral",
         model: deepPerArticle ? cfg.analysisModel || ANALYSIS_MODEL() : cfg.filterModel || FILTER_MODEL(),
       });
+      // Record 논지 지도 signals AFTER the analyses insert: the analyses row is
+      // the retry unit, and inbox candidates (threadId NULL) have no unique key —
+      // storing first + failing the insert would duplicate them on re-analysis.
+      if (thesis) {
+        await thesisRepo.storeSignals(article.id, thesis, threadList);
+      }
       analyzed++;
       relevant++;
     } catch (err) {

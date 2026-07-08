@@ -83,9 +83,11 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     }),
     fetchLiquidity().catch((e: unknown) => {
       errors.push(`미국 순유동성(FRED) 수집 실패: ${msg(e)}`);
-      return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] } };
+      return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] }, errors: [] };
     }),
   ]);
+  // Partial liquidity failures (e.g. RRP only) don't throw — surface them too.
+  for (const e of liquidity.errors) errors.push(`미국 순유동성 일부 시리즈 실패: ${e}`);
 
   if (fg) history.fearGreed = fg.history;
   if (breadth) {

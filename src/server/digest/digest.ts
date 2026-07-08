@@ -102,11 +102,16 @@ export function slotBounds(date: string, slot: DigestSlot): { start: Date; end: 
   return { start: mid, end: day.end };
 }
 
-/** Generation/label day of the CURRENT window's 낮분 — the calendar day its M시
- *  split falls on (M≥H: the day before the window-end label; M<H: same day). */
+/** 낮분 generation/label day for a window-end label D — the calendar day the M시
+ *  split falls on (M≥H: the day before D; M<H: D itself). The ONE home for the
+ *  subtle M-vs-H day shift (used by middayLabelDate + the boundary backfill). */
+export function middayLabelFor(windowEndDate: string): string {
+  return middayHour() < DIGEST_HOUR() ? windowEndDate : addDaysKst(windowEndDate, -1);
+}
+
+/** Generation/label day of the CURRENT window's 낮분. */
 export function middayLabelDate(): string {
-  const wd = currentWindowDate();
-  return middayHour() < DIGEST_HOUR() ? wd : addDaysKst(wd, -1);
+  return middayLabelFor(currentWindowDate());
 }
 
 /** 낮분 existence for generation-day X — also accepts the legacy label (X+1, the
@@ -329,7 +334,8 @@ function renderItem(it: DigestItem, n: number): string {
     `[${n}] 제목: ${it.title ?? "(제목없음)"}\n` +
     `출처: ${it.source}\n` +
     (summary ? `요약: ${summary}\n` : "") +
-    `본문:\n${body || summary || "(내용 없음)"}`
+    // A summary-only item must not print the summary twice (요약: + 본문: fallback).
+    `본문:\n${body || (summary ? "(본문 없음 — 위 요약 참조)" : "(내용 없음)")}`
   );
 }
 
@@ -710,9 +716,8 @@ export async function runDailyDigests(date = kstToday()): Promise<{
   eveningExisted: boolean;
   swept: number;
 }> {
-  // 낮분 backfill targets ITS generation day — the day the window's M시 fell on
-  // (M≥H: yesterday relative to this morning's boundary label).
-  const middayDate = middayHour() < DIGEST_HOUR() ? date : addDaysKst(date, -1);
+  // 낮분 backfill targets ITS generation day — the day the window's M시 fell on.
+  const middayDate = middayLabelFor(date);
   const middayExisted = await hasMiddayFor(middayDate);
   const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: middayDate });
   const eveningExisted = await hasAutoDigestFor(date, "evening");

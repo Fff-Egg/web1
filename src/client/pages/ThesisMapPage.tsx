@@ -192,13 +192,24 @@ function ThreadCard({ thread, onChange }: { thread: ThreadRow; onChange: () => v
   );
 }
 
+/** Title → original link. Telegram has no public URL, so it deep-links into the
+ *  보관함 (?article=<id>) — the same rule as the digest's citeHref on the server. */
+function SignalLink({ signal: s }: { signal: SignalRow }) {
+  const href = s.url ?? (s.provider === "telegram" ? `?article=${s.articleId}` : null);
+  if (!href) return <span className="truncate text-slate-500">{s.title ?? "(제목 없음)"}</span>;
+  return (
+    <a href={href} target="_blank" rel="noreferrer" className="truncate text-blue-600 hover:underline">
+      {s.title ?? "(제목 없음)"} ↗
+    </a>
+  );
+}
+
 function SignalItem({ signal: s, onChange }: { signal: SignalRow; onChange?: () => void }) {
   const qc = useQueryClient();
   const dismiss = useMutation({
     mutationFn: () => api.dismissSignal(s.id),
     onSuccess: () => { onChange?.(); qc.invalidateQueries({ queryKey: ["threads"] }); },
   });
-  const href = s.url ?? (s.provider === "telegram" ? `?article=${s.articleId}` : null);
   return (
     <li className="rounded border border-slate-100 bg-slate-50 p-2">
       <div className="flex items-center gap-1.5">
@@ -208,13 +219,7 @@ function SignalItem({ signal: s, onChange }: { signal: SignalRow; onChange?: () 
       </div>
       {s.note && <p className="mt-1 text-sm text-slate-700">{s.note}</p>}
       <div className="mt-1 flex items-center gap-2 text-xs">
-        {href ? (
-          <a href={href} target="_blank" rel="noreferrer" className="truncate text-blue-600 hover:underline">
-            {s.title ?? "(제목 없음)"} ↗
-          </a>
-        ) : (
-          <span className="truncate text-slate-500">{s.title ?? "(제목 없음)"}</span>
-        )}
+        <SignalLink signal={s} />
         <span className="shrink-0 text-slate-400">{s.sourceLabel ?? s.provider}</span>
         <button onClick={() => dismiss.mutate()} className="ml-auto shrink-0 text-slate-300 hover:text-red-600">신호 삭제</button>
       </div>
@@ -239,7 +244,6 @@ function CandidateItem({ signal: s, threads, onChange }: { signal: SignalRow; th
   const assign = useMutation({ mutationFn: (threadId: number) => api.assignSignal(s.id, threadId), onSuccess: onChange });
   const promote = useMutation({ mutationFn: () => api.promoteSignal(s.id, { name: s.candidate ?? undefined }), onSuccess: onChange });
   const dismiss = useMutation({ mutationFn: () => api.dismissSignal(s.id), onSuccess: onChange });
-  const href = s.url ?? (s.provider === "telegram" ? `?article=${s.articleId}` : null);
   return (
     <li className="rounded border border-amber-100 bg-white p-2">
       <div className="flex items-center gap-1.5">
@@ -249,11 +253,7 @@ function CandidateItem({ signal: s, threads, onChange }: { signal: SignalRow; th
       </div>
       {s.note && <p className="mt-1 text-sm text-slate-700">{s.note}</p>}
       <div className="mt-1 text-xs">
-        {href ? (
-          <a href={href} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">{s.title ?? "(제목 없음)"} ↗</a>
-        ) : (
-          <span className="text-slate-500">{s.title ?? "(제목 없음)"}</span>
-        )}
+        <SignalLink signal={s} />
         <span className="ml-2 text-slate-400">{s.sourceLabel ?? s.provider}</span>
       </div>
       <div className="mt-2 flex flex-wrap items-center gap-1.5">

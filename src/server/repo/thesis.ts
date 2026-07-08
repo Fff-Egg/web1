@@ -1,6 +1,6 @@
 import { asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
-import { threads, signals, articles, sources, analyses } from "../db/schema.js";
+import { threads, signals, articles, sources } from "../db/schema.js";
 import { VERDICTS, TIERS } from "../db/schema.js";
 import type { Verdict, Tier } from "../db/schema.js";
 
@@ -43,7 +43,6 @@ export interface SignalRow {
   url: string | null;
   provider: string | null;
   sourceLabel: string | null;
-  summary: string | null;
 }
 
 /** What the analyzer extracts for one article (loose; normalized on the way in). */
@@ -187,7 +186,6 @@ export const thesisRepo = {
       .from(signals)
       .innerJoin(articles, eq(signals.articleId, articles.id))
       .leftJoin(sources, eq(articles.sourceId, sources.id))
-      .leftJoin(analyses, eq(analyses.articleId, articles.id))
       .where(eq(signals.threadId, threadId))
       .orderBy(desc(signals.createdAt))
       .limit(limit) as Promise<SignalRow[]>;
@@ -201,7 +199,6 @@ export const thesisRepo = {
       .from(signals)
       .innerJoin(articles, eq(signals.articleId, articles.id))
       .leftJoin(sources, eq(articles.sourceId, sources.id))
-      .leftJoin(analyses, eq(analyses.articleId, articles.id))
       .where(isNull(signals.threadId))
       .orderBy(desc(signals.createdAt))
       .limit(limit) as Promise<SignalRow[]>;
@@ -311,5 +308,4 @@ const signalSelect = {
   url: articles.url,
   provider: sources.provider,
   sourceLabel: sources.label,
-  summary: analyses.summary,
 };

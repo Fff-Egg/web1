@@ -1,5 +1,5 @@
 import type { LiquidityQuote, SeriesPoint } from "../../shared/market.js";
-import { sliceLastYear } from "../../shared/market.js";
+import { HISTORY_DAYS, sliceLastYear } from "../../shared/market.js";
 import { fetchCloses } from "./tradingview.js";
 
 /**
@@ -40,6 +40,9 @@ const TO_TRILLIONS: Record<SeriesId, number> = {
 export interface LiquiditySnapshot {
   quote: LiquidityQuote | null;
   history: { netLiquidity: SeriesPoint[]; reserves: SeriesPoint[]; tga: SeriesPoint[]; rrp: SeriesPoint[] };
+  /** Per-series failure notes (Korean) — partial failures must be VISIBLE:
+   *  e.g. an all-failed RRP would otherwise silently zero out of the net calc. */
+  errors: string[];
 }
 
 /**
@@ -59,7 +62,9 @@ async function fetchViaTradingView(id: SeriesId, timeoutMs: number): Promise<Map
 
 /** Fallback: direct FRED single-id CSV (plain CSV only when one id per request). */
 async function fetchViaFredCsv(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
-  const cosd = isoDate(new Date(Date.now() - 400 * 24 * 60 * 60_000));
+  // Same depth as the primary TV path (~5y) so the 월/년 toggles don't shrink
+  // when this fallback is the one that answered.
+  const cosd = isoDate(new Date(Date.now() - (HISTORY_DAYS + 30) * 24 * 60 * 60_000));
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
   let csv: string;
@@ -134,8 +139,12 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
     return v;
   };
 
+  // TV weekly series carry ~1300 bars ≈ 25 years — skip everything the final
+  // sliceLastYear would drop anyway instead of computing then discarding it.
+  const cutoff = Date.now() - HISTORY_DAYS * 24 * 60 * 60_000;
   const netLiquidity: SeriesPoint[] = [];
   for (const [ts, wa] of [...walcl.entries()].sort((a, b) => a[0] - b[0])) {
+    if (ts < cutoff) continue;
     const tg = lastOnOrBefore(tgaPts, ts);
     if (tg === null) continue; // before the first TGA observation
     const rrp = lastOnOrBefore(rrpPts, ts) ?? 0;
@@ -148,7 +157,9 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
   const net = sliceLastYear(netLiquidity);
   const res = sliceLastYear(reserves);
   const tgaHist = sliceLastYear(tgaPts.map(([t, v]) => ({ t, v: round2(v) })));
-  const rrpHist = sliceLastYear(rrpPts.map(([t, v]) => ({ t, v: round2(v) })));
+  // RRP sits at ~$0.00x T in 2026 — round2 ($10B grid) would flatten it while the
+  // chart renders 3 decimals, so RRP alone keeps 3.
+  const rrpHist = sliceLastYear(rrpPts.map(([t, v]) => ({ t, v: round3(v) })));
   if (net.length === 0) throw new Error("순유동성 계산 결과가 비어 있습니다 (WALCL/TGA 날짜 불일치)");
 
   const last = net[net.length - 1];
@@ -157,15 +168,18 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
     net: last.v,
     net4wChange: back4 ? round2(last.v - back4.v) : null,
     reserves: res.length ? res[res.length - 1].v : null,
-    rrp: rrpPts.length ? round2(rrpPts[rrpPts.length - 1][1]) : null,
+    rrp: rrpPts.length ? round3(rrpPts[rrpPts.length - 1][1]) : null,
     tga: tgaPts.length ? round2(tgaPts[tgaPts.length - 1][1]) : null,
     asOf: new Date(last.t).toISOString(),
   };
-  return { quote, history: { netLiquidity: net, reserves: res, tga: tgaHist, rrp: rrpHist } };
+  return { quote, history: { netLiquidity: net, reserves: res, tga: tgaHist, rrp: rrpHist }, errors: fails };
 }
 
 function round2(v: number): number {
   return Math.round(v * 100) / 100;
+}
+function round3(v: number): number {
+  return Math.round(v * 1000) / 1000;
 }
 function parseIso(s: string | undefined): number | null {
   if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s.trim())) return null;

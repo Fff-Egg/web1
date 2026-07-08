@@ -50,7 +50,7 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 - **1차 분석 통합**(`analysis/analyze.ts`): 활성 스레드 목록(`thesisRepo.listBrief`)을 **기존 1차 호출 system 프롬프트에 주입**(`threadsBlock`) → 출력 JSON에 `signals[]`+`newThread` 추가(`THESIS_OUTPUT`, **스레드 있을 때만**; 없으면 프롬프트·동작 그대로). **추가 LLM 호출 없음**. relevant 글만 `thesisRepo.storeSignals`로 저장(스레드 매핑은 id 우선·code 폴백, verdict/tier 한↔영 정규화, 알 수 없는 스레드 참조는 skip, newThread는 candidate 행). **관련성/요약 게이트 불변** — 신호는 부가 출력일 뿐.
 - **집계는 시스템**(`thesisRepo.listWithStats`): 스레드별 7/30일 verdict 카운트·총합·마지막 신호일(LLM 신뢰도 아님). 7일 net(강화−약화−반증) 화살표, 30일 반증>0이면 카드 상단 빨강 경고.
 - **탭 "논지 지도"**(`ThesisMapPage.tsx`, App **맨 오른쪽 탭**, 리포트 다음): 스레드 카드(코드 배지·명제·집계·추세, 펼치면 신호목록+원문/?article 링크·반증 위로 정렬), 스레드 CRUD/보관, **신규 논지 후보 인박스**(붙이기→assignSignal / 승격→promoteSignal / 버리기→dismiss), **A~E 시딩**(`thesis.seed`, 비어있을 때만). tRPC `thesis` 라우터 + `data/client.ts` 메서드. 정적 데모는 샘플/무동작 스텁.
-- **남은 것(다음 세션)**: ① 다이제스트 = changelog(움직인 논지만 + 스레드 밖 신호 한 줄 + 변동 없으면 "오늘 논지 변동 없음"), ② Feed 카드 스레드 배지(`A 강화`) — feed.list에 신호 조인 필요, ③ A~E 명제 실제 내용으로 사용자 편집.
+- **남은 것(다음 세션)**: ① 다이제스트 = changelog(움직인 논지만 + 스레드 밖 신호 한 줄 + 변동 없으면 "오늘 논지 변동 없음"), ② Feed 카드 스레드 배지(`A 강화`) — feed.list에 신호 조인 필요, ③ A~E 명제 실제 내용으로 사용자 편집, ④ '보관' 복구 UI(서버 setArchived(false)·includeArchived는 이미 지원, UI만 없음 — 보관하면 화면에서 못 봄; 사용자가 일단 그대로 두기로 함).
 
 ## 검증·배포
 - `npm run typecheck` / `npm run build` 통과 후 커밋·푸시. 빌드는 client(vite)+server(tsc). gramjs(telegram)는 server 전용.

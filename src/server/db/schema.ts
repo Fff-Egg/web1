@@ -10,6 +10,7 @@ import {
   mysqlEnum,
   uniqueIndex,
   index,
+  int,
   date,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
@@ -192,7 +193,7 @@ export const threads = mysqlTable("threads", {
   context: text("context"),
   archived: boolean("archived").notNull().default(false),
   /** Manual display order (lower first); ties break on code/name. */
-  sort: bigint("sort", { mode: "number" }).notNull().default(0),
+  sort: int("sort").notNull().default(0), // matches migration 0010 (int)
   createdAt: timestamp("created_at").notNull().defaultNow(),
 });
 

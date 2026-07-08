@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { OHLC } from "../../shared/market.js";
+import { CHART_W as W, CHART_PAD as PAD, AXIS_W, niceTicks } from "./chartUtils.js";
 
 interface Props {
   candles: OHLC[];
@@ -10,24 +11,8 @@ interface Props {
   height?: number;
 }
 
-const W = 600;
-const PAD = 8;
-const AXIS_W = 54; // right price-axis gutter (px)
 const UP = "#16a34a";
 const DOWN = "#dc2626";
-
-/** ~5 nicely-rounded tick values between lo and hi. */
-function niceTicks(lo: number, hi: number, n = 5): number[] {
-  const span = hi - lo;
-  if (span <= 0) return [lo];
-  const step0 = span / n;
-  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const norm = step0 / mag;
-  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
-  const out: number[] = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(Math.round(v * 1e6) / 1e6);
-  return out;
-}
 
 const fmt = (v: number) => (Math.abs(v) >= 1000 ? v.toLocaleString("en-US", { maximumFractionDigits: 0 }) : v.toFixed(2));
 

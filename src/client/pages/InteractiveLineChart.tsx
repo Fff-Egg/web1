@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { SeriesPoint } from "../../shared/market.js";
+import { CHART_W as W, CHART_PAD as PAD, AXIS_W, niceTicks } from "./chartUtils.js";
 
 export interface LineSeries {
   points: SeriesPoint[];
@@ -13,25 +14,22 @@ interface Props {
   height?: number;
   decimals?: number;
   suffix?: string;
-  /** Show time (not just date) in the tooltip — for intraday data. */
-  intraday?: boolean;
 }
 
-const W = 600;
-const PAD = 8;
-const AXIS_W = 54;
-
-/** ~5 nicely-rounded tick values between lo and hi. */
-function niceTicks(lo: number, hi: number, n = 5): number[] {
-  const span = hi - lo;
-  if (span <= 0) return [lo];
-  const step0 = span / n;
-  const mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const norm = step0 / mag;
-  const step = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag;
-  const out: number[] = [];
-  for (let v = Math.ceil(lo / step) * step; v <= hi; v += step) out.push(Math.round(v * 1e6) / 1e6);
-  return out;
+/** Last point at-or-before time t (binary search — points are ascending). */
+function valAt(pts: SeriesPoint[], t: number): number | null {
+  if (pts.length === 0) return null;
+  let lo = 0;
+  let hi = pts.length - 1;
+  if (pts[0].t > t) return pts[0].v; // before the first point: nearest is the first
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (pts[mid].t <= t) lo = mid;
+    else hi = mid - 1;
+  }
+  // pts[lo] ≤ t — pick whichever neighbor is closer for a nicer crosshair read.
+  const next = pts[lo + 1];
+  return next && Math.abs(next.t - t) < Math.abs(pts[lo].t - t) ? next.v : pts[lo].v;
 }
 
 /**
@@ -41,19 +39,18 @@ function niceTicks(lo: number, hi: number, n = 5): number[] {
  * (vertical + horizontal) that reads the price at the cursor on the axis and each
  * series' value in a tooltip. Lines/gridlines are SVG (stretched horizontally);
  * all text is an HTML overlay so it isn't distorted by preserveAspectRatio="none".
+ *
+ * Hover only moves the crosshair overlay, so everything static (domain, ticks,
+ * paths) is memoized on [series, viewport] — a mousemove re-render costs O(1).
  */
-export function InteractiveLineChart({
-  series,
-  baselines = [],
-  height = 150,
-  decimals = 1,
-  suffix = "",
-  intraday = false,
-}: Props) {
+export function InteractiveLineChart({ series, baselines = [], height = 150, decimals = 1, suffix = "" }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
-  const nonEmpty = series.filter((s) => s.points.length > 0);
+  const nonEmpty = useMemo(() => series.filter((s) => s.points.length > 0), [series]);
   // Longest series drives the x-axis / index / dates.
-  const ref0 = nonEmpty.reduce<SeriesPoint[]>((a, b) => (b.points.length > a.length ? b.points : a), [] as SeriesPoint[]);
+  const ref0 = useMemo(
+    () => nonEmpty.reduce<SeriesPoint[]>((a, b) => (b.points.length > a.length ? b.points : a), []),
+    [nonEmpty],
+  );
   const n = ref0.length;
 
   const [view, setView] = useState(() => ({ count: Math.min(n || 1, 180), end: n }));
@@ -85,48 +82,51 @@ export function InteractiveLineChart({
     return () => el.removeEventListener("wheel", onWheel);
   }, [n]);
 
-  if (nonEmpty.length === 0 || n === 0) {
-    return <div className="py-8 text-center text-xs text-slate-400">차트 데이터 없음</div>;
-  }
-
-  const count = Math.min(view.count, n);
+  const count = Math.min(view.count, n || 1);
   const end = Math.max(count, Math.min(n, view.end));
   const start = end - count;
+  const H = height;
 
-  // Domain from the visible slice of EVERY series (+ baselines).
-  const visValues: number[] = [];
-  for (const s of nonEmpty) {
-    // Align each series to the reference window by time range.
+  // Everything below is hover-independent: domain, scales, ticks, SVG paths.
+  const frame = useMemo(() => {
+    if (n === 0) return null;
     const t0 = ref0[start].t;
     const t1 = ref0[end - 1].t;
-    for (const p of s.points) if (p.t >= t0 && p.t <= t1) visValues.push(p.v);
-  }
-  for (const b of baselines) visValues.push(b);
-  let lo = Math.min(...visValues);
-  let hi = Math.max(...visValues);
-  if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
-    lo = 0;
-    hi = 1;
-  }
-  if (lo === hi) {
-    lo -= 1;
-    hi += 1;
-  }
-  const padV = (hi - lo) * 0.08;
-  lo -= padV;
-  hi += padV;
+    const visValues: number[] = [];
+    for (const s of nonEmpty) for (const p of s.points) if (p.t >= t0 && p.t <= t1) visValues.push(p.v);
+    for (const b of baselines) visValues.push(b);
+    let lo = Math.min(...visValues);
+    let hi = Math.max(...visValues);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) {
+      lo = 0;
+      hi = 1;
+    }
+    if (lo === hi) {
+      lo -= 1;
+      hi += 1;
+    }
+    const padV = (hi - lo) * 0.08;
+    lo -= padV;
+    hi += padV;
 
-  const H = height;
-  const t0 = ref0[start].t;
-  const t1 = ref0[end - 1].t;
-  const span = t1 - t0 || 1;
-  const xOf = (t: number) => ((t - t0) / span) * W;
-  const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - 2 * PAD);
+    const span = t1 - t0 || 1;
+    const xOf = (t: number) => ((t - t0) / span) * W;
+    const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - 2 * PAD);
+    const paths = nonEmpty.map((s) => {
+      const seg = s.points.filter((p) => p.t >= t0 && p.t <= t1);
+      return {
+        ...s,
+        d: seg.map((p, i) => `${i === 0 ? "M" : "L"}${xOf(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" "),
+      };
+    });
+    return { t0, t1, lo, hi, xOf, y, paths, ticks: niceTicks(lo, hi) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nonEmpty, ref0, start, end, H, baselines.join(",")]);
 
-  const pathOf = (pts: SeriesPoint[]) => {
-    const seg = pts.filter((p) => p.t >= t0 && p.t <= t1);
-    return seg.map((p, i) => `${i === 0 ? "M" : "L"}${xOf(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join(" ");
-  };
+  if (!frame || nonEmpty.length === 0 || n === 0) {
+    return <div className="py-8 text-center text-xs text-slate-400">차트 데이터 없음</div>;
+  }
+  const { lo, hi, xOf, y, paths, ticks } = frame;
 
   const onMove = (e: React.MouseEvent) => {
     const el = wrapRef.current;
@@ -143,18 +143,15 @@ export function InteractiveLineChart({
     setHover({ ix, yRatio });
   };
 
-  const ticks = niceTicks(lo, hi);
   const lastPt = ref0[end - 1];
   const hIx = hover ? Math.max(start, Math.min(end - 1, hover.ix)) : null;
   const hoverT = hIx !== null ? ref0[hIx].t : null;
-  // Price at the cursor's Y (crosshair readout on the axis).
-  const cursorPrice = hover ? lo + (1 - hover.yRatio) * (hi - lo) : null;
+  // Price at the cursor's Y — invert the same y() mapping (incl. PAD) so the
+  // read-out matches a line under the cursor exactly, clamped to the domain.
+  const cursorPrice = hover
+    ? Math.max(lo, Math.min(hi, lo + (1 - (hover.yRatio * H - PAD) / (H - 2 * PAD)) * (hi - lo)))
+    : null;
   const hoverLeftPct = hoverT !== null ? Math.max(6, Math.min(94, (xOf(hoverT) / W) * 100)) : 0;
-  const valAt = (pts: SeriesPoint[], t: number): number | null => {
-    let best: SeriesPoint | null = null;
-    for (const p of pts) if (best === null || Math.abs(p.t - t) < Math.abs(best.t - t)) best = p;
-    return best ? best.v : null;
-  };
 
   return (
     <div className="flex select-none" style={{ height: H }}>
@@ -178,8 +175,8 @@ export function InteractiveLineChart({
             .map((b) => (
               <line key={`b${b}`} x1={0} x2={W} y1={y(b)} y2={y(b)} stroke="#f59e0b" strokeWidth={1} strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />
             ))}
-          {nonEmpty.map((s) => (
-            <path key={s.label} d={pathOf(s.points)} fill="none" stroke={s.color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
+          {paths.map((s) => (
+            <path key={s.label} d={s.d} fill="none" stroke={s.color} strokeWidth={1.5} vectorEffect="non-scaling-stroke" />
           ))}
           {hover && hoverT !== null && (
             <>
@@ -198,10 +195,7 @@ export function InteractiveLineChart({
             className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded bg-slate-800 px-2 py-1 text-[11px] leading-tight text-white shadow"
             style={{ left: `${hoverLeftPct}%` }}
           >
-            <div className="mb-0.5 text-slate-300">
-              {new Date(hoverT).toLocaleDateString("ko-KR")}
-              {intraday && ` ${new Date(hoverT).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })}`}
-            </div>
+            <div className="mb-0.5 text-slate-300">{new Date(hoverT).toLocaleDateString("ko-KR")}</div>
             {nonEmpty.map((s) => {
               const v = valAt(s.points, hoverT);
               return (

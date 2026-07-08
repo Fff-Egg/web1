@@ -1,15 +1,15 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { MarketSnapshot } from "../data/client.js";
 import { fearGreedLabelKo, TIMEFRAMES, TIMEFRAME_LABEL } from "../../shared/market.js";
 import type { SeriesPoint, Timeframe } from "../../shared/market.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
+import type { LineSeries } from "./InteractiveLineChart.js";
 import { CandleChart } from "./CandleChart.js";
 
 const COL = {
   fg: "#0ea5e9",
-  vix: "#e11d48",
   ndfi: "#7c3aed",
   s5fi: "#2563eb",
   kospi: "#2563eb",
@@ -26,7 +26,15 @@ const COL = {
  */
 export function MarketPage() {
   const qc = useQueryClient();
-  const snap = useQuery({ queryKey: ["market"], queryFn: () => api.marketLatest() });
+  // The snapshot is a once-a-day batch and (with 5y history) ~300KB of JSON —
+  // don't re-download it on every tab switch / window refocus. '지금 갱신' and
+  // symbol changes update the cache directly via setQueryData.
+  const snap = useQuery({
+    queryKey: ["market"],
+    queryFn: () => api.marketLatest(),
+    staleTime: 10 * 60_000,
+    refetchOnWindowFocus: false,
+  });
   const refresh = useMutation({
     mutationFn: () => api.marketRefresh(),
     onSuccess: (data) => qc.setQueryData(["market"], data),
@@ -156,7 +164,8 @@ const TF_LABEL: Record<LineTf, string> = { D: "일", W: "주", M: "월", Y: "년
 const TF_ORDER: LineTf[] = ["D", "W", "M", "Y"];
 
 /** Downsample a daily series to weekly/monthly/yearly by keeping the last point
- *  in each bucket. "일" returns the data as-is. */
+ *  in each bucket. "일" returns the data as-is. Input is ascending (the server
+ *  stores history through sliceLastYear, which sorts), so no re-sort needed. */
 function resample(points: SeriesPoint[], tf: LineTf): SeriesPoint[] {
   if (tf === "D" || points.length === 0) return points;
   const bucket = (t: number): string => {
@@ -166,8 +175,8 @@ function resample(points: SeriesPoint[], tf: LineTf): SeriesPoint[] {
     return `w${Math.floor(t / (7 * 24 * 60 * 60_000))}`; // ISO-ish week bucket
   };
   const last = new Map<string, SeriesPoint>();
-  for (const p of [...points].sort((a, b) => a.t - b.t)) last.set(bucket(p.t), p);
-  return [...last.values()].sort((a, b) => a.t - b.t);
+  for (const p of points) last.set(bucket(p.t), p); // ascending → last wins
+  return [...last.values()];
 }
 
 function useLineTf(id: string): [LineTf, (t: LineTf) => void] {
@@ -200,14 +209,15 @@ function LineChartBlock({
   height = 150,
 }: {
   id: string;
-  series: { points: SeriesPoint[]; color: string; label: string }[];
+  series: LineSeries[];
   baselines?: number[];
   decimals?: number;
   suffix?: string;
   height?: number;
 }) {
   const [tf, setTf] = useLineTf(id);
-  const rs = series.map((s) => ({ ...s, points: resample(s.points, tf) }));
+  // Memoized so baseline-input keystrokes (parent re-renders) don't re-bucket.
+  const rs = useMemo(() => series.map((s) => ({ ...s, points: resample(s.points, tf) })), [series, tf]);
   return (
     <div className="mt-4 border-t border-slate-100 pt-3">
       <div className="mb-1 flex items-center justify-between">

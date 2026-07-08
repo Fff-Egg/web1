@@ -2,6 +2,9 @@ import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
 import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact, Verdict, Tier } from "../../server/db/schema.js";
+// Type-only imports of the server repo's shapes (erased at build time, same
+// pattern as the schema.js line above) — no duplicated field lists to drift.
+import type { ThreadWithStats as ThreadRow, SignalRow } from "../../server/repo/thesis.js";
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
@@ -18,35 +21,7 @@ export interface CandlesResponse {
 }
 
 // ─── 논지 지도(Thesis Map) ──────────────────────────────────────────
-export interface ThreadRow {
-  id: number;
-  code: string | null;
-  name: string;
-  thesis: string | null;
-  context: string | null;
-  archived: boolean;
-  sort: number;
-  createdAt: string | Date;
-  total: number;
-  lastSignalAt: string | Date | null;
-  c7: Record<Verdict, number>;
-  c30: Record<Verdict, number>;
-}
-export interface SignalRow {
-  id: number;
-  articleId: number;
-  threadId: number | null;
-  candidate: string | null;
-  verdict: Verdict;
-  tier: Tier;
-  note: string | null;
-  createdAt: string | Date;
-  title: string | null;
-  url: string | null;
-  provider: string | null;
-  sourceLabel: string | null;
-  summary: string | null;
-}
+export type { ThreadRow, SignalRow };
 export interface CreateThreadInput {
   code?: string;
   name: string;
