@@ -209,4 +209,17 @@ kospi_accompanies = (코스피 FEAR≥90) OR (코스피 ALL3) OR (코스피 cred
 5. **정합성**: 앵커가 틀어지면 그 소스가 '수집 실패'로 빠지고 이상값이 **안 뜨는지**(hard assert 작동).
 6. **소스 대조**: 위 §7 앵커값 표를 KOFIA FreeSIS / KRX / Investing 실화면과 직접 대조.
 
+---
+
+## 9. 파이썬 레퍼런스 수치 파리티 (검증됨)
+
+TS 포트가 파이썬 레퍼런스와 **숫자까지 일치**하는지 동일 합성 입력으로 대조 — `scripts/parity/`.
+```
+python3 scripts/parity/parity_ref.py   # 레퍼런스 출력
+npx tsx  scripts/parity/parity_ts.ts   # TS 포트 재계산 → element-by-element 대조
+```
+**결과: 전 시리즈·전 성분 maxΔ = 0.00e+0 (bit-exact, tol 1e-6)** — rollStd(ddof=1)·rollPct(분위수)·rollMax(mp=200)·pctChange·F1~F4·FEAR·S1/S2/S3까지 소수점 끝까지 동일. (std ddof=1, FEAR skipna 평균 등 미세 지점 전부 확인.)
+
+---
+
 > ⚠️ 이 지표는 소표본(n=6~16) 백테스트 기반의 **관찰 도구이며 투자 권유가 아니다.** 모든 판단과 결과는 사용자 책임.
