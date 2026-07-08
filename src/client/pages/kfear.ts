@@ -521,7 +521,10 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
   const pq = phase(bq.fear, bq.all3, bq.nOn, bq.creditDd);
 
   // 코스피 동반 판정 (3-3): 코스닥 신호의 신뢰 등급을 좌우.
-  const kospiAccompanies = (bk.fear ?? NaN) >= FEAR_ARM || bk.all3 || (bk.creditDd ?? NaN) <= -0.15;
+  // FEAR≥90 단독으로 단순화 — FEAR는 4성분(신용속도·반대매매·이격도·변동성) 종합이라
+  // "시장 전반이 골고루 공포에 빠졌나"를 하나로 압축한다. 과거 OR로 함께 봤던
+  // ALL3(너무 빡셈)·DD≤-15%(신용 한 축)는 표본(n=11)에서 FEAR 위로 추가 기여 0이었음.
+  const kospiAccompanies = (bk.fear ?? NaN) >= FEAR_ARM;
   const kosdaqSignaling = (bq.fear ?? NaN) >= FEAR_ARM || bq.all3;
 
   const kosdaqRegime = kospiAccompanies ? "SYSTEMIC" : "KOSDAQ_ONLY";
