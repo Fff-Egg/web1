@@ -181,9 +181,36 @@ export async function storeSnapshot(snap: MarketSnapshot): Promise<void> {
     .onDuplicateKeyUpdate({ set: { value } });
 }
 
+/**
+ * 이번 수집이 어떤 시리즈를 빈 값으로 받아오면(예: TradingView WS 일시 끊김) 그 시리즈만
+ * **직전 저장값으로 되돌린다** — 전면 재수집이 한 소스 실패로 화면을 통째 비우지 않게.
+ * 되돌린 데이터는 과거에 앵커를 통과한 값이라 신뢰 가능하고, 오래되면 asOf staleness
+ * 배지/경고가 뜬다. 되돌림이 있었으면 명시적 경고를 남긴다.
+ */
+function carryForwardEmpty(snap: MarketSnapshot, prev: MarketSnapshot): void {
+  const h = snap.history;
+  const ph = prev.history;
+  let carried = false;
+  for (const k of Object.keys(h) as (keyof MarketHistory)[]) {
+    if ((h[k]?.length ?? 0) === 0 && (ph[k]?.length ?? 0) > 0) {
+      h[k] = ph[k];
+      carried = true;
+    }
+  }
+  // 신용 quote는 히스토리와 세트로 유지(카드 숫자와 K-공포지수가 어긋나지 않게).
+  if (h.creditKospi === ph.creditKospi && !snap.credit.kospi && prev.credit.kospi) snap.credit.kospi = prev.credit.kospi;
+  if (h.creditKosdaq === ph.creditKosdaq && !snap.credit.kosdaq && prev.credit.kosdaq) snap.credit.kosdaq = prev.credit.kosdaq;
+  if (h.netLiquidity === ph.netLiquidity && !snap.liquidity && prev.liquidity) snap.liquidity = prev.liquidity;
+  if (carried) {
+    snap.errors.push("⚠️ 일부 소스 이번 수집 실패 — 직전 저장값 유지(데이터가 오래됐을 수 있음)");
+  }
+}
+
 /** Collect + persist, returning the new snapshot. */
 export async function refreshMarketSnapshot(): Promise<MarketSnapshot> {
   const snap = await fetchMarketSnapshot();
+  const prev = await getStoredSnapshot().catch(() => null);
+  if (prev) carryForwardEmpty(snap, prev);
   await storeSnapshot(snap);
   return snap;
 }

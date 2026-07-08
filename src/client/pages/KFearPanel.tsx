@@ -65,7 +65,10 @@ function MarketCard({ m }: { m: MarketFear }) {
         <div className="absolute top-0 h-full w-px bg-slate-500/60" style={{ left: "90%" }} />
       </div>
       <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-        <span>권장 사이징: <span className="font-medium text-slate-600">{m.size}</span></span>
+        <span>
+          분할 크기 <span className="text-slate-400">(신용 DD 기준)</span>:{" "}
+          <span className="font-medium text-slate-600">{m.size}</span>
+        </span>
         <span>{m.nOn}/3 신호</span>
       </div>
       {/* 사이징 사다리 — 신용 낙폭(depth)이 깊을수록 큰 분할. 도달한 단계 강조. */}
@@ -90,6 +93,12 @@ function MarketCard({ m }: { m: MarketFear }) {
         })}
         {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=소액 탐색 ≤20%</span>}
       </div>
+      {/* 사이징은 DD만 — 진입 여부는 등급. 등급이 매수국면 아닐 때 오해 방지. */}
+      {m.grade !== "BUY" && m.grade !== "STRONG" && (
+        <div className="mt-0.5 text-[10px] text-slate-400">
+          ※ 사다리는 참고용 — 진입 여부는 등급(위 배지). 지금 {m.grade}: {m.grade === "ARMED" ? "소액 탐색만" : "관망"}
+        </div>
+      )}
 
       {showRegimeWarn && (
         <div className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
@@ -190,10 +199,17 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
         <MarketCard m={kosdaq} />
       </div>
 
-      <p className="mt-3 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
+      <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+        <strong>두 축을 곱해서 씁니다</strong> — <strong>등급</strong>이 <em>진입 여부·강도</em>(FEAR≥90 + 신호 충족 수),
+        <strong> 사이징</strong>이 <em>분할 크기</em>(신용 DD 깊이).
+        <span className="mt-1 block text-slate-500">
+          IDLE·WATCH → 관망 · ARMED → 소액 탐색 · <strong className="text-slate-600">BUY·STRONG → 진입하고 DD 사다리만큼 분할</strong>
+          (−8%=1차·−15%=2차·−25%=3차).
+        </span>
+      </div>
+      <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
         ⚠️ 이 지표는 <strong>n=6~16의 소표본 백테스트</strong> 기반이며 <strong>투자 권유가 아닙니다</strong>. 모든 판단과 결과는
-        사용자 책임입니다. FEAR는 신용·반대매매·이격도·실현변동성을 252일 롤링 분위수로 정규화한 합성치(높을수록 공포)이고,
-        등급은 FEAR≥90과 3신호 충족 수, 사이징은 신용잔고 낙폭(depth)으로 결정됩니다.
+        사용자 책임입니다. FEAR·신호는 완전 워밍업(~311거래일) 이후만 신뢰하세요(차트는 그 이후만 표시).
       </p>
     </div>
   );

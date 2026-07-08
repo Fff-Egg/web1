@@ -37,6 +37,16 @@ export async function fetchKoreaIndexes(
     firstWithData(KOSPI_SYMBOLS, timeoutMs),
     firstWithData(KOSDAQ_SYMBOLS, timeoutMs),
   ]);
+
+  // 진단(TV 봉 타임스탬프 규약 확인용): 마지막 3봉의 raw t → UTC/KST 날짜. KST 정렬이
+  // 맞는지 눈으로 검증. 예) 7/8 종가가 raw로 '7/7 15:00Z'면 KST자정 규약 → kstDay가 7/8로
+  // 정규화. UTC날짜와 KST날짜가 다르면(전일 15:00Z 규약) +9h 보정이 필요/작동 중이란 뜻.
+  const day = 86400000;
+  for (const p of kospiClose.slice(-3)) {
+    const u = new Date(p.t).toISOString();
+    const kd = new Date(Math.floor((p.t + 9 * 3600000) / day) * day).toISOString().slice(0, 10);
+    console.log(`[koreaIndexes] 코스피 봉 raw=${p.t} UTC=${u} KST거래일=${kd} 종가=${p.v}`);
+  }
   // HARD 앵커: 심볼이 바뀌거나 엉뚱한 종목이 잡히면 throw → 지수 통째 거부(F3·F4가
   // 틀린 종가로 계산되는 걸 차단). tz 오프셋(≤~15h)은 잡되 인접 거래일(≥24h)은 배제
   // (TZ_TOL_MS). 코스피 2026-06-23=8203.84, 2026-07-08=7246.79 (KRX 실측).

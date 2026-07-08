@@ -357,8 +357,14 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   }
   const s2 = spike.map((sp, i) => sp && decl2[i]);
 
+  // 차트는 4성분이 **모두** 찬 뒤부터만(성분별 워밍업이 달라 — F4 20+252, F3 60+252 등
+  // — 초기엔 일부 성분만으로 FEAR가 계산돼 왜곡됨). 완전 워밍업(~311거래일) 지점만 그림.
   const fearHistory: SeriesPoint[] = [];
-  for (let i = 0; i < n; i++) if (Number.isFinite(fear[i])) fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
+  for (let i = 0; i < n; i++) {
+    if (Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i])) {
+      fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
+    }
+  }
 
   // 최신 행
   const L = n - 1;
