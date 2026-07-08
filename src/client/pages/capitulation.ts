@@ -105,29 +105,42 @@ function creditSignal(h: MarketSnapshot["history"]): SignalResult {
   };
 }
 
-/** 최근 스파이크(≥95%ile)가 있었고 지금 2거래일 연속 감소 중인가 (피크아웃). */
-function spikeThenPeakOut(s: SeriesPoint[]): { spike: boolean; peakOut: boolean; pctNow: number } {
+/** M/D label from a UTC-epoch trading-day timestamp (dates stored as Date.UTC). */
+function fmtMD(t: number): string {
+  const d = new Date(t);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+}
+
+/** 최근 스파이크(≥95%ile)가 있었고 지금 2거래일 연속 감소 중인가 (피크아웃).
+ *  spikeDay = 그 스파이크가 난 가장 최근 날 — "왜 지금 충족?"을 UI에 보여주려고. */
+function spikeThenPeakOut(s: SeriesPoint[]): { peakOut: boolean; pctNow: number; spikeDay: SeriesPoint | null } {
   const win = last252(s);
   const cur = s.at(-1)!.v;
   const pctNow = percentile(win, cur);
-  // 최근 SPIKE_WINDOW 거래일 내 95%ile 이상 스파이크가 있었나.
-  const spike = s.slice(-SPIKE_WINDOW).some((p) => percentile(win, p.v) >= 0.95);
+  // 최근 SPIKE_WINDOW 거래일 중 95%ile 이상이 난 가장 최근 날.
+  let spikeDay: SeriesPoint | null = null;
+  for (const p of s.slice(-SPIKE_WINDOW)) {
+    if (percentile(win, p.v) >= 0.95) spikeDay = p;
+  }
   // 스파이크 후 2거래일 연속 감소 = 피크아웃.
-  const peakOut = spike && decliningRun(s) >= 2;
-  return { spike, peakOut, pctNow };
+  const peakOut = spikeDay !== null && decliningRun(s) >= 2;
+  return { peakOut, pctNow, spikeDay };
 }
 
 /** ② 미수 반대매매 비중 스파이크 → 피크아웃. */
 function forcedLiqSignal(h: MarketSnapshot["history"]): SignalResult {
   const s = h.forcedLiqRatio ?? [];
   if (s.length < 20) return { ...na, key: "② 반대매매" };
-  const { spike, peakOut, pctNow } = spikeThenPeakOut(s);
+  const { peakOut, pctNow, spikeDay } = spikeThenPeakOut(s);
   return {
     key: "② 반대매매",
     hasData: true,
     met: peakOut,
     value: `${s.at(-1)!.v.toFixed(1)}%`,
-    detail: `비중 1년 ${(pctNow * 100).toFixed(0)}%ile${spike ? " · 상위5% 스파이크" : ""}${peakOut ? " · 피크아웃(2일↓)" : ""}`,
+    detail:
+      `비중 1년 ${(pctNow * 100).toFixed(0)}%ile` +
+      (spikeDay ? ` · ${fmtMD(spikeDay.t)} 상위5%(${spikeDay.v.toFixed(1)}%)` : " · 최근 스파이크 없음") +
+      (peakOut ? " · 피크아웃(2일↓)" : ""),
   };
 }
 
@@ -138,16 +151,22 @@ function vkospiSignal(h: MarketSnapshot["history"]): SignalResult {
   const win = last252(s);
   const cur = s.at(-1)!.v;
   const pctNow = percentile(win, cur);
-  const recentHigh = s.slice(-SPIKE_WINDOW).some((p) => percentile(win, p.v) >= 0.95);
+  let highDay: SeriesPoint | null = null;
+  for (const p of s.slice(-SPIKE_WINDOW)) {
+    if (percentile(win, p.v) >= 0.95) highDay = p;
+  }
   const max20 = Math.max(...s.slice(-20).map((p) => p.v));
   const down20 = cur <= max20 * 0.8;
-  const met = recentHigh && (down20 || decliningRun(s) >= 3);
+  const met = highDay !== null && (down20 || decliningRun(s) >= 3);
   return {
     key: "③ VKOSPI",
     hasData: true,
     met,
     value: cur.toFixed(1),
-    detail: `1년 ${(pctNow * 100).toFixed(0)}%ile${recentHigh ? " · 상위5% 도달" : ""}${met ? " · 꺾임 확인" : ""}`,
+    detail:
+      `1년 ${(pctNow * 100).toFixed(0)}%ile` +
+      (highDay ? ` · ${fmtMD(highDay.t)} 상위5% 도달` : "") +
+      (met ? " · 꺾임 확인" : ""),
   };
 }
 
@@ -165,12 +184,14 @@ function disparitySignal(h: MarketSnapshot["history"]): SignalResult {
   const cur = disp.at(-1)!.v;
   const pctNow = percentile(last252(disp), cur);
   const met = cur <= 92 || pctNow <= 0.05;
+  const dev = cur - 100; // 종가가 60일선 대비 몇 % (음수 = 아래로 이탈).
+  const lowPct = pctNow < 0.01 ? "<1" : (pctNow * 100).toFixed(0);
   return {
     key: "④ 이격도(60)",
     hasData: true,
     met,
     value: cur.toFixed(1),
-    detail: `1년 하위 ${(pctNow * 100).toFixed(0)}%ile${met ? " · 과매도권" : ""}`,
+    detail: `60일선 ${dev >= 0 ? "+" : ""}${dev.toFixed(1)}% · 1년 하위 ${lowPct}%${met ? " · 과매도권" : ""}`,
   };
 }
 
