@@ -235,7 +235,19 @@ interface Built {
 
 const nn = (v: number): number | null => (Number.isFinite(v) ? v : null);
 const fmtPct = (v: number): string => (Number.isFinite(v) ? `${(v * 100).toFixed(1)}%` : "—");
-const fmtPctile = (v: number): string => (Number.isFinite(v) ? `${(v * 100).toFixed(0)}%ile` : "—");
+/** 분위수(0..1) → "상위 X%" (높을수록 공포: 반대매매). p=0.86 → 상위 14%.
+ *  호출부가 "1년"을 앞에 붙이므로 극단은 "최고권"만 반환(1년 중복 방지). */
+const topPctLabel = (p: number): string => {
+  if (!Number.isFinite(p)) return "—";
+  const x = Math.round((1 - p) * 100);
+  return x <= 0 ? "최고권" : `상위 ${x}%`;
+};
+/** 분위수(0..1) → "하위 X%" (낮을수록 공포: 이격도). p=0.00 → 최저권. */
+const botPctLabel = (p: number): string => {
+  if (!Number.isFinite(p)) return "—";
+  const x = Math.round(p * 100);
+  return x <= 0 ? "최저권" : `하위 ${x}%`;
+};
 /** M/D from a UTC-epoch trading-day timestamp. */
 const fmtMD = (t: number): string => {
   const d = new Date(t);
@@ -343,15 +355,25 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     }
   }
   const spikeAgo = lastSpikeIdx < 0 ? Infinity : L - lastSpikeIdx;
+  // "꺾임"은 지금 2거래일 연속 하락을 뜻함. 미충족 이유를 구분해 보여준다: 6일 창 밖 /
+  // 최신 반대매매 미공표(KOFIA T+1이라 오늘=전일값 ffill로 flat) / 단순 연속↓ 아님.
+  const s2Reason = s2[L]
+    ? "2일 연속↓ 충족"
+    : spikeAgo > SPIKE_LOOKBACK - 1
+      ? "6일 창 밖"
+      : liqA[L] === liqA[L - 1]
+        ? "최신 반대매매 미공표(전일값 유지)"
+        : "아직 2일 연속↓ 아님";
   const s2Note =
     lastSpikeIdx < 0
       ? "최근 상위5% 스파이크 없음"
-      : `최근 상위5% ${fmtMD(dates[lastSpikeIdx])}(${liqA[lastSpikeIdx].toFixed(1)}%·${spikeAgo}일전)` +
-        (s2[L] ? " · 2일↓ 충족" : spikeAgo > SPIKE_LOOKBACK - 1 ? " · 6일창 밖" : " · 꺾임 대기");
+      : `최근 상위5% ${fmtMD(dates[lastSpikeIdx])}(${liqA[lastSpikeIdx].toFixed(1)}%·${spikeAgo}일전) · ${s2Reason}`;
   const s3Level: CapLevel =
     dispPct[L] <= 0.01 || disp[L] <= 88 ? 3 : dispPct[L] <= 0.05 || disp[L] <= 92 ? 2 : dispPct[L] <= 0.15 || disp[L] <= 96 ? 1 : 0;
 
   const dev = Number.isFinite(disp[L]) ? disp[L] - 100 : NaN;
+  // 어느 조건으로 S3가 켜졌나 (절대 ≤92 or 레짐적응 하위5%).
+  const s3Why = disp[L] <= DISP_ABS ? "이격도 ≤92 충족" : dispPct[L] <= DISP_PCT ? "1년 하위5% 충족" : "";
   const signals: SignalView[] = [
     {
       key: "S1 신용청산",
@@ -366,7 +388,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       met: s2[L],
       value: Number.isFinite(liqA[L]) ? `${liqA[L].toFixed(1)}%` : "—",
       criteria: "비중 1년 상위5% 스파이크(6일내) & 2일 연속↓",
-      detail: `비중 1년 ${fmtPctile(liqPct[L])} · ${s2Note}`,
+      detail: `비중 1년 ${topPctLabel(liqPct[L])} · ${s2Note}`,
       level: s2Level,
     },
     {
@@ -374,7 +396,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       met: s3[L],
       value: Number.isFinite(disp[L]) ? disp[L].toFixed(1) : "—",
       criteria: "이격도 ≤92 or 1년 하위5%",
-      detail: `60일선 ${Number.isFinite(dev) ? (dev >= 0 ? "+" : "") + dev.toFixed(1) + "%" : "—"} · 1년 하위 ${fmtPctile(dispPct[L])}`,
+      detail: `60일선 대비 ${Number.isFinite(dev) ? (dev >= 0 ? "+" : "") + dev.toFixed(1) + "%" : "—"} · 1년 ${botPctLabel(dispPct[L])}${s3Why ? " · " + s3Why : ""}`,
       level: s3Level,
     },
   ];
