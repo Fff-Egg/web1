@@ -46,6 +46,25 @@ export const GRADE_LABEL: Record<Grade, string> = {
   IDLE: "대기",
 };
 
+/**
+ * 등급별 사이징 계수(곱셈). 코스피+코스닥 통합 백테스트(2020~, n=10~31) 기반:
+ * 6개월 기대수익이 STRONG 20.3% > BUY 16.7% > ARMED 13.5% > WATCH 11.5%로 단조감소.
+ * ⚠️ **방향성(STRONG>BUY>ARMED>WATCH)만 신뢰구간** — 어느 등급이든 6달 +11~20%라 전부
+ * 플러스였고, 계수 소수점 둘째자리는 노이즈다. "STRONG 풀·WATCH 절반" 수준의 차등일 뿐.
+ */
+export const GRADE_COEF: Record<Grade, number> = { STRONG: 1.0, BUY: 0.75, ARMED: 0.65, WATCH: 0.45, IDLE: 0 };
+/** 코스닥 단독(KOSDAQ_ONLY): 6달 승률 50%(반반)·n=5라 계수 곱셈 대신 **비율 상한(%)**을 씌운다
+ *  ("반반 도박엔 크게 안 건다"). depth·등급이 뭐든 코스닥 단독이면 이 상한까지만. */
+export const KOSDAQ_ONLY_CAP = 30;
+
+/** 최종 권장 비중 분해. */
+export interface Sizing {
+  pct: number; // 최종 권장 비중 %
+  base: number; // depth(신용 DD) 기준 %
+  coef: number; // 등급 계수
+  capped: boolean; // 코스닥 단독 상한 적용됨
+}
+
 export interface SignalView {
   key: string;
   met: boolean;
@@ -68,6 +87,8 @@ export interface MarketFear {
   creditDd: number | null;
   signals: SignalView[];
   fearHistory: SeriesPoint[];
+  /** 최종 권장 비중 = depth 기준% × 등급계수 (코스닥 단독이면 30% 상한). */
+  sizing: Sizing;
   // 코스닥 전용:
   regime?: "SYSTEMIC" | "KOSDAQ_ONLY";
   signaling?: boolean; // 코스닥 신호 점등(FEAR≥90 or ALL3) 여부
@@ -462,8 +483,33 @@ function phase(fear: number | null, all3: boolean, nOn: number, creditDd: number
   return { grade, size };
 }
 
+/** 신용 낙폭(depth) → 기준 비중 %. ≤−25=100 / ≤−15=70 / ≤−8=40 / else 20(소액 탐색). */
+function depthBasePct(creditDd: number | null): number {
+  const dd = creditDd ?? NaN;
+  if (dd <= DD3) return 100;
+  if (dd <= DD2) return 70;
+  if (dd <= CREDIT_DD) return 40;
+  return 20;
+}
+
+/**
+ * 최종 권장 비중 = depth 기준% × 등급계수. 코스닥 단독(KOSDAQ_ONLY)이면 마지막에
+ * **30% 상한**(계수 곱셈 아님 — 6달 승률 50%라 "반반 도박엔 크게 안 건다"). IDLE=0.
+ */
+export function computeSizing(grade: Grade, creditDd: number | null, regime?: "SYSTEMIC" | "KOSDAQ_ONLY"): Sizing {
+  const base = depthBasePct(creditDd);
+  const coef = GRADE_COEF[grade];
+  let pct = base * coef;
+  let capped = false;
+  if (regime === "KOSDAQ_ONLY" && pct > KOSDAQ_ONLY_CAP) {
+    pct = KOSDAQ_ONLY_CAP;
+    capped = true;
+  }
+  return { pct: Math.round(pct), base, coef, capped };
+}
+
 /** Internal helpers exposed for unit tests (not used by the UI). */
-export const __test = { alignFfill, rollPct, rollMax, rollMean, rollStd, pctChange, meanSkip, buildMarket, phase };
+export const __test = { alignFfill, rollPct, rollMax, rollMean, rollStd, pctChange, meanSkip, buildMarket, phase, computeSizing };
 
 export function computeKFear(snap: MarketSnapshot): KFearResult {
   const h = snap.history;
@@ -478,13 +524,21 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
   const kospiAccompanies = (bk.fear ?? NaN) >= FEAR_ARM || bk.all3 || (bk.creditDd ?? NaN) <= -0.15;
   const kosdaqSignaling = (bq.fear ?? NaN) >= FEAR_ARM || bq.all3;
 
-  const kospi: MarketFear = { market: "코스피", ...bk, grade: pk.grade, size: pk.size };
+  const kosdaqRegime = kospiAccompanies ? "SYSTEMIC" : "KOSDAQ_ONLY";
+  const kospi: MarketFear = {
+    market: "코스피",
+    ...bk,
+    grade: pk.grade,
+    size: pk.size,
+    sizing: computeSizing(pk.grade, bk.creditDd), // 코스피는 동반 상한 없음
+  };
   const kosdaq: MarketFear = {
     market: "코스닥",
     ...bq,
     grade: pq.grade,
     size: pq.size,
-    regime: kospiAccompanies ? "SYSTEMIC" : "KOSDAQ_ONLY",
+    sizing: computeSizing(pq.grade, bq.creditDd, kosdaqRegime),
+    regime: kosdaqRegime,
     signaling: kosdaqSignaling,
   };
   return { kospi, kosdaq, kospiAccompanies };

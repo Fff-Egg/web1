@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
-import { computeKFear, GRADE_LABEL, type Grade, type MarketFear } from "./kfear.js";
+import { computeKFear, GRADE_LABEL, KOSDAQ_ONLY_CAP, type Grade, type MarketFear } from "./kfear.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
 
 /**
@@ -64,18 +64,27 @@ function MarketCard({ m }: { m: MarketFear }) {
         {/* 90 매수 임계선 */}
         <div className="absolute top-0 h-full w-px bg-slate-500/60" style={{ left: "90%" }} />
       </div>
-      <div className="mt-1 flex items-center justify-between text-xs text-slate-400">
-        <span>
-          분할 크기 <span className="text-slate-400">(신용 DD 기준)</span>:{" "}
-          <span className="font-medium text-slate-600">{m.size}</span>
-        </span>
-        <span>{m.nOn}/3 신호</span>
+      {/* 최종 권장 비중 = depth × 등급계수 (코스닥 단독이면 상한). */}
+      <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
+        <div className="flex items-baseline justify-between">
+          <span className="text-xs font-medium text-slate-500">권장 비중</span>
+          <span className="text-2xl font-bold tabular-nums text-slate-800">
+            {m.sizing.pct}%
+            {m.sizing.capped && <span className="ml-1 align-middle text-[10px] font-semibold text-amber-600">단독 상한</span>}
+          </span>
+        </div>
+        <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-400">
+          <span>
+            depth <span className="font-medium text-slate-500">{m.sizing.base}%</span> × 등급 {m.grade}{" "}
+            <span className="font-medium text-slate-500">{m.sizing.coef.toFixed(2)}</span>
+            {m.regime === "KOSDAQ_ONLY" && ` → 코스닥 단독 ${KOSDAQ_ONLY_CAP}% 상한`}
+          </span>
+          <span>{m.nOn}/3 신호</span>
+        </div>
       </div>
       {/* 사이징 사다리 — 신용 낙폭(depth)이 깊을수록 큰 분할. 도달한 단계 강조. */}
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
-        <span className="text-slate-400">
-          신용 {m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—"} →
-        </span>
+        <span className="text-slate-400">depth 사다리 (신용 {m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—"}) →</span>
         {[
           { label: "1차", th: -8, alloc: "40%" },
           { label: "2차", th: -15, alloc: "70%" },
@@ -91,14 +100,8 @@ function MarketCard({ m }: { m: MarketFear }) {
             </span>
           );
         })}
-        {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=소액 탐색 ≤20%</span>}
+        {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=20%</span>}
       </div>
-      {/* 사이징은 DD만 — 진입 여부는 등급. 등급이 매수국면 아닐 때 오해 방지. */}
-      {m.grade !== "BUY" && m.grade !== "STRONG" && (
-        <div className="mt-0.5 text-[10px] text-slate-400">
-          ※ 사다리는 참고용 — 진입 여부는 등급(위 배지). 지금 {m.grade}: {m.grade === "ARMED" ? "소액 탐색만" : "관망"}
-        </div>
-      )}
 
       {showRegimeWarn && (
         <div className="mt-2 rounded bg-amber-50 px-2 py-1 text-xs text-amber-700">
@@ -168,7 +171,7 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
     !kospi.hasData && !kosdaq.hasData
       ? "데이터 수집 전 — '지금 갱신'을 눌러 수집하세요"
       : active.length > 0
-        ? `${active.map((m) => `${m.market} ${GRADE_LABEL[m.grade]}(${m.grade})·${m.size}`).join(" / ")}${
+        ? `${active.map((m) => `${m.market} ${GRADE_LABEL[m.grade]}(${m.grade}) · 비중 ${m.sizing.pct}%`).join(" / ")}${
             kosdaq.signaling && kosdaq.regime === "KOSDAQ_ONLY" ? " · ⚠️코스피 미동반" : ""
           }`
         : "오늘 특이 공포 신호 없음 (양시장 대기/관찰)";
@@ -200,15 +203,17 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
       </div>
 
       <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        <strong>두 축을 곱해서 씁니다</strong> — <strong>등급</strong>이 <em>진입 여부·강도</em>(FEAR≥90 + 신호 충족 수),
-        <strong> 사이징</strong>이 <em>분할 크기</em>(신용 DD 깊이).
+        <strong>권장 비중 = depth × 등급계수</strong> (코스닥 단독이면 상한).{" "}
+        <span className="text-slate-500">depth(신용 DD): −8%=40 · −15%=70 · −25%=100 · else 20. </span>
+        등급계수: <strong>STRONG 1.0 · BUY 0.75 · ARMED 0.65 · WATCH 0.45 · IDLE 0</strong>.{" "}
+        코스닥 <strong>단독(코스피 미동반)</strong>은 계수 대신 <strong>{KOSDAQ_ONLY_CAP}% 상한</strong>(6달 승률 50% 반반).
         <span className="mt-1 block text-slate-500">
-          IDLE·WATCH → 관망 · ARMED → 소액 탐색 · <strong className="text-slate-600">BUY·STRONG → 진입하고 DD 사다리만큼 분할</strong>
-          (−8%=1차·−15%=2차·−25%=3차).
+          ※ 백테스트(2020~ 통합 n=10~31) 기준 — <strong className="text-slate-600">방향성(STRONG&gt;BUY&gt;ARMED&gt;WATCH)만 신뢰</strong>,
+          계수 소수점은 노이즈. 어느 등급이든 6개월 기대 +11~20%였음(다 플러스).
         </span>
       </div>
       <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
-        ⚠️ 이 지표는 <strong>n=6~16의 소표본 백테스트</strong> 기반이며 <strong>투자 권유가 아닙니다</strong>. 모든 판단과 결과는
+        ⚠️ 이 지표는 <strong>소표본 백테스트</strong> 기반이며 <strong>투자 권유가 아닙니다</strong>. 모든 판단과 결과는
         사용자 책임입니다. FEAR·신호는 완전 워밍업(~311거래일) 이후만 신뢰하세요(차트는 그 이후만 표시).
       </p>
     </div>
