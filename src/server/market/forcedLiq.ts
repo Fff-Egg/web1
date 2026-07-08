@@ -58,19 +58,36 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
   // One-time hint for mapping: dump the columns we actually got.
   console.log(`[forcedLiq] KOFIA 증시자금 첫 행 키:`, JSON.stringify(rows[0]).slice(0, 400));
 
-  // Pick the ratio column by its MEDIAN (not every row). TMPV7 is the verified
-  // 미수금대비 반대매매 비중(%) — median a few %, but a single capitulation day can
-  // spike past 30%. An every-row `<=30` gate would reject the whole column on one
-  // such day (and take 반대매매 down with it); a median gate keeps those spikes,
-  // which is exactly what S2 looks for. The 원-scale amount columns (TMPV5/6) have
-  // billion-sized medians and are correctly excluded.
-  const plausible = (k: string) => {
+  // Column identity is ANCHOR-PINNED, not guessed: 미수금대비 반대매매 비중 on
+  // 2026-07-07 is 2.2 (verified vs the KOFIA screen). Pick the column whose 07-07
+  // value ≈ 2.2 — this survives KOFIA reordering/renaming columns (the median
+  // heuristic would silently follow a moved column). We scan TMPV7 first, then any
+  // other TMPV field, so it's robust to position. Fallback (if 07-07 isn't in the
+  // window — e.g. a far-future query) is the median-plausibility gate: median in
+  // [0,30] keeps big capitulation spikes that an every-row `<=30` gate would reject.
+  const anchorRow = rows.find((r) => r.TMPV1 === "20260707");
+  const near22 = (r: Row, k: string) => {
+    const v = num(r[k]);
+    return v !== null && Math.abs(v - 2.2) < 0.5;
+  };
+  const medianPlausible = (k: string) => {
     const vals = rows.map((r) => num(r[k])).filter((v): v is number => v !== null);
     if (vals.length < rows.length * 0.5) return false;
     const median = [...vals].sort((a, b) => a - b)[Math.floor(vals.length / 2)];
     return median >= 0 && median <= 30;
   };
-  const ratioKey = RATIO_KEYS.find(plausible);
+  let ratioKey: string | undefined;
+  let how = "";
+  if (anchorRow) {
+    const cols = [...RATIO_KEYS, ...Object.keys(anchorRow).filter((k) => k.startsWith("TMPV") && k !== "TMPV1")];
+    ratioKey = cols.find((k) => near22(anchorRow, k));
+    if (ratioKey) how = "앵커(07-07=2.2) 매칭";
+  }
+  if (!ratioKey) {
+    ratioKey = RATIO_KEYS.find(medianPlausible);
+    if (ratioKey) how = "중앙값 폴백(앵커 날짜 없음)";
+  }
+  console.log(`[forcedLiq] 반대매매 컬럼 = ${ratioKey ?? "식별 실패"} (${how || "실패"})`);
   if (!ratioKey) throw new Error("KOFIA 증시자금: 반대매매 비중 컬럼을 식별하지 못함 (컬럼 매핑 필요)");
 
   const out: SeriesPoint[] = [];

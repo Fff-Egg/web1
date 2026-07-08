@@ -83,6 +83,15 @@ export async function fetchCreditSnapshot(timeoutMs = 20_000): Promise<CreditSna
     throw new Error("KOFIA 신용공여 잔고: 데이터가 비어 있습니다 (응답에 행 없음)");
   }
 
+  // 다날짜 ×8 교차검증 로그(게이트웨이 newest-first라 최신 6일). 실화면 백만원과 대조:
+  // 2026-07-07 유가 29.075조, 2026-06-24 전체(유가+코스닥) 38.633조여야 한다.
+  for (const r of rows.slice(0, 6)) {
+    const k = typeof r.TMPV3 === "number" ? (r.TMPV3 / TO_JO).toFixed(3) : "-";
+    const q = typeof r.TMPV4 === "number" ? (r.TMPV4 / TO_JO).toFixed(3) : "-";
+    const tot = typeof r.TMPV3 === "number" && typeof r.TMPV4 === "number" ? ((r.TMPV3 + r.TMPV4) / TO_JO).toFixed(3) : "-";
+    console.log(`[credit] ${r.TMPV1}: 유가 ${k}조 · 코스닥 ${q}조 · 전체 ${tot}조 (×8 보정)`);
+  }
+
   const kospi: SeriesPoint[] = [];
   const kosdaq: SeriesPoint[] = [];
   for (const r of rows) {

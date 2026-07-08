@@ -9,6 +9,7 @@ import { fetchCreditSnapshot } from "./credit.js";
 import { fetchLiquidity } from "./liquidity.js";
 import { fetchKoreaIndexes } from "./koreaIndexes.js";
 import { fetchForcedLiqRatio } from "./forcedLiq.js";
+import { checkAnchors } from "./anchors.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
 const CUSTOM_SYMBOL_KEY = "marketCustomSymbol";
@@ -122,7 +123,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.vkospi = []; // legacy — FEAR's F4(실현변동성)가 대체
   history.forcedLiqRatio = forcedLiq;
 
-  return {
+  const snapshot: MarketSnapshot = {
     fetchedAt: new Date().toISOString(),
     fearGreed: fg ? fg.current : null,
     custom: { symbol: customSymbol, name: custom?.name ?? null, quote: custom?.quote ?? null },
@@ -136,6 +137,14 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     history,
     errors,
   };
+  // 데이터 정합성 앵커 대조 (신용 ×8·반대매매 컬럼·지수 종가·staleness). 불일치는
+  // errors로 노출돼 UI '일부 소스 수집 실패' 박스에 뜬다 — 조용히 틀린 값 방지.
+  const anchorWarns = checkAnchors(snapshot);
+  for (const w of anchorWarns) {
+    console.warn(`[anchors] ${w}`);
+    snapshot.errors.push(w);
+  }
+  return snapshot;
 }
 
 /** Read the last stored snapshot (null if none saved yet or no DB). */

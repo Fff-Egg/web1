@@ -130,6 +130,8 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
   const { kospi, kosdaq } = kf;
 
   const asOf = kospi.asOf ?? kosdaq.asOf;
+  // 기준일(=KOFIA/지수 최신일)이 수집시각보다 한참 뒤면 소스가 멈춘 것(주말·T+1 감안 6일↑).
+  const staleDays = asOf ? Math.floor((Date.parse(data.fetchedAt) - asOf) / 86400000) : 0;
   const active = [kospi, kosdaq].filter((m) => m.grade === "STRONG" || m.grade === "BUY");
   const headline =
     !kospi.hasData && !kosdaq.hasData
@@ -146,7 +148,10 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
         <h3 className="text-sm font-semibold text-slate-700">
           K-공포지수 · 캐피출레이션 바닥 <span className="text-xs font-normal text-slate-400">코스피·코스닥 · FEAR(0~100)+3신호</span>
         </h3>
-        <span className="text-xs text-slate-400">기준일 {fmtDate(asOf)}</span>
+        <span className="text-xs text-slate-400">
+          기준일 {fmtDate(asOf)}
+          {staleDays > 6 && <span className="ml-1 font-medium text-amber-600">· ⚠️ {staleDays}일 지연(소스 확인)</span>}
+        </span>
       </div>
 
       <div
