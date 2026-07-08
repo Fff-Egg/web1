@@ -414,15 +414,21 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
           <div className="mb-2 inline-block rounded bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
             주간·후행 · 매매 신호 아님
           </div>
-          <div className="flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-slate-800">${liq.net.toFixed(2)}T</span>
-            {liq.net4wChange !== null && (
-              <span className={`text-sm font-medium ${deltaColor(liq.net4wChange)}`}>
-                {arrow(liq.net4wChange)} {Math.abs(liq.net4wChange).toFixed(2)}T
-                <span className="ml-0.5 text-xs text-slate-400">(4주)</span>
-              </span>
-            )}
-          </div>
+          {liq.net !== null ? (
+            <div className="flex items-baseline gap-2">
+              <span className="text-3xl font-bold text-slate-800">${liq.net.toFixed(2)}T</span>
+              {liq.net4wChange !== null && (
+                <span className={`text-sm font-medium ${deltaColor(liq.net4wChange)}`}>
+                  {arrow(liq.net4wChange)} {Math.abs(liq.net4wChange).toFixed(2)}T
+                  <span className="ml-0.5 text-xs text-slate-400">(4주)</span>
+                </span>
+              )}
+            </div>
+          ) : (
+            <div className="text-sm text-slate-400">
+              순유동성(연준자산·TGA 중 일부 미수집) — 아래 개별 지표만 표시
+            </div>
+          )}
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-slate-400">
             {liq.reserves !== null && <span>지급준비금 ${liq.reserves.toFixed(2)}T</span>}
             {liq.tga !== null && <span>TGA ${liq.tga.toFixed(2)}T</span>}
@@ -432,58 +438,66 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
           {/* Two stacked single-line charts, each auto-scaled to its own range —
               a shared overlay wasted vertical space (net ~$5.8T vs reserves ~$3T
               sit ~3T apart, so each line only used a sliver of the axis). */}
-          <div className="mt-1">
-            <div className="text-xs font-medium text-teal-700">
-              순유동성 <span className="font-normal text-slate-400">(연준자산 − RRP − TGA · ↑확대 ↓축소)</span>
+          {data.history.netLiquidity.length > 0 && (
+            <div className="mt-1">
+              <div className="text-xs font-medium text-teal-700">
+                순유동성 <span className="font-normal text-slate-400">(연준자산 − RRP − TGA · ↑확대 ↓축소)</span>
+              </div>
+              <LineChartBlock
+                id="netLiquidity"
+                series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
+                decimals={2}
+                suffix="T"
+                height={130}
+              />
             </div>
-            <LineChartBlock
-              id="netLiquidity"
-              series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
-              decimals={2}
-              suffix="T"
-              height={130}
-            />
-          </div>
-          <div className="mt-3">
-            <div className="text-xs font-medium text-amber-600">
-              지급준비금 <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
+          )}
+          {data.history.reserves.length > 0 && (
+            <div className="mt-3">
+              <div className="text-xs font-medium text-amber-600">
+                지급준비금 <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
+              </div>
+              <LineChartBlock
+                id="reserves"
+                series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
+                decimals={2}
+                suffix="T"
+                height={130}
+              />
             </div>
-            <LineChartBlock
-              id="reserves"
-              series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
-              decimals={2}
-              suffix="T"
-              height={130}
-            />
-          </div>
-          <div className="mt-3">
-            <div className="text-xs font-medium text-rose-600">
-              TGA (재무부 계정){" "}
-              <span className="font-normal text-slate-400">↑오르면 유동성 흡수(드레인) · ↓내리면 방출 — 순유동성과 역방향</span>
+          )}
+          {data.history.tga.length > 0 && (
+            <div className="mt-3">
+              <div className="text-xs font-medium text-rose-600">
+                TGA (재무부 계정){" "}
+                <span className="font-normal text-slate-400">↑오르면 유동성 흡수(드레인) · ↓내리면 방출 — 순유동성과 역방향</span>
+              </div>
+              <LineChartBlock
+                id="tga"
+                series={[{ points: data.history.tga, color: "#e11d48", label: "TGA" }]}
+                decimals={2}
+                suffix="T"
+                height={130}
+              />
             </div>
-            <LineChartBlock
-              id="tga"
-              series={[{ points: data.history.tga, color: "#e11d48", label: "TGA" }]}
-              decimals={2}
-              suffix="T"
-              height={130}
-            />
-          </div>
-          <div className="mt-3">
-            <div className="text-xs font-medium text-slate-500">
-              RRP (역레포){" "}
-              <span className="font-normal text-slate-400">
-                ↑흡수 ↓방출 · 2026 현재 ~0으로 소진(사라진 게 아니라 값이 0에 가까움)
-              </span>
+          )}
+          {data.history.rrp.length > 0 && (
+            <div className="mt-3">
+              <div className="text-xs font-medium text-slate-500">
+                RRP (역레포){" "}
+                <span className="font-normal text-slate-400">
+                  ↑흡수 ↓방출 · 2026 현재 ~0으로 소진(사라진 게 아니라 값이 0에 가까움)
+                </span>
+              </div>
+              <LineChartBlock
+                id="rrp"
+                series={[{ points: data.history.rrp, color: "#64748b", label: "RRP" }]}
+                decimals={3}
+                suffix="T"
+                height={110}
+              />
             </div>
-            <LineChartBlock
-              id="rrp"
-              series={[{ points: data.history.rrp, color: "#64748b", label: "RRP" }]}
-              decimals={3}
-              suffix="T"
-              height={110}
-            />
-          </div>
+          )}
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
             ⚠️ <strong>뒤에서 물이 차오르나 빠지나</strong>를 보는 배경 지표입니다. 이걸 보고 사고팔지 마세요 —
             AI·반도체 집중장에선 이 지표와 지수가 몇 달씩 <strong>반대로</strong> 간 전례(2023)가 있습니다. 레벨보다

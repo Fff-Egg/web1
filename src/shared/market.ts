@@ -71,8 +71,9 @@ export interface CreditQuote {
  * context axis, NOT a buy/sell timing signal. See MarketPage's caution note.
  */
 export interface LiquidityQuote {
-  /** Net liquidity level, $T. */
-  net: number;
+  /** Net liquidity level, $T. Null when TGA/WALCL didn't load (the drivers below
+   *  may still be present — a partial card beats an all-or-nothing "데이터 없음"). */
+  net: number | null;
   /** 4-week change in net liquidity, $T (the impulse — matters more than the level). */
   net4wChange: number | null;
   /** Reserve balances (WRESBAL), $T — bank-level liquidity, overlaid on the chart. */

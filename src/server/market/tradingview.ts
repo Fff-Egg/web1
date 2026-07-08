@@ -23,6 +23,34 @@ const WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F";
 
 const BARS = 1300; // ~5 trading years of daily bars (for the 월/년 timeframes).
 
+/**
+ * Anonymous TradingView sessions rate-limit / refuse when too many connections
+ * open at once. A single market snapshot fans out ~9 symbol fetches in parallel
+ * (breadth S5FI/NDFI + custom + 4 liquidity series + KOSPI + VKOSPI); firing them
+ * all together starved the losers of the race, which came back empty — that's why
+ * TGA·VKOSPI showed "데이터 없음". Gate every connection through a small semaphore
+ * so at most TV_MAX open at once. The batch takes a few seconds longer, but every
+ * series lands reliably.
+ */
+const TV_MAX = 3;
+let tvActive = 0;
+const tvWaiters: Array<() => void> = [];
+function tvAcquire(): Promise<void> {
+  if (tvActive < TV_MAX) {
+    tvActive++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((res) => tvWaiters.push(res));
+}
+function tvRelease(): void {
+  tvActive--;
+  const next = tvWaiters.shift();
+  if (next) {
+    tvActive++;
+    next();
+  }
+}
+
 function frame(m: string, p: unknown[]): string {
   const j = JSON.stringify({ m, p });
   return `~m~${j.length}~m~${j}`;
@@ -96,8 +124,20 @@ interface RawSymbol {
  * Fetch daily bars + resolved name for ONE symbol. An anonymous chart session
  * is limited to a single series ("exceed limit of series in the session"), so
  * each symbol gets its own short-lived connection; callers run them in parallel.
+ * Every call goes through the TV_MAX semaphore so a snapshot's parallel fans-out
+ * don't all open at once (see tvAcquire).
  */
-function fetchBars(symbol: string, timeoutMs: number, resolution = "1D", count = BARS): Promise<RawSymbol> {
+async function fetchBars(symbol: string, timeoutMs: number, resolution = "1D", count = BARS): Promise<RawSymbol> {
+  await tvAcquire();
+  try {
+    return await fetchBarsRaw(symbol, timeoutMs, resolution, count);
+  } finally {
+    tvRelease();
+  }
+}
+
+/** The raw connection (never rejects — resolves on data/error/close/timeout). */
+function fetchBarsRaw(symbol: string, timeoutMs: number, resolution: string, count: number): Promise<RawSymbol> {
   return new Promise((resolve) => {
     let bars: Bar[] = [];
     let name: string | null = null;

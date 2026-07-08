@@ -45,6 +45,16 @@ export interface LiquiditySnapshot {
   errors: string[];
 }
 
+/** TV mirror symbols per FRED id, tried in order (first with data wins). TGA
+ *  keeps a daily alternate (WDTGAL) in case the weekly WTREGEN mirror is
+ *  unavailable/empty on the anonymous feed. */
+const TV_SYMBOLS: Record<SeriesId, string[]> = {
+  WALCL: ["FRED:WALCL"],
+  RRPONTSYD: ["FRED:RRPONTSYD"],
+  WTREGEN: ["FRED:WTREGEN", "FRED:WDTGAL"],
+  WRESBAL: ["FRED:WRESBAL"],
+};
+
 /**
  * Primary: TradingView chart WS (`FRED:<id>`), raw closes → $T map.
  * ⚠️ TradingView serves these FRED series in **actual dollars** (not FRED's
@@ -52,12 +62,15 @@ export interface LiquiditySnapshot {
  * closes (placeholder/empty bars) are dropped — these levels are always large & positive.
  */
 async function fetchViaTradingView(id: SeriesId, timeoutMs: number): Promise<Map<number, number>> {
-  const closes = await fetchCloses(`FRED:${id}`, timeoutMs);
-  const out = new Map<number, number>();
-  for (const p of closes) {
-    if (Number.isFinite(p.v) && p.v > 0) out.set(p.t, p.v / 1e12);
+  for (const sym of TV_SYMBOLS[id]) {
+    const closes = await fetchCloses(sym, timeoutMs);
+    const out = new Map<number, number>();
+    for (const p of closes) {
+      if (Number.isFinite(p.v) && p.v > 0) out.set(p.t, p.v / 1e12);
+    }
+    if (out.size > 0) return out;
   }
-  return out;
+  return new Map<number, number>();
 }
 
 /** Fallback: direct FRED single-id CSV (plain CSV only when one id per request). */
@@ -121,8 +134,11 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
     });
   const [walcl, tga] = await Promise.all([get("WALCL"), get("WTREGEN")]);
   const [rrpMap, wresbal] = await Promise.all([get("RRPONTSYD"), get("WRESBAL")]);
-  if (walcl.size === 0 || tga.size === 0) {
-    throw new Error(fails.length ? fails.join(" · ") : "WALCL/TGA 응답이 비어 있음");
+  // Only a TOTAL wipeout is fatal. If even one driver survived we return a
+  // partial card (its own chart), rather than blanking the whole thing — one
+  // dead series (e.g. TGA) used to take reserves/RRP down with it.
+  if (walcl.size === 0 && tga.size === 0 && rrpMap.size === 0 && wresbal.size === 0) {
+    throw new Error(fails.length ? fails.join(" · ") : "모든 시리즈 응답이 비어 있음");
   }
 
   // Sorted point lists for carry-forward lookups. TGA/RRP values are taken as
@@ -139,16 +155,19 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
     return v;
   };
 
-  // TV weekly series carry ~1300 bars ≈ 25 years — skip everything the final
-  // sliceLastYear would drop anyway instead of computing then discarding it.
+  // Net liquidity needs BOTH WALCL and TGA; if either is missing we skip it and
+  // still return the driver charts. TV weekly series carry ~1300 bars ≈ 25 years
+  // — skip everything sliceLastYear would drop anyway instead of computing it.
   const cutoff = Date.now() - HISTORY_DAYS * 24 * 60 * 60_000;
   const netLiquidity: SeriesPoint[] = [];
-  for (const [ts, wa] of [...walcl.entries()].sort((a, b) => a[0] - b[0])) {
-    if (ts < cutoff) continue;
-    const tg = lastOnOrBefore(tgaPts, ts);
-    if (tg === null) continue; // before the first TGA observation
-    const rrp = lastOnOrBefore(rrpPts, ts) ?? 0;
-    netLiquidity.push({ t: ts, v: round2(wa - rrp - tg) });
+  if (walcl.size > 0 && tgaPts.length > 0) {
+    for (const [ts, wa] of [...walcl.entries()].sort((a, b) => a[0] - b[0])) {
+      if (ts < cutoff) continue;
+      const tg = lastOnOrBefore(tgaPts, ts);
+      if (tg === null) continue; // before the first TGA observation
+      const rrp = lastOnOrBefore(rrpPts, ts) ?? 0;
+      netLiquidity.push({ t: ts, v: round2(wa - rrp - tg) });
+    }
   }
   const reserves: SeriesPoint[] = [...wresbal.entries()]
     .map(([t, v]) => ({ t, v: round2(v) }))
@@ -160,17 +179,18 @@ export async function fetchLiquidity(timeoutMs = 22_000): Promise<LiquiditySnaps
   // RRP sits at ~$0.00x T in 2026 — round2 ($10B grid) would flatten it while the
   // chart renders 3 decimals, so RRP alone keeps 3.
   const rrpHist = sliceLastYear(rrpPts.map(([t, v]) => ({ t, v: round3(v) })));
-  if (net.length === 0) throw new Error("순유동성 계산 결과가 비어 있습니다 (WALCL/TGA 날짜 불일치)");
 
-  const last = net[net.length - 1];
+  const lastNet = net.length ? net[net.length - 1] : null;
   const back4 = net.length > 4 ? net[net.length - 5] : null;
+  // As-of falls back to whichever driver did land, so the "기준" date still shows.
+  const asOfTs = lastNet?.t ?? res.at(-1)?.t ?? tgaHist.at(-1)?.t ?? rrpHist.at(-1)?.t ?? null;
   const quote: LiquidityQuote = {
-    net: last.v,
-    net4wChange: back4 ? round2(last.v - back4.v) : null,
+    net: lastNet ? lastNet.v : null,
+    net4wChange: lastNet && back4 ? round2(lastNet.v - back4.v) : null,
     reserves: res.length ? res[res.length - 1].v : null,
     rrp: rrpPts.length ? round3(rrpPts[rrpPts.length - 1][1]) : null,
     tga: tgaPts.length ? round2(tgaPts[tgaPts.length - 1][1]) : null,
-    asOf: new Date(last.t).toISOString(),
+    asOf: asOfTs ? new Date(asOfTs).toISOString() : null,
   };
   return { quote, history: { netLiquidity: net, reserves: res, tga: tgaHist, rrp: rrpHist }, errors: fails };
 }
