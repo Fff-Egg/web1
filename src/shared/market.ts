@@ -144,9 +144,11 @@ export interface MarketHistory {
   reserves: SeriesPoint[];
   tga: SeriesPoint[];
   rrp: SeriesPoint[];
-  /** Inputs for the 캐피출레이션 바닥 감지 패널 (all daily, ~1.5y):
-   *  KOSPI index close (이격도 + 지수 방향), VKOSPI close, 미수 반대매매 비중(%). */
+  /** Inputs for the K-공포지수 대시보드 (all daily):
+   *  KOSPI/KOSDAQ index close (이격도·지수방향·실현변동성 F4), 미수 반대매매 비중(%).
+   *  vkospi는 레거시(F4 실현변동성이 대체) — 하위호환 위해 필드만 유지, 미수집. */
   kospiClose: SeriesPoint[];
+  kosdaqClose: SeriesPoint[];
   vkospi: SeriesPoint[];
   forcedLiqRatio: SeriesPoint[];
 }

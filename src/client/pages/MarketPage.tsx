@@ -7,7 +7,7 @@ import type { SeriesPoint, Timeframe } from "../../shared/market.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
 import type { LineSeries } from "./InteractiveLineChart.js";
 import { CandleChart } from "./CandleChart.js";
-import { CapitulationPanel } from "./CapitulationPanel.js";
+import { KFearPanel } from "./KFearPanel.js";
 
 const COL = {
   fg: "#0ea5e9",
@@ -145,7 +145,7 @@ export function MarketPage() {
 
       {data && <LiquidityCard data={data} />}
 
-      {data && <CapitulationPanel data={data} />}
+      {data && <KFearPanel data={data} />}
 
       {data && data.errors.length > 0 && (
         <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">

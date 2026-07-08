@@ -7,7 +7,7 @@ import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
 import { fetchAdr, fetchAdrHistory } from "./adr.js";
 import { fetchCreditSnapshot } from "./credit.js";
 import { fetchLiquidity } from "./liquidity.js";
-import { fetchKoreaIndexes } from "./capitulation.js";
+import { fetchKoreaIndexes } from "./koreaIndexes.js";
 import { fetchForcedLiqRatio } from "./forcedLiq.js";
 
 const SNAPSHOT_KEY = "marketSnapshot";
@@ -28,6 +28,7 @@ const EMPTY_HISTORY: MarketHistory = {
   tga: [],
   rrp: [],
   kospiClose: [],
+  kosdaqClose: [],
   vkospi: [],
   forcedLiqRatio: [],
 };
@@ -91,8 +92,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
       return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] }, errors: [] };
     }),
     fetchKoreaIndexes().catch((e: unknown) => {
-      errors.push(`코스피/VKOSPI 수집 실패: ${msg(e)}`);
-      return { kospiClose: [], vkospi: [] };
+      errors.push(`코스피/코스닥 종가 수집 실패: ${msg(e)}`);
+      return { kospiClose: [], kosdaqClose: [] };
     }),
     fetchForcedLiqRatio().catch((e: unknown) => {
       errors.push(`반대매매 비중(KOFIA) 수집 실패: ${msg(e)}`);
@@ -117,7 +118,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.tga = liquidity.history.tga;
   history.rrp = liquidity.history.rrp;
   history.kospiClose = koreaIdx.kospiClose;
-  history.vkospi = koreaIdx.vkospi;
+  history.kosdaqClose = koreaIdx.kosdaqClose;
+  history.vkospi = []; // legacy — FEAR's F4(실현변동성)가 대체
   history.forcedLiqRatio = forcedLiq;
 
   return {
@@ -152,6 +154,7 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.tga === undefined) snap.history.tga = [];
   if (snap.history.rrp === undefined) snap.history.rrp = [];
   if (snap.history.kospiClose === undefined) snap.history.kospiClose = [];
+  if (snap.history.kosdaqClose === undefined) snap.history.kosdaqClose = [];
   if (snap.history.vkospi === undefined) snap.history.vkospi = [];
   if (snap.history.forcedLiqRatio === undefined) snap.history.forcedLiqRatio = [];
   if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };

@@ -29,9 +29,13 @@ interface Row {
   [key: string]: unknown;
 }
 
+// FEAR's F2 (반대매매 분위수) needs a 252-day rolling window; keep ~1200 calendar
+// days (~820 trading) so it isn't the series that starves the FEAR history chart.
+const DAYS = 1200;
+
 export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoint[]> {
   const to = ymd(new Date());
-  const from = ymd(new Date(Date.now() - 500 * 24 * 60 * 60_000));
+  const from = ymd(new Date(Date.now() - DAYS * 24 * 60 * 60_000));
 
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -70,7 +74,7 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
     const v = num(r[ratioKey]);
     if (ts !== null && v !== null) out.push({ t: ts, v: Math.round(v * 100) / 100 });
   }
-  return sliceLastYear(out, 500);
+  return sliceLastYear(out, DAYS);
 }
 
 function num(v: unknown): number | null {
