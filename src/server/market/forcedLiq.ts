@@ -1,5 +1,6 @@
 import type { SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
+import { assertAnchor } from "./anchors.js";
 
 /**
  * 미수 반대매매 비중 (unpaid-balance forced-liquidation ratio, %) — the public,
@@ -97,7 +98,12 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<SeriesPoi
     // Keep any real ratio (incl. big spikes); drop only parse garbage / 원-scale.
     if (ts !== null && v !== null && v >= 0 && v <= 100) out.push({ t: ts, v: Math.round(v * 100) / 100 });
   }
-  return sliceLastYear(out, DAYS);
+  const sliced = sliceLastYear(out, DAYS);
+  // HARD 앵커: 고른 컬럼이 진짜 반대매매 비중인지 실측값으로 검문. TMPV 컬럼이 이동해
+  // 엉뚱한 값(예: 미수금 금액)이 들어오면 throw → 반대매매 통째 거부(S2가 망가진 채
+  // 화면에 안 뜸). 2026-07-07 = 2.2% (KOFIA 실화면). 그 날짜가 창에 없으면 no-op.
+  assertAnchor(sliced, 2026, 7, 7, 2.2, 0.2, 0, "반대매매 비중(%)");
+  return sliced;
 }
 
 function num(v: unknown): number | null {

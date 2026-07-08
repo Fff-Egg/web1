@@ -1,6 +1,7 @@
 import type { SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 import { fetchCloses } from "./tradingview.js";
+import { assertAnchor } from "./anchors.js";
 
 /**
  * KOSPI / KOSDAQ index daily closes for the K-공포지수 대시보드.
@@ -36,5 +37,10 @@ export async function fetchKoreaIndexes(
     firstWithData(KOSPI_SYMBOLS, timeoutMs),
     firstWithData(KOSDAQ_SYMBOLS, timeoutMs),
   ]);
+  // HARD 앵커: 심볼이 바뀌거나 엉뚱한 종목이 잡히면 throw → 지수 통째 거부(F3·F4가
+  // 틀린 종가로 계산되는 걸 차단). tz 오프셋 대비 ±1일 창에서 "근처 봉 중 하나라도
+  // 기준값이면 통과". 코스피 2026-06-23=8203.84, 2026-07-08=7246.79 (KRX 실측).
+  assertAnchor(kospiClose, 2026, 6, 23, 8203.84, 45, 1, "코스피 종가");
+  assertAnchor(kospiClose, 2026, 7, 8, 7246.79, 45, 1, "코스피 종가");
   return { kospiClose, kosdaqClose };
 }

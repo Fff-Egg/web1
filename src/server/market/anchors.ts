@@ -42,6 +42,52 @@ function valueOn(series: SeriesPoint[], y: number, m: number, d: number, tolDays
   return best ? best.v : null;
 }
 
+/** 대상 달력일(±tolDays) 안에 expected(±tol)에 맞는 점이 하나라도 있는가.
+ *  true = 통과, false = 그 날짜대는 있는데 값이 다 틀림(불일치), null = 그 날짜 자체가
+ *  창에 없음(검증 불가). tz 오프셋(몇 시간~하루)에도 견고하게 "근처 아무 봉이나 맞으면 OK". */
+function anyNear(series: SeriesPoint[], y: number, m: number, d: number, expected: number, tol: number, tolDays: number): boolean | null {
+  const target = Date.UTC(y, m - 1, d);
+  let sawDate = false;
+  for (const p of series) {
+    if (Math.abs(p.t - target) <= tolDays * DAY) {
+      sawDate = true;
+      if (Math.abs(p.v - expected) <= tol) return true;
+    }
+  }
+  return sawDate ? false : null;
+}
+
+/**
+ * HARD 앵커 검문소 — 각 수집기가 자기 시리즈를 검증. 앵커 날짜가 데이터에 **있는데**
+ * 값이 어긋나면 **throw**해서 그 소스를 통째로 거부한다(수집 실패 처리 → 빈 시리즈 →
+ * 화면엔 '수집 실패'만, 틀린 숫자는 절대 안 뜸). 앵커 날짜가 아직 없거나 시리즈가
+ * 비었으면 no-op(검증 불가 시 통과). "×8 배수 변경·TMPV 컬럼 이동·심볼 변경"을
+ * 화면에 이상값이 뜨기 전에 차단하는 게 목적.
+ */
+export function assertAnchor(
+  series: SeriesPoint[],
+  y: number,
+  m: number,
+  d: number,
+  expected: number,
+  tol: number,
+  tolDays: number,
+  label: string,
+): void {
+  if (!series || series.length === 0) return;
+  const ok = anyNear(series, y, m, d, expected, tol, tolDays);
+  if (ok === false) {
+    const target = Date.UTC(y, m - 1, d);
+    const nearest = series
+      .filter((p) => Math.abs(p.t - target) <= tolDays * DAY)
+      .sort((a, b) => Math.abs(a.t - target) - Math.abs(b.t - target))[0];
+    throw new Error(
+      `앵커 불일치 [${label}] ${y}-${pad(m)}-${pad(d)}: 계산 ${nearest?.v.toFixed(3) ?? "?"} vs 기준 ${expected}` +
+        ` — 파싱/단위/심볼 변경으로 데이터 신뢰 불가 → 저장 거부`,
+    );
+  }
+}
+
 const pad = (n: number) => String(n).padStart(2, "0");
 const isoDay = (t: number) => {
   const dd = new Date(t);
