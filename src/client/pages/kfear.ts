@@ -81,7 +81,12 @@ export interface KFearResult {
 
 // ── 시계열 헬퍼 (pandas 동작 이식) ──
 
-/** source 값을 targetDates에 맞춰 ffill (target 이전 최근값; 첫 관측 전은 NaN). */
+/** source 값을 targetDates에 맞춰 정렬 (target 이하 최근값; 첫 관측 전은 NaN).
+ *  레퍼런스는 `reindex(px.index).ffill()`(정확한 날짜 매칭 후 ffill)이지만, 여기선
+ *  **as-of(≤)** 방식을 쓴다 — 같은 거래일 달력이면 결과가 동일하고(신용·지수 모두
+ *  한국 거래일), TradingView 바 타임스탬프와 KOFIA 자정-UTC 규약이 어긋나도 전체가
+ *  NaN으로 무너지지 않게(정확 매칭보다 견고) 하기 위함. 최악의 경우도 신용 1일 시프트
+ *  정도라 느리게 움직이는 신용잔고 신호엔 영향이 미미하다. */
 function alignFfill(targetDates: number[], source: SeriesPoint[]): number[] {
   const out = new Array<number>(targetDates.length).fill(NaN);
   let j = 0;
