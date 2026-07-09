@@ -151,6 +151,23 @@ function rollPct(arr: number[], win = PCT_WIN): number[] {
   return out;
 }
 
+/**
+ * endIx로 끝나는 win개 창의 q분위 **임계값**(원값) — rollPct의 `(count≤v)/win ≥ q`
+ * 규약과 일치하게 오름차순 정렬 후 index `ceil(q*win)-1`을 고른다(그 값 이상이면 상위
+ * (1−q) 안). "상위5% 컷이 반대매매 비중 몇 %인가"를 화면에 보여주려고. 창 부족/NaN이면 null.
+ */
+function windowQuantile(arr: number[], endIx: number, q: number, win = PCT_WIN): number | null {
+  if (endIx < win - 1) return null;
+  const w: number[] = [];
+  for (let j = endIx - win + 1; j <= endIx; j++) {
+    if (!Number.isFinite(arr[j])) return null;
+    w.push(arr[j]);
+  }
+  w.sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(win - 1, Math.ceil(q * win) - 1));
+  return w[idx];
+}
+
 /** rolling(win, min_periods=minP).max() — 창 내 유한값이 minP개 이상일 때 최대. */
 function rollMax(arr: number[], win: number, minP: number): number[] {
   const n = arr.length;
@@ -348,6 +365,8 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   }
   const decl2 = new Array<boolean>(n).fill(false);
   for (let i = 2; i < n; i++) decl2[i] = liqA[i] < liqA[i - 1] && liqA[i - 1] < liqA[i - 2];
+  // 상위5%(분위 0.95) 컷이 지금 창에선 실제 반대매매 비중 몇 %인지 — 화면 표기용.
+  const spikeCut = windowQuantile(liqA, n - 1, SPIKE_PCT, PCT_WIN);
 
   // S3 이격도
   const ma60 = rollMean(close, DISP_N);
@@ -437,7 +456,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       key: "S2 반대매매",
       met: s2[L],
       value: Number.isFinite(liqA[L]) ? `${liqA[L].toFixed(1)}%` : "—",
-      criteria: "비중 1년 상위5% 스파이크(6일내) & 2일 연속↓",
+      criteria: `비중 1년 상위5%${spikeCut !== null ? `(=${spikeCut.toFixed(1)}% 이상)` : ""} 스파이크(6일내) & 2일 연속↓`,
       detail: `비중 1년 ${topPctLabel(liqPct[L])} · ${s2Note}`,
       level: s2Level,
     },
