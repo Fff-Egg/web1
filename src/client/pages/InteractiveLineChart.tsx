@@ -192,8 +192,13 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
 
         {hover && hoverT !== null && (
           <div
-            className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded bg-slate-800 px-2 py-1 text-[11px] leading-tight text-white shadow"
-            style={{ left: `${hoverLeftPct}%` }}
+            className="pointer-events-none absolute top-0 z-10 rounded bg-slate-800/90 px-2 py-1 text-[11px] leading-tight text-white shadow"
+            style={{
+              left: `${hoverLeftPct}%`,
+              // Sit beside the crosshair (never on it): flip to the left of the
+              // cursor when it's past the midpoint, otherwise to the right.
+              transform: hoverLeftPct > 50 ? "translateX(calc(-100% - 8px))" : "translateX(8px)",
+            }}
           >
             <div className="mb-0.5 text-slate-300">{new Date(hoverT).toLocaleDateString("ko-KR")}</div>
             {nonEmpty.map((s) => {
