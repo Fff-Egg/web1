@@ -151,6 +151,13 @@ export interface MarketHistory {
   kosdaqClose: SeriesPoint[];
   vkospi: SeriesPoint[];
   forcedLiqRatio: SeriesPoint[];
+  /** US 진입신호 실행기 입력 (all daily, US 종가):
+   *  VIX·VIX3M(→ TERM=VIX/VIX3M), HY OAS(ICE BofA, FRED BAMLH0A0HYM2, T+1 — 판정은 shift(1)),
+   *  IXIC(나스닥종합 — 신호엔 불필요, 첫 발동가 대비 등락률·성과추적용). */
+  vix: SeriesPoint[];
+  vix3m: SeriesPoint[];
+  hyOas: SeriesPoint[];
+  ixic: SeriesPoint[];
 }
 
 export interface MarketSnapshot {
