@@ -1,5 +1,5 @@
 import type { SeriesPoint } from "../../shared/market.js";
-import { sliceLastYear } from "../../shared/market.js";
+import { HISTORY_DAYS, sliceLastYear } from "../../shared/market.js";
 import { fetchCloses } from "./tradingview.js";
 
 /**
@@ -24,7 +24,9 @@ const VIX_SYMBOLS = ["TVC:VIX", "CBOE:VIX", "FRED:VIXCLS"];
 const VIX3M_SYMBOLS = ["CBOE:VIX3M", "TVC:VIX3M"];
 const HY_SYMBOLS = ["FRED:BAMLH0A0HYM2"];
 const IXIC_SYMBOLS = ["NASDAQ:IXIC", "TVC:IXIC"];
-const DAYS = 1200; // TERM/HY 추이 차트 + 21거래일 에피소드 병합에 충분한 뒷꼬리.
+// TV가 주는 1300봉(≈5년)을 클리핑하지 않게 5년 유지 — Tier 0 검증 앵커(2023~)가 252일
+// 롤링 워밍업을 확보하려면 그 앵커보다 1년 이상 앞선 히스토리가 필요하다.
+const DAYS = HISTORY_DAYS;
 
 async function firstWithData(symbols: string[], timeoutMs: number): Promise<SeriesPoint[]> {
   for (const sym of symbols) {

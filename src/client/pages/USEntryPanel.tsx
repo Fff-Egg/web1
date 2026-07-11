@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
-import { computeUsEntry, STATE_LABEL, type UsState, type Tier } from "./usEntry.js";
+import { computeUsEntry, verifyTier0Anchors, TIER0_ANCHORS, STATE_LABEL, type UsState, type Tier } from "./usEntry.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
 
 /**
@@ -77,6 +77,7 @@ function MetricRow({
 
 export function USEntryPanel({ data }: { data: MarketSnapshot }) {
   const u = useMemo(() => computeUsEntry(data), [data]);
+  const v0 = useMemo(() => verifyTier0Anchors(data), [data]);
   const tc = termColor(u.term);
   const active = isActive(u.state);
 
@@ -271,16 +272,24 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
       </div>
 
       <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        <strong>3단 티어(예비대→본대→최대)</strong> — <strong>Tier 0 조정매수</strong>: 나스닥 −8% &amp; 200일선 위 → 소량(10~20%).{" "}
-        <strong>Tier 1 주신호</strong>: A(TERM≥1.05) or B(≥1.00&amp;HY≥4.5) → 본대. <strong>Tier 2 확인상향</strong>: AB/MEGA(VIX≥40) → 최대.{" "}
+        <strong>3단 티어(예비대→본대→최대)</strong> — <strong>Tier 0 조정매수</strong>: 나스닥 −8% &amp; 200일선 위 → 소량(10~20%){" "}
+        <span className="text-slate-400">[n=13·6달 +21.1%·승률 100%·최악 +5.4%·2022년 0건]</span>. <strong>Tier 1 주신호</strong>: A(TERM≥1.05) or
+        B(≥1.00&amp;HY≥4.5) → 본대 <span className="text-slate-400">[n=10·6달 +21.3%·최악 +2.7%]</span>. <strong>Tier 2 확인상향</strong>: AB/MEGA(VIX≥40) → 최대.{" "}
         <span className="text-slate-500">
           TERM=VIX/VIX3M(만기구조 역전), HY=ICE BofA US HY OAS(신용). Tier 0의 <strong>200일선 필터</strong>가 강세장 조정과 하락장을
-          가른다(−8% 시점에 하락장은 이미 200일선 아래라 자동 소멸). B 단독군이 백테스트 최고 품질(최악 +8.5%). 신호는 조건 지속 중 매일 유지(쿨다운 없음).
+          가른다(−8% 시점에 하락장은 이미 200일선 아래라 자동 소멸). 신호는 조건 지속 중 매일 유지(쿨다운 없음).
         </span>
         <span className="mt-1 block text-slate-500">
           ⚠️ Tier 0은 <strong>폭락/조정을 사전 구분 못 함</strong>(2020-02에도 켜져 1달 −17.6% 선제 피격 → 6달 +26.9% 회복) — 반드시 소량 전용,
-          이후 A/B가 뜨면 본대가 들어가는 2단 구조. n=10~12 소표본(2008급 미포함) — 승률 100%는 표본의 산물. <strong>투자 권유가 아니며</strong> 모든 판단·결과는 사용자 책임.
+          이후 A/B가 뜨면 본대가 들어가는 2단 구조. n=10~13 소표본(2008급 미포함) — 승률 100%는 표본의 산물. <strong>투자 권유가 아니며</strong> 모든 판단·결과는 사용자 책임.
         </span>
+        {v0.inWindow > 0 && (
+          <span className="mt-1 block text-[11px] text-slate-400">
+            검증 앵커 재현 <strong className={v0.hit === v0.inWindow ? "text-emerald-600" : "text-amber-600"}>{v0.hit}/{v0.inWindow}</strong>{" "}
+            (전체 {TIER0_ANCHORS.length}건 중 창 밖 {v0.outOfWindow.length}건 제외 · 히스토리 ≈5년)
+            {v0.misses.length > 0 && <span className="text-amber-600"> · 미재현: {v0.misses.join(", ")}</span>}
+          </span>
+        )}
       </div>
     </div>
   );

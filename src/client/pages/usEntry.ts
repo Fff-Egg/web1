@@ -34,6 +34,20 @@ const DD_TIER0 = -0.08; // 고점대비 −8%
 const HIGH_WIN = 252; // 고점(52주) 롤링 창
 const SMA_TREND = 200; // 추세 필터(200일선)
 
+/**
+ * Tier 0 검증 앵커 — 백테스트가 잡은 13개 조정 매수 발동일(에피소드 첫날). 52주 롤링
+ * 정의가 맞으면 `verifyTier0Anchors`가 히스토리 범위 내 앵커를 전부 재현해야 한다.
+ * 리트머스: 2023-05-03·2023-09-26이 재현되면 롤링(rollMax 252) 정의 정상.
+ * 성과(n=13): 6달 +21.1%, 승률 100%, 최악 +5.4%, 2022년 0건.
+ * ※ 히스토리 창(≈5년)보다 오래된 앵커(2020~2021)는 '창 밖'으로 제외 표기한다.
+ */
+export const TIER0_ANCHORS = [
+  "2020-02-25", "2020-04-14", "2020-09-08", "2020-10-28",
+  "2021-03-04", "2023-01-27", "2023-03-02", "2023-05-03",
+  "2023-09-26", "2023-10-31", "2024-07-30", "2024-09-03",
+  "2025-02-27",
+];
+
 export type UsState = "IDLE" | "WATCH" | "ARMED" | "ACTIVE_A" | "ACTIVE_B" | "ACTIVE_AB" | "POST";
 
 /** 현재 활성 티어: 0 조정매수(예비대 선발대) / 1 주 신호(본대) / 2 확인 상향(최대) / null 없음. */
@@ -153,6 +167,87 @@ function asOf(sorted: Array<{ d: number; v: number }>, d: number): number | null
   return v;
 }
 
+/**
+ * Tier 0(조정 매수) 계산 — 나스닥 IXIC 고점(52주 롤링)대비 −8% & 200일선 위. 최신값
+ * (dd/above200/tier0)과 차트용 낙폭 히스토리, 그리고 일별 on/off 맵(앵커 검증용)을 낸다.
+ */
+function computeTier0(ixicPts: SeriesPoint[]): {
+  dd: number | null;
+  above200: boolean;
+  tier0: boolean;
+  ddHistory: SeriesPoint[];
+  onByDay: Map<number, boolean>;
+} {
+  const ix = [...ixicPts].filter((p) => Number.isFinite(p.v) && p.v > 0).sort((a, b) => a.t - b.t);
+  const ddHistory: SeriesPoint[] = [];
+  const onByDay = new Map<number, boolean>();
+  let dd: number | null = null;
+  let above200 = false;
+  let tier0 = false;
+  if (ix.length > SMA_TREND) {
+    const closes = ix.map((p) => p.v);
+    const high = rollMax(closes, HIGH_WIN);
+    const sma = rollMean(closes, SMA_TREND);
+    for (let i = 0; i < closes.length; i++) {
+      if (!Number.isFinite(high[i]) || !Number.isFinite(sma[i]) || high[i] <= 0) continue;
+      const d = closes[i] / high[i] - 1;
+      ddHistory.push({ t: ix[i].t, v: Math.round(d * 1000) / 10 }); // %
+      onByDay.set(dayKey(ix[i].t), d <= DD_TIER0 && closes[i] > sma[i]);
+    }
+    const j = closes.length - 1;
+    if (Number.isFinite(high[j]) && high[j] > 0) dd = closes[j] / high[j] - 1;
+    if (Number.isFinite(sma[j])) above200 = closes[j] > sma[j];
+    tier0 = dd !== null && dd <= DD_TIER0 && above200;
+  }
+  return { dd, above200, tier0, ddHistory, onByDay };
+}
+
+export interface Tier0Verify {
+  hit: number; // 재현된 앵커 수
+  inWindow: number; // 히스토리 창 안(검증 가능) 앵커 수
+  misses: string[]; // 창 안인데 재현 안 된 앵커
+  outOfWindow: string[]; // 창 밖(오래돼 계산 불가) 앵커
+}
+
+/**
+ * TIER0_ANCHORS가 실제 나스닥 히스토리에서 재현되는지 검증(리콜). 앵커일 ±tolDays
+ * 거래일 안에 tier0가 켜졌으면 재현. 계산 가능 범위(min..max onByDay 날짜) 밖 앵커는
+ * '창 밖'으로 분리. 리트머스(2023-05-03·2023-09-26) 재현이 롤링 정의 정상 판정.
+ */
+export function verifyTier0Anchors(snap: MarketSnapshot, tolDays = 2): Tier0Verify {
+  const { onByDay } = computeTier0(snap.history?.ixic ?? []);
+  const days = [...onByDay.keys()].sort((a, b) => a - b);
+  const misses: string[] = [];
+  const outOfWindow: string[] = [];
+  let hit = 0;
+  let inWindow = 0;
+  const minD = days[0];
+  const maxD = days[days.length - 1];
+  for (const s of TIER0_ANCHORS) {
+    const parsed = Date.parse(`${s}T00:00:00Z`);
+    if (Number.isNaN(parsed) || days.length === 0) {
+      outOfWindow.push(s);
+      continue;
+    }
+    const d = dayKey(parsed);
+    if (d < minD || d > maxD) {
+      outOfWindow.push(s);
+      continue;
+    }
+    inWindow++;
+    let fired = false;
+    for (let k = -tolDays; k <= tolDays; k++) {
+      if (onByDay.get(d + k)) {
+        fired = true;
+        break;
+      }
+    }
+    if (fired) hit++;
+    else misses.push(s);
+  }
+  return { hit, inWindow, misses, outOfWindow };
+}
+
 export function computeUsEntry(snap: MarketSnapshot): UsEntry {
   const h = snap.history ?? ({} as MarketSnapshot["history"]);
   const vixPts = h.vix ?? [];
@@ -263,24 +358,7 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
       : null;
 
   // ── Tier 0 (조정 매수): 나스닥 IXIC 고점대비 −8% & 200일선 위 ──
-  const ixByT = [...ixicPts].filter((p) => Number.isFinite(p.v) && p.v > 0).sort((a, b) => a.t - b.t);
-  let dd: number | null = null;
-  let above200 = false;
-  let tier0 = false;
-  const ddHistory: SeriesPoint[] = [];
-  if (ixByT.length > SMA_TREND) {
-    const closes = ixByT.map((p) => p.v);
-    const high = rollMax(closes, HIGH_WIN);
-    const sma = rollMean(closes, SMA_TREND);
-    for (let i = 0; i < closes.length; i++) {
-      if (!Number.isFinite(high[i]) || !Number.isFinite(sma[i]) || high[i] <= 0) continue;
-      ddHistory.push({ t: ixByT[i].t, v: Math.round((closes[i] / high[i] - 1) * 1000) / 10 }); // %
-    }
-    const j = closes.length - 1;
-    if (Number.isFinite(high[j]) && high[j] > 0) dd = closes[j] / high[j] - 1;
-    if (Number.isFinite(sma[j])) above200 = closes[j] > sma[j];
-    tier0 = dd !== null && dd <= DD_TIER0 && above200;
-  }
+  const { dd, above200, tier0, ddHistory } = computeTier0(ixicPts);
 
   // 활성 티어: 2 확인상향(AB or MEGA) / 1 주신호(A or B) / 0 조정매수 / null.
   let tier: Tier = null;
@@ -315,4 +393,4 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
   };
 }
 
-export const __test = { computeUsEntry, dayKey, asOf };
+export const __test = { computeUsEntry, dayKey, asOf, computeTier0, verifyTier0Anchors, rollMax, rollMean };
