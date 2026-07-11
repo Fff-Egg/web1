@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
-import { computeUsEntry, STATE_LABEL, type UsState } from "./usEntry.js";
+import { computeUsEntry, STATE_LABEL, type UsState, type Tier } from "./usEntry.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
 
 /**
@@ -21,6 +21,11 @@ const STATE_CLS: Record<UsState, string> = {
 };
 
 const isActive = (s: UsState) => s === "ACTIVE_A" || s === "ACTIVE_B" || s === "ACTIVE_AB";
+
+/** 활성 티어 행 색: 2 최대(짙은빨강) / 1 본대(빨강) / 0 조정매수(에메랄드). */
+function tierActiveCls(t: Tier): string {
+  return t === 2 ? "bg-red-700 text-white" : t === 1 ? "bg-red-500 text-white" : "bg-emerald-600 text-white";
+}
 
 function fmtDate(t: number | null): string {
   if (t === null) return "—";
@@ -86,15 +91,18 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
     );
   }
 
+  const ddTxt = u.dd !== null ? `${(u.dd * 100).toFixed(1)}%` : "—";
   const headline = active
     ? `${STATE_LABEL[u.state]} — 진입권 유효 (연속 ${u.activeDays}일차)${u.mega ? " · ⚡MEGA" : ""}`
-    : u.state === "ARMED"
-      ? "역전 시작 — B 판정 대기 (A까지 0.05)"
-      : u.state === "WATCH"
-        ? "접근 경보 — 아직 진입 조건 아님"
-        : u.state === "POST"
-          ? "발동 직후 참고창 (조건 소멸, 21거래일 내)"
-          : "평시 — 진입 신호 없음";
+    : u.tier0
+      ? `조정 매수(Tier 0) — 나스닥 고점대비 ${ddTxt} & 200일선 위 · 소량 예비대`
+      : u.state === "ARMED"
+        ? "역전 시작 — B 판정 대기 (A까지 0.05)"
+        : u.state === "WATCH"
+          ? "접근 경보 — 아직 진입 조건 아님"
+          : u.state === "POST"
+            ? "발동 직후 참고창 (조건 소멸, 21거래일 내)"
+            : "평시 — 진입 신호 없음";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-4">
@@ -108,16 +116,22 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
         </span>
       </div>
 
-      <div className={"mb-3 rounded px-3 py-2 text-sm font-medium " + (active ? "bg-red-50 text-red-700" : "bg-slate-50 text-slate-600")}>
+      <div
+        className={
+          "mb-3 rounded px-3 py-2 text-sm font-medium " +
+          (active ? "bg-red-50 text-red-700" : u.tier0 ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-slate-600")
+        }
+      >
         오늘: {headline}
       </div>
 
       <div className="rounded-lg border border-slate-200 p-3">
-        {/* 상태 배지 + TERM 큰 값 */}
-        <div className="flex items-center justify-between gap-2">
+        {/* 상태 배지 + Tier 0 칩 + TERM 큰 값 */}
+        <div className="flex flex-wrap items-center gap-2">
           <span className={"rounded px-2 py-0.5 text-xs font-bold " + STATE_CLS[u.state]}>
             {u.state} {STATE_LABEL[u.state]}
           </span>
+          {u.tier0 && <span className="rounded bg-emerald-600 px-2 py-0.5 text-xs font-bold text-white">Tier 0 조정매수</span>}
           {u.mega && <span className="rounded bg-purple-700 px-2 py-0.5 text-xs font-bold text-white">⚡ MEGA (VIX≥40)</span>}
         </div>
         <div className="mt-2 flex items-end gap-2">
@@ -172,6 +186,42 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
             met={u.mega}
             thresholds="MEGA 배지 40 (초대형 패닉)"
           />
+          <MetricRow
+            label="나스닥 고점대비 (Tier 0)"
+            value={ddTxt}
+            met={u.tier0}
+            thresholds={`조정 −8% & 200일선 위 · 현재 200일선 ${u.dd === null ? "—" : u.above200 ? "위 ✓" : "아래 ✗"}`}
+          />
+        </div>
+
+        {/* 3단 티어 구조 — 현재 위치 강조 (▶). 사용자 프레임워크의 예비대→본대→최대. */}
+        <div className="mt-3 space-y-1">
+          {(
+            [
+              { t: 2 as Tier, label: "Tier 2 확인 상향", cond: "AB 동시 / MEGA(VIX≥40)", size: "최대 사이징" },
+              { t: 1 as Tier, label: "Tier 1 주 신호", cond: "A(TERM≥1.05) or B(≥1.00&HY≥4.5)", size: "본대 투입" },
+              { t: 0 as Tier, label: "Tier 0 조정 매수", cond: "나스닥 −8% & 200일선 위", size: "소량 (계획 10~20%·예비대 선발대)" },
+            ]
+          ).map((row) => {
+            const on = u.tier === row.t;
+            return (
+              <div
+                key={row.t}
+                className={
+                  "flex flex-wrap items-center justify-between gap-x-2 rounded px-2 py-1 text-[11px] " +
+                  (on ? tierActiveCls(row.t) : "bg-slate-50 text-slate-400")
+                }
+              >
+                <span className="font-semibold">
+                  {on ? "▶ " : ""}
+                  {row.label}
+                </span>
+                <span className={"tabular-nums " + (on ? "opacity-90" : "")}>
+                  {row.cond} → {row.size}
+                </span>
+              </div>
+            );
+          })}
         </div>
 
         {u.prevEpisode && (
@@ -205,16 +255,31 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
             />
           </div>
         )}
+        {/* 나스닥 고점대비 낙폭 + −8% Tier 0 임계선 */}
+        {u.ddHistory.length > 1 && (
+          <div className="mt-2">
+            <div className="text-[10px] font-medium text-slate-400">나스닥 고점대비 낙폭 (−8% = Tier 0 조정 임계)</div>
+            <InteractiveLineChart
+              series={[{ points: u.ddHistory, color: "#0d9488", label: "고점대비" }]}
+              baselines={[-8]}
+              decimals={1}
+              suffix="%"
+              height={100}
+            />
+          </div>
+        )}
       </div>
 
       <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        <strong>진입 = 절대값 2트랙</strong> — A(주): <strong>TERM ≥ 1.05</strong> · B(강): <strong>TERM ≥ 1.00 &amp; HY OAS ≥ 4.5%</strong>.{" "}
+        <strong>3단 티어(예비대→본대→최대)</strong> — <strong>Tier 0 조정매수</strong>: 나스닥 −8% &amp; 200일선 위 → 소량(10~20%).{" "}
+        <strong>Tier 1 주신호</strong>: A(TERM≥1.05) or B(≥1.00&amp;HY≥4.5) → 본대. <strong>Tier 2 확인상향</strong>: AB/MEGA(VIX≥40) → 최대.{" "}
         <span className="text-slate-500">
-          TERM은 VIX/VIX3M(만기구조 역전), HY는 ICE BofA US HY OAS(신용 스트레스). B 단독군이 백테스트 최고 품질(최악 +8.5%).
-          신호는 조건 지속 중 매일 유지(쿨다운 없음) — 첫날 놓쳐도 추격 판단 가능.
+          TERM=VIX/VIX3M(만기구조 역전), HY=ICE BofA US HY OAS(신용). Tier 0의 <strong>200일선 필터</strong>가 강세장 조정과 하락장을
+          가른다(−8% 시점에 하락장은 이미 200일선 아래라 자동 소멸). B 단독군이 백테스트 최고 품질(최악 +8.5%). 신호는 조건 지속 중 매일 유지(쿨다운 없음).
         </span>
         <span className="mt-1 block text-slate-500">
-          ⚠️ n=10(2008급 대형 약세장 미포함) 소표본 백테스트 기반 — 승률 100%는 보장이 아니라 표본의 산물. <strong>투자 권유가 아니며</strong> 모든 판단·결과는 사용자 책임.
+          ⚠️ Tier 0은 <strong>폭락/조정을 사전 구분 못 함</strong>(2020-02에도 켜져 1달 −17.6% 선제 피격 → 6달 +26.9% 회복) — 반드시 소량 전용,
+          이후 A/B가 뜨면 본대가 들어가는 2단 구조. n=10~12 소표본(2008급 미포함) — 승률 100%는 표본의 산물. <strong>투자 권유가 아니며</strong> 모든 판단·결과는 사용자 책임.
         </span>
       </div>
     </div>

@@ -27,8 +27,17 @@ const HY_B = 4.5; // Track B 신용확인
 const HY_WATCH = 4.25;
 const VIX_MEGA = 40; // 초대형 패닉 배지
 const MERGE_TD = 21; // 에피소드 병합 창(거래일)
+// Tier 0(조정 매수): 나스닥 고점대비 −8% & 200일선 위. "자기 추세 대비 위치"라는
+// 자기정규화 필터(TERM이 비율이라 살아난 것과 같은 계열) — 강세장 조정은 −8%에도
+// 200일선 위지만, 하락장은 −8% 시점에 이미 200일선 아래라 자동으로 꺼진다.
+const DD_TIER0 = -0.08; // 고점대비 −8%
+const HIGH_WIN = 252; // 고점(52주) 롤링 창
+const SMA_TREND = 200; // 추세 필터(200일선)
 
 export type UsState = "IDLE" | "WATCH" | "ARMED" | "ACTIVE_A" | "ACTIVE_B" | "ACTIVE_AB" | "POST";
+
+/** 현재 활성 티어: 0 조정매수(예비대 선발대) / 1 주 신호(본대) / 2 확인 상향(최대) / null 없음. */
+export type Tier = 0 | 1 | 2 | null;
 
 export const STATE_LABEL: Record<UsState, string> = {
   IDLE: "평시",
@@ -61,8 +70,14 @@ export interface UsEntry {
   firstFired: number | null; // 현재 에피소드 첫 발동일 ms
   nasdaqSince: number | null; // 첫 발동가 대비 현재 나스닥 등락률(%)
   prevEpisode: UsEpisode | null; // 직전(현재 아닌) 에피소드
+  // Tier 0(조정 매수) — 나스닥 IXIC 기반, TERM/HY와 독립.
+  dd: number | null; // 나스닥 고점(52주)대비 낙폭(음수, 예: −0.093)
+  above200: boolean; // 200일선 위 여부(추세 필터)
+  tier0: boolean; // DD≤−8% & 200일선 위
+  tier: Tier; // 현재 활성 티어(0/1/2/null)
   termHistory: SeriesPoint[]; // TERM 추이 차트
   hyHistory: SeriesPoint[]; // HY OAS 추이 차트
+  ddHistory: SeriesPoint[]; // 나스닥 고점대비 낙폭(%) 추이
 }
 
 const EMPTY: UsEntry = {
@@ -80,9 +95,50 @@ const EMPTY: UsEntry = {
   firstFired: null,
   nasdaqSince: null,
   prevEpisode: null,
+  dd: null,
+  above200: false,
+  tier0: false,
+  tier: null,
   termHistory: [],
   hyHistory: [],
+  ddHistory: [],
 };
+
+/** 롤링 최대(min_periods=win): 창이 다 안 차면 NaN. */
+function rollMax(arr: number[], win: number): number[] {
+  const out = new Array<number>(arr.length).fill(NaN);
+  for (let i = win - 1; i < arr.length; i++) {
+    let m = -Infinity;
+    let ok = true;
+    for (let j = i - win + 1; j <= i; j++) {
+      if (!Number.isFinite(arr[j])) {
+        ok = false;
+        break;
+      }
+      if (arr[j] > m) m = arr[j];
+    }
+    if (ok) out[i] = m;
+  }
+  return out;
+}
+
+/** 롤링 평균(min_periods=win). */
+function rollMean(arr: number[], win: number): number[] {
+  const out = new Array<number>(arr.length).fill(NaN);
+  for (let i = win - 1; i < arr.length; i++) {
+    let s = 0;
+    let ok = true;
+    for (let j = i - win + 1; j <= i; j++) {
+      if (!Number.isFinite(arr[j])) {
+        ok = false;
+        break;
+      }
+      s += arr[j];
+    }
+    if (ok) out[i] = s / win;
+  }
+  return out;
+}
 
 /** UTC 거래일 키(US 시계열은 UTC 자정 기준 일봉이라 일 단위로 내려 정렬). */
 const dayKey = (t: number): number => Math.floor(t / DAY);
@@ -206,6 +262,31 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
       ? { t: tl[episodes[prevIdx].anchor].t, track: trackOf(episodes[prevIdx].anchor), agoTradingDays: L - episodes[prevIdx].anchor }
       : null;
 
+  // ── Tier 0 (조정 매수): 나스닥 IXIC 고점대비 −8% & 200일선 위 ──
+  const ixByT = [...ixicPts].filter((p) => Number.isFinite(p.v) && p.v > 0).sort((a, b) => a.t - b.t);
+  let dd: number | null = null;
+  let above200 = false;
+  let tier0 = false;
+  const ddHistory: SeriesPoint[] = [];
+  if (ixByT.length > SMA_TREND) {
+    const closes = ixByT.map((p) => p.v);
+    const high = rollMax(closes, HIGH_WIN);
+    const sma = rollMean(closes, SMA_TREND);
+    for (let i = 0; i < closes.length; i++) {
+      if (!Number.isFinite(high[i]) || !Number.isFinite(sma[i]) || high[i] <= 0) continue;
+      ddHistory.push({ t: ixByT[i].t, v: Math.round((closes[i] / high[i] - 1) * 1000) / 10 }); // %
+    }
+    const j = closes.length - 1;
+    if (Number.isFinite(high[j]) && high[j] > 0) dd = closes[j] / high[j] - 1;
+    if (Number.isFinite(sma[j])) above200 = closes[j] > sma[j];
+    tier0 = dd !== null && dd <= DD_TIER0 && above200;
+  }
+
+  // 활성 티어: 2 확인상향(AB or MEGA) / 1 주신호(A or B) / 0 조정매수 / null.
+  let tier: Tier = null;
+  if (fired[L]) tier = (A[L] && B[L]) || megaNow ? 2 : 1;
+  else if (tier0) tier = 0;
+
   const termHistory = tl.map((r) => ({ t: r.t, v: Math.round(r.term * 1000) / 1000 }));
   const hyHistory = hySorted.map((p) => ({ t: p.t, v: p.v }));
 
@@ -224,8 +305,13 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
     firstFired,
     nasdaqSince,
     prevEpisode,
+    dd,
+    above200,
+    tier0,
+    tier,
     termHistory,
     hyHistory,
+    ddHistory,
   };
 }
 
