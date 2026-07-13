@@ -415,26 +415,33 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   let s2Max = 0;
   for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) if (Number.isFinite(liqPct[j])) s2Max = Math.max(s2Max, liqPct[j]);
   const s2Level = upperTailLevel(s2Max);
-  // 가장 최근 상위5% 스파이크가 언제였는지 — S2 충족/미충족 이유를 보여주려고(6일 창 안/밖).
-  let lastSpikeIdx = -1;
-  for (let i = L; i >= 0; i--) {
-    if (liqPct[i] >= SPIKE_PCT) {
-      lastSpikeIdx = i;
-      break;
-    }
+  // 6일 창의 **정점**(반대매매 비중 최고일) — 최신 스파이크가 아니라 투매가 어디서
+  // 꺾였는지 기준점을 보여준다(예: 7/9 10.2% 정점 → 7/10 5.7%면 정점은 7/9).
+  let peakIdx = -1;
+  for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) {
+    if (!Number.isFinite(liqA[j])) continue;
+    if (peakIdx < 0 || liqA[j] > liqA[peakIdx]) peakIdx = j;
   }
-  const spikeAgo = lastSpikeIdx < 0 ? Infinity : L - lastSpikeIdx;
-  // "꺾임"은 기준일 기준 2거래일 연속 하락. 미충족이면 이유를 구분: 스파이크가 6일
-  // 창을 벗어남 / 아직 2일 연속 하락이 아님.
+  const peakAgo = peakIdx < 0 ? Infinity : L - peakIdx;
+  const hasSpike = spike[L]; // 6일 창에 상위5% 존재
+  // 기준일 기준 연속 하락 일수(decl2 = 이게 ≥2). "0일처럼 보인다"는 혼란을 없애려고
+  // 몇 일째 꺾이는 중인지 명시한다.
+  let declStreak = 0;
+  for (let i = L; i >= 1; i--) {
+    if (liqA[i] < liqA[i - 1]) declStreak++;
+    else break;
+  }
   const s2Reason = s2[L]
     ? "2일 연속↓ 충족"
-    : spikeAgo > SPIKE_LOOKBACK - 1
-      ? "6일 창 밖"
-      : "아직 2일 연속↓ 아님";
+    : !hasSpike
+      ? "6일 창에 상위5% 없음"
+      : declStreak >= 1
+        ? `${declStreak}일 연속↓ (2일 필요)`
+        : "정점 후 아직 안 꺾임";
   const s2Note =
-    lastSpikeIdx < 0
+    peakIdx < 0
       ? "최근 상위5% 스파이크 없음"
-      : `최근 상위5% ${fmtMD(dates[lastSpikeIdx])}(${liqA[lastSpikeIdx].toFixed(1)}%·${spikeAgo}일전) · ${s2Reason}`;
+      : `정점 ${liqA[peakIdx].toFixed(1)}% (${fmtMD(dates[peakIdx])}·${peakAgo}일전) · ${s2Reason}`;
   const s3Level: CapLevel =
     dispPct[L] <= 0.01 || disp[L] <= 88 ? 3 : dispPct[L] <= 0.05 || disp[L] <= 92 ? 2 : dispPct[L] <= 0.15 || disp[L] <= 96 ? 1 : 0;
 
