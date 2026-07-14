@@ -95,6 +95,9 @@ export interface MarketFear {
   dispDev: number | null; // 60일선 대비 이격도 편차(%) — 게이트 표시
   signals: SignalView[];
   fearHistory: SeriesPoint[];
+  s1History: SeriesPoint[];
+  s2History: SeriesPoint[];
+  s3History: SeriesPoint[];
   /** 최종 권장 비중 = 등급 기본 비중 × 이중 얕음게이트 (코스닥 단독이면 0%). */
   sizing: Sizing;
   // 코스닥 전용:
@@ -267,6 +270,9 @@ interface Built {
   dispDev: number | null; // 60일선 대비 이격도 편차(%, 음수=이평 아래) — 이중 게이트 입력
   signals: SignalView[];
   fearHistory: SeriesPoint[];
+  s1History: SeriesPoint[]; // 신용 DD(%) 추이 (임계 −8/−15)
+  s2History: SeriesPoint[]; // 반대매매 금액 1년 분위(%) 추이 (임계 95=상위5%)
+  s3History: SeriesPoint[]; // 60일선 이격도 편차(%) 추이 (임계 −8)
 }
 
 const nn = (v: number): number | null => (Number.isFinite(v) ? v : null);
@@ -300,6 +306,9 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     creditDd: null,
     dispDev: null,
     fearHistory: [],
+    s1History: [],
+    s2History: [],
+    s3History: [],
     signals: [
       { key: "S1 신용청산", met: false, value: "—", criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓", detail: "데이터 없음", level: 0 },
       { key: "S2 반대매매", met: false, value: "—", criteria: "반대매매금액 1년 상위5%", detail: "데이터 없음", level: 0 },
@@ -380,10 +389,15 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   // 차트는 4성분이 **모두** 찬 뒤부터만(성분별 워밍업이 달라 — F4 20+252, F3 60+252 등
   // — 초기엔 일부 성분만으로 FEAR가 계산돼 왜곡됨). 완전 워밍업(~311거래일) 지점만 그림.
   const fearHistory: SeriesPoint[] = [];
+  const s1History: SeriesPoint[] = []; // 신용 DD %
+  const s2History: SeriesPoint[] = []; // 반대매매 금액 분위 %
+  const s3History: SeriesPoint[] = []; // 이격도 편차 %
   for (let i = 0; i < n; i++) {
-    if (Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i])) {
-      fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
-    }
+    if (!(Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i]))) continue;
+    fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
+    if (Number.isFinite(creditDd[i])) s1History.push({ t: dates[i], v: Math.round(creditDd[i] * 1000) / 10 });
+    if (Number.isFinite(amtPct[i])) s2History.push({ t: dates[i], v: Math.round(amtPct[i] * 1000) / 10 });
+    if (Number.isFinite(disp[i])) s3History.push({ t: dates[i], v: Math.round((disp[i] - 100) * 10) / 10 });
   }
 
   // 최신 행
@@ -439,6 +453,9 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     dispDev: Number.isFinite(dev) ? dev : null, // 60일선 대비 이격도 편차(%) — 게이트 입력
     signals,
     fearHistory,
+    s1History,
+    s2History,
+    s3History,
   };
 }
 

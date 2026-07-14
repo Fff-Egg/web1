@@ -163,7 +163,7 @@ function MarketCard({ m }: { m: MarketFear }) {
         ))}
       </ul>
 
-      {/* FEAR 추이 + 90 임계선 */}
+      {/* FEAR 추이 + 90 임계선 (v4: F2=반대매매 금액 분위) */}
       {m.fearHistory.length > 1 && (
         <div className="mt-2">
           <div className="text-[10px] font-medium text-slate-400">FEAR 추이 (90 = 매수 임계)</div>
@@ -172,6 +172,42 @@ function MarketCard({ m }: { m: MarketFear }) {
             baselines={[90]}
             decimals={0}
             height={110}
+          />
+        </div>
+      )}
+      {/* 신호별 원지표 추이 — 각 신호 임계선과 함께(FEAR 차트와 동일 상호작용). */}
+      {m.s1History.length > 1 && (
+        <div className="mt-2">
+          <div className="text-[10px] font-medium text-slate-400">S1 신용 DD 추이 (−8 경계 · −15 심각)</div>
+          <InteractiveLineChart
+            series={[{ points: m.s1History, color: "#0ea5e9", label: "신용 DD" }]}
+            baselines={[-8, -15]}
+            decimals={1}
+            suffix="%"
+            height={90}
+          />
+        </div>
+      )}
+      {m.s2History.length > 1 && (
+        <div className="mt-2">
+          <div className="text-[10px] font-medium text-slate-400">S2 반대매매 금액 1년 분위 추이 (95 = 상위5%)</div>
+          <InteractiveLineChart
+            series={[{ points: m.s2History, color: "#f97316", label: "금액 분위" }]}
+            baselines={[95]}
+            decimals={0}
+            height={90}
+          />
+        </div>
+      )}
+      {m.s3History.length > 1 && (
+        <div className="mt-2">
+          <div className="text-[10px] font-medium text-slate-400">S3 60일선 이격도 편차 추이 (−8 과매도)</div>
+          <InteractiveLineChart
+            series={[{ points: m.s3History, color: "#8b5cf6", label: "이격도" }]}
+            baselines={[-8]}
+            decimals={1}
+            suffix="%"
+            height={90}
           />
         </div>
       )}
