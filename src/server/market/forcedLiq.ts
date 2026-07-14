@@ -115,32 +115,44 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<ForcedLiq
   assertAnchor(sliced, 2026, 7, 7, 2.2, 0.2, 0, "반대매매 비중(%)");
 
   // ── v4: 위탁매매 미수금 대비 실제 반대매매 **금액**(절대치) 컬럼 ──
-  // 2점 스케일 무관 앵커로 식별: 07-09/07-07 = 142197/31741 = 4.480(÷8이든 백만원이든
-  // 비율은 동일). 비중 컬럼(10.2/2.2=4.64)과 근접하지만 **크기**로 분리(금액은 수천~수십만,
-  // 비중은 <100, 미수금·예탁금은 ≥수십만). 못 찾으면 amount=[]로 두고 kfear가 비중으로 폴백.
+  // ⚠️ 값은 화면의 백만원이 아니라 **원÷8 스케일**(신용잔고와 동일 게이트웨이 아티팩트,
+  // 예: TMPV6=3.28e9 → ×8÷1e6 = 26,240백만 = 화면 7/13). pct252는 스케일 무관이라 raw로 저장.
+  // 식별은 **이중 2점 비율**(완전 스케일 무관): 07-09/07-07=142197/31741=4.480 AND
+  // 07-10/07-08=81613/28846=2.829. 두 비율 모두 맞는 컬럼은 금액뿐(비중·미수금·예탁금 배제).
+  // 못 찾으면 amount=[]로 두고 kfear가 비중으로 폴백.
   const amount = extractAmount(rows, ratioKey);
-  console.log(`[forcedLiq] 반대매매금액 컬럼 ${amount.key ?? "식별 실패(비중 폴백)"} 최근:`, amount.series.slice(-3).map((p) => `${new Date(p.t).toISOString().slice(0, 10)}=${p.v}`).join(" "));
+  console.log(
+    `[forcedLiq] 반대매매금액 컬럼 ${amount.key ?? "식별 실패(비중 폴백)"} 최근(백만원 환산):`,
+    amount.series.slice(-3).map((p) => `${new Date(p.t).toISOString().slice(0, 10)}=${Math.round((p.v * 8) / 1e6)}`).join(" "),
+  );
   return { ratio: sliced, amount: sliceLastYear(amount.series, DAYS) };
 }
 
-/** 반대매매 금액 컬럼을 2점 비율(07-09/07-07≈4.48) + 크기 게이트로 식별. */
+/** 반대매매 금액 컬럼을 **이중 2점 비율**(스케일 무관)로 식별. 07-09/07-07≈4.48 AND
+ *  07-10/07-08≈2.83 둘 다 맞는 컬럼만(금액 고유). 앵커 날짜가 창 밖이면 그 쌍은 건너뜀. */
 function extractAmount(rows: Row[], ratioKey: string): { key: string | undefined; series: SeriesPoint[] } {
-  const a7 = rows.find((r) => r.TMPV1 === "20260707");
-  const a9 = rows.find((r) => r.TMPV1 === "20260709");
+  const row = (d: string) => rows.find((r) => r.TMPV1 === d);
+  const a7 = row("20260707");
+  const a9 = row("20260709");
+  const a8 = row("20260708");
+  const a10 = row("20260710");
   const cols = Object.keys(rows[0] ?? {}).filter((k) => k.startsWith("TMPV") && k !== "TMPV1" && k !== ratioKey);
+  const ratioOk = (ra: Row | undefined, rb: Row | undefined, k: string, target: number): boolean | null => {
+    if (!ra || !rb) return null; // 앵커 날짜 없음 → 이 쌍은 판정 보류
+    const va = num(ra[k]);
+    const vb = num(rb[k]);
+    if (va === null || vb === null || va <= 0) return false;
+    return Math.abs(vb / va - target) < 0.2;
+  };
   let key: string | undefined;
-  if (a7 && a9) {
-    for (const k of cols) {
-      const v7 = num(a7[k]);
-      const v9 = num(a9[k]);
-      if (v7 === null || v9 === null || v7 <= 0) continue;
-      const r = v9 / v7;
-      // 금액: 비율 4.48±0.25 & 07-07 크기 [500, 900000](비중<100·미수금≥1e6 배제).
-      if (Math.abs(r - 4.48) < 0.25 && v7 >= 500 && v7 <= 900_000) {
-        key = k;
-        break;
-      }
-    }
+  for (const k of cols) {
+    const p1 = ratioOk(a7, a9, k, 4.48); // 07-09/07-07
+    const p2 = ratioOk(a8, a10, k, 2.829); // 07-10/07-08
+    if (p1 === false || p2 === false) continue;
+    if (p1 === null && p2 === null) continue; // 두 앵커 다 없으면 식별 불가
+    // 사용 가능한 앵커 쌍이 모두 통과해야 함(하나만 available이면 그거라도).
+    key = k;
+    break;
   }
   if (!key) return { key: undefined, series: [] };
   const series: SeriesPoint[] = [];
