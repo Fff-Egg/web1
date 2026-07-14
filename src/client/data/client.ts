@@ -653,6 +653,7 @@ const SAMPLE_MARKET: MarketSnapshot = {
     kosdaqClose: sampleSeries(880, 60),
     vkospi: [],
     forcedLiqRatio: sampleSeries(2, 1.2),
+    forcedLiqAmount: sampleSeries(40000, 25000),
     vix: sampleSeries(16, 5),
     vix3m: sampleSeries(19, 3),
     hyOas: sampleSeries(3.2, 0.8),

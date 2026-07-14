@@ -33,6 +33,7 @@ const EMPTY_HISTORY: MarketHistory = {
   kosdaqClose: [],
   vkospi: [],
   forcedLiqRatio: [],
+  forcedLiqAmount: [],
   vix: [],
   vix3m: [],
   hyOas: [],
@@ -103,7 +104,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     }),
     fetchForcedLiqRatio().catch((e: unknown) => {
       errors.push(`반대매매 비중(KOFIA) 수집 실패: ${msg(e)}`);
-      return [] as typeof history.forcedLiqRatio;
+      return { ratio: [], amount: [] };
     }),
     fetchUsEntry().catch((e: unknown) => {
       errors.push(`US 진입신호(VIX/VIX3M/HY) 수집 실패: ${msg(e)}`);
@@ -130,7 +131,8 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.kospiClose = koreaIdx.kospiClose;
   history.kosdaqClose = koreaIdx.kosdaqClose;
   history.vkospi = []; // legacy — FEAR's F4(실현변동성)가 대체
-  history.forcedLiqRatio = forcedLiq;
+  history.forcedLiqRatio = forcedLiq.ratio;
+  history.forcedLiqAmount = forcedLiq.amount;
   history.vix = usEntry.vix;
   history.vix3m = usEntry.vix3m;
   history.hyOas = usEntry.hyOas;
@@ -179,6 +181,7 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.kosdaqClose === undefined) snap.history.kosdaqClose = [];
   if (snap.history.vkospi === undefined) snap.history.vkospi = [];
   if (snap.history.forcedLiqRatio === undefined) snap.history.forcedLiqRatio = [];
+  if (snap.history.forcedLiqAmount === undefined) snap.history.forcedLiqAmount = [];
   if (snap.history.vix === undefined) snap.history.vix = [];
   if (snap.history.vix3m === undefined) snap.history.vix3m = [];
   if (snap.history.hyOas === undefined) snap.history.hyOas = [];

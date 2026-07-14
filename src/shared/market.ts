@@ -150,7 +150,12 @@ export interface MarketHistory {
   kospiClose: SeriesPoint[];
   kosdaqClose: SeriesPoint[];
   vkospi: SeriesPoint[];
+  /** 미수금 대비 반대매매 **비중(%)** — 표시·폴백용(분모 미수금 왜곡 있음). */
   forcedLiqRatio: SeriesPoint[];
+  /** 위탁매매 미수금 대비 실제 반대매매 **금액(절대치)** — v4 F2·S2의 주 입력.
+   *  비중과 달리 분모 왜곡이 없어 강제청산 강도를 곧게 잰다. pct252는 스케일 무관이라
+   *  단위(백만원/÷8)는 상관없음. */
+  forcedLiqAmount: SeriesPoint[];
   /** US 진입신호 실행기 입력 (all daily, US 종가):
    *  VIX·VIX3M(→ TERM=VIX/VIX3M), HY OAS(ICE BofA, FRED BAMLH0A0HYM2, T+1 — 판정은 shift(1)),
    *  IXIC(나스닥종합 — 신호엔 불필요, 첫 발동가 대비 등락률·성과추적용). */

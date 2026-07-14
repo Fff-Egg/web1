@@ -23,8 +23,7 @@ import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
 
 // ── 상수 (레퍼런스 기본값 고정) ──
 const PCT_WIN = 252; // 분위수 롤링 창
-const SPIKE_LOOKBACK = 6; // 스파이크 탐색 창(거래일)
-const SPIKE_PCT = 0.95; // 상위 5%
+const SPIKE_PCT = 0.95; // 상위 5% (S2: 반대매매금액 분위 ≥0.95)
 const CREDIT_DD = -0.08; // 피크 대비 −8%
 const CREDIT_10D = -0.03; // 10거래일 −3%
 const PEAK_MINP = 200; // 피크 롤링 최소 관측
@@ -41,9 +40,9 @@ export type CapLevel = 0 | 1 | 2 | 3;
 export const GRADE_LABEL: Record<Grade, string> = {
   STRONG: "최강 매수국면",
   BUY: "매수국면",
-  ARMED: "장전",
+  ARMED: "경계",
   WATCH: "관찰",
-  IDLE: "대기",
+  IDLE: "평시",
 };
 
 /**
@@ -52,21 +51,25 @@ export const GRADE_LABEL: Record<Grade, string> = {
  * ⚠️ **방향성(STRONG>BUY>ARMED>WATCH)만 신뢰구간** — 어느 등급이든 6달 +11~20%라 전부
  * 플러스였고, 계수 소수점 둘째자리는 노이즈다. "STRONG 풀·WATCH 절반" 수준의 차등일 뿐.
  */
-export const GRADE_COEF: Record<Grade, number> = { STRONG: 1.0, BUY: 0.75, ARMED: 0.65, WATCH: 0.45, IDLE: 0 };
-/** 코스닥 단독(코스피 미동반): 6달 +0.5%·승률 50%·n=5 = 기대값 0의 동전던지기라 **0%**(관찰만).
- *  코스피 동반 시 SYSTEMIC으로 자동 승격 경로가 있어 0으로 둬도 구조적 미스 없음. 절충 시
- *  5~10만 이 상수로 변경(코드 다른 곳은 손대지 말 것). (v2의 30% 상한을 v3에서 0으로 개정) */
+/** v4 등급별 기본 비중(%). **depth 4단 사다리 폐지** — FEAR≥90 시점엔 신용이 이미 깊어
+ *  중간단계 구분이 성과를 못 가름(병합 20건 중 18건이 이미 DD≤−8%). 신호개수가 등급을,
+ *  등급이 비중을 직접 결정. 방향성(STRONG>BUY, ARMED는 BUY 아래 고정)만 신뢰. */
+export const GRADE_WEIGHT: Record<Grade, number> = { STRONG: 100, BUY: 60, ARMED: 50, WATCH: 45, IDLE: 0 };
+/** 코스닥 단독(코스피 미동반) → 0%(관찰). 동반 시 SYSTEMIC 자동 승격. */
 export const KOSDAQ_SOLO_CAP = 0;
+/** 이중 얕음 게이트 임계: 신용 DD·이격도 편차가 **둘 다** 얕으면(각 −8%/−7% 미달) ×0.5. */
+export const SHALLOW_CREDIT = -8; // 신용 DD % (편차 아님, 음수)
+export const SHALLOW_DISP = -7; // 이격도 편차 %
 
-/** 사이징 경로: 코스닥 단독(0%) / STRONG 오버라이드(depth 무시 100%) / 일반 사다리(depth×계수). */
-export type SizingPath = "SOLO" | "OVERRIDE" | "LADDER";
+/** 사이징 경로: 코스닥 단독(0%) / 게이트 적용(×0.5) / 정상(×1.0) / 비중0(IDLE). */
+export type SizingPath = "SOLO" | "GATED" | "FULL" | "NONE";
 
 /** 최종 권장 비중 분해. */
 export interface Sizing {
   pct: number; // 최종 권장 비중 %
-  base: number; // depth(신용 DD) 기준 % — 표시용(경로가 OVERRIDE/SOLO여도 참고로 유지)
-  coef: number; // 등급 계수
-  path: SizingPath; // 어느 우선순위 경로로 산출됐나
+  weight: number; // 등급 기본 비중(게이트 전)
+  gate: number; // 이중 얕음 게이트 배수 (0.5 or 1.0)
+  path: SizingPath;
 }
 
 export interface SignalView {
@@ -89,9 +92,10 @@ export interface MarketFear {
   nOn: number;
   all3: boolean;
   creditDd: number | null;
+  dispDev: number | null; // 60일선 대비 이격도 편차(%) — 게이트 표시
   signals: SignalView[];
   fearHistory: SeriesPoint[];
-  /** 최종 권장 비중 = depth 기준% × 등급계수 (코스닥 단독이면 30% 상한). */
+  /** 최종 권장 비중 = 등급 기본 비중 × 이중 얕음게이트 (코스닥 단독이면 0%). */
   sizing: Sizing;
   // 코스닥 전용:
   regime?: "SYSTEMIC" | "KOSDAQ_ONLY";
@@ -153,23 +157,6 @@ function rollPct(arr: number[], win = PCT_WIN): number[] {
     if (ok) out[i] = le / win;
   }
   return out;
-}
-
-/**
- * endIx로 끝나는 win개 창의 q분위 **임계값**(원값) — rollPct의 `(count≤v)/win ≥ q`
- * 규약과 일치하게 오름차순 정렬 후 index `ceil(q*win)-1`을 고른다(그 값 이상이면 상위
- * (1−q) 안). "상위5% 컷이 반대매매 비중 몇 %인가"를 화면에 보여주려고. 창 부족/NaN이면 null.
- */
-function windowQuantile(arr: number[], endIx: number, q: number, win = PCT_WIN): number | null {
-  if (endIx < win - 1) return null;
-  const w: number[] = [];
-  for (let j = endIx - win + 1; j <= endIx; j++) {
-    if (!Number.isFinite(arr[j])) return null;
-    w.push(arr[j]);
-  }
-  w.sort((a, b) => a - b);
-  const idx = Math.max(0, Math.min(win - 1, Math.ceil(q * win) - 1));
-  return w[idx];
 }
 
 /** rolling(win, min_periods=minP).max() — 창 내 유한값이 minP개 이상일 때 최대. */
@@ -277,6 +264,7 @@ interface Built {
   nOn: number;
   all3: boolean;
   creditDd: number | null;
+  dispDev: number | null; // 60일선 대비 이격도 편차(%, 음수=이평 아래) — 이중 게이트 입력
   signals: SignalView[];
   fearHistory: SeriesPoint[];
 }
@@ -296,17 +284,12 @@ const botPctLabel = (p: number): string => {
   const x = Math.round(p * 100);
   return x <= 0 ? "최저권" : `하위 ${x}%`;
 };
-/** M/D from a UTC-epoch trading-day timestamp. */
-const fmtMD = (t: number): string => {
-  const d = new Date(t);
-  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
-};
 
 /**
  * 한 시장(코스피 or 코스닥)의 3신호 + FEAR를 계산. price는 그 시장 지수 종가,
  * credit은 그 시장 신용거래융자(유가 or 코스닥), liq는 공통 반대매매 비중.
  */
-function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoint[]): Built {
+function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoint[], amount: SeriesPoint[] = []): Built {
   const empty: Built = {
     hasData: false,
     asOf: null,
@@ -315,11 +298,12 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     nOn: 0,
     all3: false,
     creditDd: null,
+    dispDev: null,
     fearHistory: [],
     signals: [
       { key: "S1 신용청산", met: false, value: "—", criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓", detail: "데이터 없음", level: 0 },
-      { key: "S2 반대매매", met: false, value: "—", criteria: "비중 1년 상위5% 스파이크 & 2일 연속↓", detail: "데이터 없음", level: 0 },
-      { key: "S3 이격도60", met: false, value: "—", criteria: "이격도 ≤92 or 1년 하위5%", detail: "데이터 없음", level: 0 },
+      { key: "S2 반대매매", met: false, value: "—", criteria: "반대매매금액 1년 상위5%", detail: "데이터 없음", level: 0 },
+      { key: "S3 이격도60", met: false, value: "—", criteria: "이격도 ≤−8% or 1년 하위5%", detail: "데이터 없음", level: 0 },
     ],
   };
   // KOFIA(신용·반대매매)는 T+1 공표라 지수보다 하루+ 뒤처진다. 지수가 앞선 날은
@@ -339,7 +323,11 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const close = priceEff.map((p) => p.v);
   const n = close.length;
   const creditA = alignFfill(dates, credit);
-  const liqA = alignFfill(dates, liq);
+  const liqA = alignFfill(dates, liq); // 반대매매 비중(%) — 표시·폴백용
+  // v4: F2·S2는 반대매매 **금액**(절대치) 분위수. 금액이 없으면(컬럼 미식별) 비중으로 폴백.
+  const amtRaw = amount.length > 0 ? amount : liq;
+  const amtA = alignFfill(dates, amtRaw);
+  const usingAmount = amount.length > 0;
 
   // 신용 히스토리 커버리지: 최근 252창에 유한 신용값이 PEAK_MINP 미만이면 peak/DD가 NaN이
   // 되어 S1이 '조용히 항상 미충족'·F1이 NaN이 된다(부분수집 사고). '데이터 부족'으로 명시.
@@ -356,21 +344,9 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const credit10d = pctChange(creditA, 10);
   const idx10d = pctChange(close, 10);
 
-  // S2 반대매매
-  const liqPct = rollPct(liqA, PCT_WIN);
-  const spike = new Array<boolean>(n).fill(false);
-  for (let i = 0; i < n; i++) {
-    for (let j = Math.max(0, i - SPIKE_LOOKBACK + 1); j <= i; j++) {
-      if (liqPct[j] >= SPIKE_PCT) {
-        spike[i] = true;
-        break;
-      }
-    }
-  }
-  const decl2 = new Array<boolean>(n).fill(false);
-  for (let i = 2; i < n; i++) decl2[i] = liqA[i] < liqA[i - 1] && liqA[i - 1] < liqA[i - 2];
-  // 상위5%(분위 0.95) 컷이 지금 창에선 실제 반대매매 비중 몇 %인지 — 화면 표기용.
-  const spikeCut = windowQuantile(liqA, n - 1, SPIKE_PCT, PCT_WIN);
+  // S2 반대매매 — v4: 반대매매 **금액**의 252일 분위수가 상위5%(≥0.95)면 ON.
+  // (구 로직의 "6일 스파이크 + 2일 연속↓"는 성과 차이 없어 제거 — 절대금액 분위수만.)
+  const amtPct = rollPct(amtA, PCT_WIN);
 
   // S3 이격도
   const ma60 = rollMean(close, DISP_N);
@@ -380,7 +356,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
 
   // FEAR 성분
   const f1 = rollPct(credit10d, PCT_WIN).map((v) => (Number.isFinite(v) ? 1 - v : NaN)); // 1 − pct
-  const f2 = liqPct;
+  const f2 = amtPct; // v4: 반대매매 **금액** 분위수(비중 아님 — 분모 왜곡 제거)
   const f3 = dispPct.map((v) => (Number.isFinite(v) ? 1 - v : NaN));
   const logret = new Array<number>(n).fill(NaN);
   for (let i = 1; i < n; i++) if (close[i] > 0 && close[i - 1] > 0) logret[i] = Math.log(close[i] / close[i - 1]);
@@ -399,7 +375,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s1[i] = creditDd[i] <= CREDIT_DD && credit10d[i] <= CREDIT_10D && idx10d[i] < 0;
     s3[i] = disp[i] <= DISP_ABS || dispPct[i] <= DISP_PCT;
   }
-  const s2 = spike.map((sp, i) => sp && decl2[i]);
+  const s2 = amtPct.map((p) => Number.isFinite(p) && p >= SPIKE_PCT);
 
   // 차트는 4성분이 **모두** 찬 뒤부터만(성분별 워밍업이 달라 — F4 20+252, F3 60+252 등
   // — 초기엔 일부 성분만으로 FEAR가 계산돼 왜곡됨). 완전 워밍업(~311거래일) 지점만 그림.
@@ -414,38 +390,9 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const L = n - 1;
   const nOn = (s1[L] ? 1 : 0) + (s2[L] ? 1 : 0) + (s3[L] ? 1 : 0);
 
-  // S1 강도 = 피크 되돌림 깊이 / S2 = 최근 스파이크 분위 / S3 = 과매도 깊이
+  // S1 강도 = 피크 되돌림 깊이 / S2 = 금액 분위 / S3 = 과매도 깊이
   const s1Level: CapLevel = creditDd[L] <= -0.2 ? 3 : creditDd[L] <= -0.08 ? 2 : creditDd[L] <= -0.04 ? 1 : 0;
-  let s2Max = 0;
-  for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) if (Number.isFinite(liqPct[j])) s2Max = Math.max(s2Max, liqPct[j]);
-  const s2Level = upperTailLevel(s2Max);
-  // 6일 창의 **정점**(반대매매 비중 최고일) — 최신 스파이크가 아니라 투매가 어디서
-  // 꺾였는지 기준점을 보여준다(예: 7/9 10.2% 정점 → 7/10 5.7%면 정점은 7/9).
-  let peakIdx = -1;
-  for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) {
-    if (!Number.isFinite(liqA[j])) continue;
-    if (peakIdx < 0 || liqA[j] > liqA[peakIdx]) peakIdx = j;
-  }
-  const peakAgo = peakIdx < 0 ? Infinity : L - peakIdx;
-  const hasSpike = spike[L]; // 6일 창에 상위5% 존재
-  // 기준일 기준 연속 하락 일수(decl2 = 이게 ≥2). "0일처럼 보인다"는 혼란을 없애려고
-  // 몇 일째 꺾이는 중인지 명시한다.
-  let declStreak = 0;
-  for (let i = L; i >= 1; i--) {
-    if (liqA[i] < liqA[i - 1]) declStreak++;
-    else break;
-  }
-  const s2Reason = s2[L]
-    ? "2일 연속↓ 충족"
-    : !hasSpike
-      ? "6일 창에 상위5% 없음"
-      : declStreak >= 1
-        ? `${declStreak}일 연속↓ (2일 필요)`
-        : "정점 후 아직 안 꺾임";
-  const s2Note =
-    peakIdx < 0
-      ? "최근 상위5% 스파이크 없음"
-      : `정점 ${liqA[peakIdx].toFixed(1)}% (${fmtMD(dates[peakIdx])}·${peakAgo}일전) · ${s2Reason}`;
+  const s2Level = upperTailLevel(amtPct[L]); // 반대매매 금액 분위수 강도
   const s3Level: CapLevel =
     dispPct[L] <= 0.01 || disp[L] <= 88 ? 3 : dispPct[L] <= 0.05 || disp[L] <= 92 ? 2 : dispPct[L] <= 0.15 || disp[L] <= 96 ? 1 : 0;
 
@@ -467,8 +414,8 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       key: "S2 반대매매",
       met: s2[L],
       value: Number.isFinite(liqA[L]) ? `${liqA[L].toFixed(1)}%` : "—",
-      criteria: `비중 1년 상위5%${spikeCut !== null ? `(=${spikeCut.toFixed(1)}% 이상)` : ""} 스파이크(6일내) & 2일 연속↓`,
-      detail: `비중 1년 ${topPctLabel(liqPct[L])} · ${s2Note}`,
+      criteria: `반대매매금액 1년 상위5% (분위 ≥0.95)${usingAmount ? "" : " ⚠비중 폴백"}`,
+      detail: `금액 1년 ${topPctLabel(amtPct[L])}${usingAmount ? "" : " (금액 미수집→비중 분위)"} · 오늘 비중 ${Number.isFinite(liqA[L]) ? liqA[L].toFixed(1) + "%" : "—"}`,
       level: s2Level,
     },
     {
@@ -489,6 +436,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     nOn,
     all3: nOn === 3,
     creditDd: nn(creditDd[L]),
+    dispDev: Number.isFinite(dev) ? dev : null, // 60일선 대비 이격도 편차(%) — 게이트 입력
     signals,
     fearHistory,
   };
@@ -513,41 +461,44 @@ function phase(fear: number | null, all3: boolean, nOn: number, creditDd: number
   return { grade, size };
 }
 
-/** 신용 낙폭(depth) → 기준 비중 %. ≤−25=100 / ≤−15=70 / ≤−8=40 / else 20(소액 탐색). */
-function depthBasePct(creditDd: number | null): number {
-  const dd = creditDd ?? NaN;
-  if (dd <= DD3) return 100;
-  if (dd <= DD2) return 70;
-  if (dd <= CREDIT_DD) return 40;
-  return 20;
+/**
+ * 이중 얕음 게이트 — 신용 DD(빚 청산 깊이)와 이격도 편차(가격 낙폭)는 거의 무상관(−0.04)
+ * 독립 정보. **둘 다** 얕을 때만(신용>−8% AND 이격>−7%) 가짜바닥 위험 → ×0.5. 하나라도
+ * 깊으면 정상(×1.0) — "하나만 얕음"은 실측 +23.8%로 오히려 최고라 깎지 않는다.
+ * creditDd는 소수(−0.08), dispDev는 %(−7). 값이 없으면(null) '깊지 않음'=얕음으로 본다.
+ */
+export function shallowGate(creditDd: number | null, dispDev: number | null): number {
+  const creditShallow = creditDd === null || creditDd * 100 > SHALLOW_CREDIT;
+  const dispShallow = dispDev === null || dispDev > SHALLOW_DISP;
+  return creditShallow && dispShallow ? 0.5 : 1.0;
 }
 
 /**
- * 최종 권장 비중 — v3 통합 로직. **우선순위 ①→②→③ 엄수**:
- *   ① 코스닥 단독(코스피 미동반)  → 0% (등급 무관, 관찰). [단독 6달 +0.5%·승률 50%·n=5]
- *   ② STRONG (동반/코스피)        → 100% (depth 무시). [3신호 동시=청산 클라이맥스, 1달 최악 −1%]
- *   ③ 그 외 (BUY/ARMED/WATCH/IDLE) → depth 기준% × 등급계수. [BUY 1달 최악 −22%가 사다리 존재 이유]
- * 예: 코스닥 단독 STRONG은 ①에서 0%로 걸린다(②의 100% 아님).
+ * 최종 권장 비중 — v4 통합 로직. **우선순위 ①→② 엄수**:
+ *   ① 코스닥 단독(코스피 미동반) → 0% (등급 무관, 관찰). [단독 6달 +0.5%·승률 50%·n=5]
+ *   ② 등급 기본 비중 × 이중 얕음게이트. [STRONG도 게이트 적용 — 얕은 3신호 방어]
+ * IDLE 등 비중 0이면 게이트 무의미(path=NONE).
  */
-export function computeSizing(grade: Grade, creditDd: number | null, isSolo: boolean): Sizing {
-  const base = depthBasePct(creditDd);
-  const coef = GRADE_COEF[grade];
+export function computeSizing(grade: Grade, creditDd: number | null, dispDev: number | null, isSolo: boolean): Sizing {
+  const weight = GRADE_WEIGHT[grade];
   // ① 코스닥 단독 (최우선, 등급 무관)
-  if (isSolo) return { pct: KOSDAQ_SOLO_CAP, base, coef, path: "SOLO" };
-  // ② STRONG 오버라이드 (depth 무시 100%)
-  if (grade === "STRONG") return { pct: 100, base, coef, path: "OVERRIDE" };
-  // ③ 일반 사다리
-  return { pct: Math.round(base * coef), base, coef, path: "LADDER" };
+  if (isSolo) return { pct: KOSDAQ_SOLO_CAP, weight, gate: 1, path: "SOLO" };
+  // 비중 0(IDLE) → 게이트 무의미
+  if (weight === 0) return { pct: 0, weight, gate: 1, path: "NONE" };
+  // ② 등급 비중 × 이중 얕음게이트
+  const gate = shallowGate(creditDd, dispDev);
+  return { pct: Math.round(weight * gate), weight, gate, path: gate < 1 ? "GATED" : "FULL" };
 }
 
 /** Internal helpers exposed for unit tests (not used by the UI). */
-export const __test = { alignFfill, rollPct, rollMax, rollMean, rollStd, pctChange, meanSkip, buildMarket, phase, computeSizing };
+export const __test = { alignFfill, rollPct, rollMax, rollMean, rollStd, pctChange, meanSkip, buildMarket, phase, computeSizing, shallowGate };
 
 export function computeKFear(snap: MarketSnapshot): KFearResult {
   const h = snap.history;
   const liq = h.forcedLiqRatio ?? [];
-  const bk = buildMarket(h.kospiClose ?? [], h.creditKospi ?? [], liq);
-  const bq = buildMarket(h.kosdaqClose ?? [], h.creditKosdaq ?? [], liq);
+  const amt = h.forcedLiqAmount ?? []; // v4: 반대매매 절대금액(F2·S2). 없으면 buildMarket이 비중 폴백.
+  const bk = buildMarket(h.kospiClose ?? [], h.creditKospi ?? [], liq, amt);
+  const bq = buildMarket(h.kosdaqClose ?? [], h.creditKosdaq ?? [], liq, amt);
 
   const pk = phase(bk.fear, bk.all3, bk.nOn, bk.creditDd);
   const pq = phase(bq.fear, bq.all3, bq.nOn, bq.creditDd);
@@ -565,14 +516,14 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
     ...bk,
     grade: pk.grade,
     size: pk.size,
-    sizing: computeSizing(pk.grade, bk.creditDd, false), // 코스피는 단독 개념 없음(기준 시장)
+    sizing: computeSizing(pk.grade, bk.creditDd, bk.dispDev, false), // 코스피는 단독 개념 없음(기준 시장)
   };
   const kosdaq: MarketFear = {
     market: "코스닥",
     ...bq,
     grade: pq.grade,
     size: pq.size,
-    sizing: computeSizing(pq.grade, bq.creditDd, kosdaqRegime === "KOSDAQ_ONLY"), // 단독(미동반)=0%
+    sizing: computeSizing(pq.grade, bq.creditDd, bq.dispDev, kosdaqRegime === "KOSDAQ_ONLY"), // 단독(미동반)=0%
     regime: kosdaqRegime,
     signaling: kosdaqSignaling,
   };

@@ -43,9 +43,12 @@ function MarketCard({ m }: { m: MarketFear }) {
   const c = fearColor(m.fear);
   const fearPct = m.fear === null ? 0 : Math.max(0, Math.min(100, m.fear));
   const isSolo = m.sizing.path === "SOLO"; // 코스닥 단독(코스피 미동반) → 0% 관찰
-  const isOverride = m.sizing.path === "OVERRIDE"; // STRONG → depth 무시 100%
+  const isGated = m.sizing.path === "GATED"; // 둘 다 얕음 → ×0.5
   const showRegimeOk = m.market === "코스닥" && m.signaling && m.regime === "SYSTEMIC";
   const ddTxt = m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—";
+  const dispTxt = m.dispDev !== null ? `${m.dispDev >= 0 ? "+" : ""}${m.dispDev.toFixed(1)}%` : "—";
+  const creditShallow = m.creditDd === null || m.creditDd * 100 > -8; // 게이트 기준
+  const dispShallow = m.dispDev === null || m.dispDev > -7;
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
@@ -73,7 +76,7 @@ function MarketCard({ m }: { m: MarketFear }) {
         {/* 90 매수 임계선 */}
         <div className="absolute top-0 h-full w-px bg-slate-500/60" style={{ left: "90%" }} />
       </div>
-      {/* 최종 권장 비중 — v3: 코스닥 단독=0%(관찰) / STRONG=100%(depth 무시) / else depth×계수. */}
+      {/* 최종 권장 비중 — v4: 코스닥 단독=0% / 등급 기본비중 × 이중 얕음게이트. */}
       <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs font-medium text-slate-500">권장 비중</span>
@@ -101,46 +104,35 @@ function MarketCard({ m }: { m: MarketFear }) {
           <span>
             {isSolo ? (
               "코스닥 단독(코스피 미동반) → 0% 관찰"
-            ) : isOverride ? (
-              <>
-                <span className="font-medium text-red-600">STRONG</span> (3/3 신호) → depth 무시 · 100%
-              </>
+            ) : m.sizing.weight === 0 ? (
+              "신호 없음 → 0%"
             ) : (
               <>
-                depth <span className="font-medium text-slate-500">{m.sizing.base}%</span> × 등급 {m.grade}{" "}
-                <span className="font-medium text-slate-500">{m.sizing.coef.toFixed(2)}</span>
+                {m.grade} <span className="font-medium text-slate-500">{m.sizing.weight}</span> × 게이트{" "}
+                <span className={"font-medium " + (isGated ? "text-amber-600" : "text-slate-500")}>{m.sizing.gate.toFixed(1)}</span>
               </>
             )}
           </span>
           <span>{m.nOn}/3 신호</span>
         </div>
       </div>
-      {/* depth 사다리 — BUY 이하만 유효(도달 구간 강조). STRONG/단독은 전체 회색 + 캡션. */}
-      <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
-        <span className="text-slate-400">depth 사다리 (신용 {ddTxt}) →</span>
-        {[
-          { label: "1차", th: -8, alloc: "40%" },
-          { label: "2차", th: -15, alloc: "70%" },
-          { label: "3차", th: -25, alloc: "100%" },
-        ].map((t) => {
-          const reached = !isOverride && !isSolo && m.creditDd !== null && m.creditDd * 100 <= t.th;
-          return (
-            <span
-              key={t.label}
-              className={"rounded px-1.5 py-0.5 " + (reached ? "bg-red-100 font-semibold text-red-700" : "bg-slate-100 text-slate-400")}
-            >
-              {t.label} ≤{t.th}% <span className="font-normal opacity-70">≈{t.alloc}</span>
-            </span>
-          );
-        })}
-        {isOverride ? (
-          <span className="text-slate-400">· STRONG 미적용 (n=10 · 1달 최악 −1%)</span>
-        ) : isSolo ? (
-          <span className="text-slate-400">· 단독 미적용 (0% 관찰)</span>
-        ) : (
-          (m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=20%</span>
-        )}
-      </div>
+      {/* 이중 얕음게이트 상태 (depth 사다리 폐지 — v4 §7-3). 신용·이격도 각각 얕음/깊음. */}
+      {!isSolo && m.sizing.weight > 0 && (
+        <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+          <span className="text-slate-400">이중 게이트 →</span>
+          <span className={"rounded px-1.5 py-0.5 " + (creditShallow ? "bg-slate-100 text-slate-400" : "bg-red-100 font-semibold text-red-700")}>
+            신용 {ddTxt} {creditShallow ? "얕음" : "깊음✓"}
+          </span>
+          <span className={"rounded px-1.5 py-0.5 " + (dispShallow ? "bg-slate-100 text-slate-400" : "bg-red-100 font-semibold text-red-700")}>
+            이격 {dispTxt} {dispShallow ? "얕음" : "깊음✓"}
+          </span>
+          {isGated ? (
+            <span className="text-amber-600">· ⚠️ 둘 다 얕음 → ×0.5</span>
+          ) : (
+            <span className="text-slate-400">· 하나라도 깊으면 ×1.0(안 깎음)</span>
+          )}
+        </div>
+      )}
 
       {/* 3신호 */}
       <ul className="mt-2 divide-y divide-slate-100">
@@ -231,17 +223,20 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
       </div>
 
       <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        <strong>권장 비중 = depth × 등급계수.</strong> <strong className="text-red-600">STRONG(3/3 신호)은 depth 무시 100%</strong>{" "}
-        <span className="text-slate-500">[n=10 · 1달 최악 −1% — 3신호 동시 = 청산 클라이맥스]</span>. depth(신용 DD): −8%=40 · −15%=70 · −25%=100 · else 20.
-        등급계수: <strong>STRONG 1.0 · BUY 0.75 · ARMED 0.65 · WATCH 0.45 · IDLE 0</strong>{" "}
-        <span className="text-slate-500">[BUY 1달 최악 −22%가 depth 사다리의 존재 이유]</span>. 코스닥{" "}
-        <strong>단독(코스피 미동반)은 0%</strong> — 관찰만, 동반 시 자동 승격 <span className="text-slate-500">[단독 6달 +0.5% · 승률 50% · n=5 = 기대값 0]</span>.
+        <strong>권장 비중 = 등급비중 × 이중게이트.</strong> 등급은 FEAR≥90 + 신호개수:{" "}
+        <strong>STRONG(3신호) 100 · BUY(2신호) 60 · ARMED(1신호) 50 · WATCH(FEAR&lt;90&amp;2신호+) 45 · IDLE 0</strong>.{" "}
+        <span className="text-slate-500">depth 사다리 폐지 [FEAR≥90 시점엔 신용이 이미 깊어 4단 무의미 — 20건 중 18건이 이미 DD≤−8%].</span>
         <span className="mt-1 block text-slate-500">
-          ※ 등급 승격 시(예: BUY→STRONG) 권장 비중이 <strong className="text-slate-600">15%→100%로 점프</strong>하는 것은 의도된 동작 — 실행은 2~3일 분할 권장.
+          <strong className="text-slate-600">이중 얕음게이트</strong>: 신용DD&gt;−8% <strong>AND</strong> 이격도&gt;−7% 둘 다 얕으면 ×0.5
+          [둘다얕음 +5.6% vs 하나만얕음 +23.8% — <strong className="text-slate-600">하나만 얕은 건 안 깎음</strong>]. 신용·이격도는 무상관(−0.04) 독립정보.
         </span>
         <span className="mt-1 block text-slate-500">
-          ※ 백테스트 n=5~31 소표본 기준 — <strong className="text-slate-600">방향성(STRONG&gt;BUY&gt;ARMED&gt;WATCH)만 신뢰</strong>,
-          계수 소수점은 노이즈. 어느 등급이든 6개월 기대 +11~20%였음(다 플러스). 여기 "100%"는 이 시스템에 배정한 <strong>예비대 중 국내 집행분의 100%</strong>이지 전체 몰빵이 아님.
+          반대매매는 '비중(÷미수금)'이 아니라 <strong className="text-slate-600">'절대금액 상위5%'</strong> [비중은 분모왜곡 — 절대금액 +19.6% vs 비중 +16.4%]. FEAR의 F2도 동일하게 절대금액.
+          코스닥 <strong>단독(코스피 미동반)은 0%</strong> — 동반 시 자동 승격.
+        </span>
+        <span className="mt-1 block text-slate-500">
+          ※ 백테스트 n=15~20 소표본 — <strong className="text-slate-600">방향성만 신뢰</strong>(STRONG&gt;BUY 견고, ARMED 승률은 착시 가능). 6달 가중 +16.3%(현행 +11.5% 대비).
+          "100%"는 이 시스템 배정 <strong>예비대의 100%</strong>이지 전체 몰빵 아님.
         </span>
       </div>
       <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
