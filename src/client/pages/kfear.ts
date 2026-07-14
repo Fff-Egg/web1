@@ -53,16 +53,20 @@ export const GRADE_LABEL: Record<Grade, string> = {
  * 플러스였고, 계수 소수점 둘째자리는 노이즈다. "STRONG 풀·WATCH 절반" 수준의 차등일 뿐.
  */
 export const GRADE_COEF: Record<Grade, number> = { STRONG: 1.0, BUY: 0.75, ARMED: 0.65, WATCH: 0.45, IDLE: 0 };
-/** 코스닥 단독(KOSDAQ_ONLY): 6달 승률 50%(반반)·n=5라 계수 곱셈 대신 **비율 상한(%)**을 씌운다
- *  ("반반 도박엔 크게 안 건다"). depth·등급이 뭐든 코스닥 단독이면 이 상한까지만. */
-export const KOSDAQ_ONLY_CAP = 30;
+/** 코스닥 단독(코스피 미동반): 6달 +0.5%·승률 50%·n=5 = 기대값 0의 동전던지기라 **0%**(관찰만).
+ *  코스피 동반 시 SYSTEMIC으로 자동 승격 경로가 있어 0으로 둬도 구조적 미스 없음. 절충 시
+ *  5~10만 이 상수로 변경(코드 다른 곳은 손대지 말 것). (v2의 30% 상한을 v3에서 0으로 개정) */
+export const KOSDAQ_SOLO_CAP = 0;
+
+/** 사이징 경로: 코스닥 단독(0%) / STRONG 오버라이드(depth 무시 100%) / 일반 사다리(depth×계수). */
+export type SizingPath = "SOLO" | "OVERRIDE" | "LADDER";
 
 /** 최종 권장 비중 분해. */
 export interface Sizing {
   pct: number; // 최종 권장 비중 %
-  base: number; // depth(신용 DD) 기준 %
+  base: number; // depth(신용 DD) 기준 % — 표시용(경로가 OVERRIDE/SOLO여도 참고로 유지)
   coef: number; // 등급 계수
-  capped: boolean; // 코스닥 단독 상한 적용됨
+  path: SizingPath; // 어느 우선순위 경로로 산출됐나
 }
 
 export interface SignalView {
@@ -519,19 +523,21 @@ function depthBasePct(creditDd: number | null): number {
 }
 
 /**
- * 최종 권장 비중 = depth 기준% × 등급계수. 코스닥 단독(KOSDAQ_ONLY)이면 마지막에
- * **30% 상한**(계수 곱셈 아님 — 6달 승률 50%라 "반반 도박엔 크게 안 건다"). IDLE=0.
+ * 최종 권장 비중 — v3 통합 로직. **우선순위 ①→②→③ 엄수**:
+ *   ① 코스닥 단독(코스피 미동반)  → 0% (등급 무관, 관찰). [단독 6달 +0.5%·승률 50%·n=5]
+ *   ② STRONG (동반/코스피)        → 100% (depth 무시). [3신호 동시=청산 클라이맥스, 1달 최악 −1%]
+ *   ③ 그 외 (BUY/ARMED/WATCH/IDLE) → depth 기준% × 등급계수. [BUY 1달 최악 −22%가 사다리 존재 이유]
+ * 예: 코스닥 단독 STRONG은 ①에서 0%로 걸린다(②의 100% 아님).
  */
-export function computeSizing(grade: Grade, creditDd: number | null, regime?: "SYSTEMIC" | "KOSDAQ_ONLY"): Sizing {
+export function computeSizing(grade: Grade, creditDd: number | null, isSolo: boolean): Sizing {
   const base = depthBasePct(creditDd);
   const coef = GRADE_COEF[grade];
-  let pct = base * coef;
-  let capped = false;
-  if (regime === "KOSDAQ_ONLY" && pct > KOSDAQ_ONLY_CAP) {
-    pct = KOSDAQ_ONLY_CAP;
-    capped = true;
-  }
-  return { pct: Math.round(pct), base, coef, capped };
+  // ① 코스닥 단독 (최우선, 등급 무관)
+  if (isSolo) return { pct: KOSDAQ_SOLO_CAP, base, coef, path: "SOLO" };
+  // ② STRONG 오버라이드 (depth 무시 100%)
+  if (grade === "STRONG") return { pct: 100, base, coef, path: "OVERRIDE" };
+  // ③ 일반 사다리
+  return { pct: Math.round(base * coef), base, coef, path: "LADDER" };
 }
 
 /** Internal helpers exposed for unit tests (not used by the UI). */
@@ -559,14 +565,14 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
     ...bk,
     grade: pk.grade,
     size: pk.size,
-    sizing: computeSizing(pk.grade, bk.creditDd), // 코스피는 동반 상한 없음
+    sizing: computeSizing(pk.grade, bk.creditDd, false), // 코스피는 단독 개념 없음(기준 시장)
   };
   const kosdaq: MarketFear = {
     market: "코스닥",
     ...bq,
     grade: pq.grade,
     size: pq.size,
-    sizing: computeSizing(pq.grade, bq.creditDd, kosdaqRegime),
+    sizing: computeSizing(pq.grade, bq.creditDd, kosdaqRegime === "KOSDAQ_ONLY"), // 단독(미동반)=0%
     regime: kosdaqRegime,
     signaling: kosdaqSignaling,
   };

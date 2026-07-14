@@ -1,6 +1,6 @@
 import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
-import { computeKFear, GRADE_LABEL, KOSDAQ_ONLY_CAP, type Grade, type MarketFear } from "./kfear.js";
+import { computeKFear, GRADE_LABEL, type Grade, type MarketFear } from "./kfear.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
 
 /**
@@ -42,16 +42,25 @@ function fmtDate(t: number | null): string {
 function MarketCard({ m }: { m: MarketFear }) {
   const c = fearColor(m.fear);
   const fearPct = m.fear === null ? 0 : Math.max(0, Math.min(100, m.fear));
-  const showRegimeWarn = m.market === "코스닥" && m.signaling && m.regime === "KOSDAQ_ONLY";
+  const isSolo = m.sizing.path === "SOLO"; // 코스닥 단독(코스피 미동반) → 0% 관찰
+  const isOverride = m.sizing.path === "OVERRIDE"; // STRONG → depth 무시 100%
   const showRegimeOk = m.market === "코스닥" && m.signaling && m.regime === "SYSTEMIC";
+  const ddTxt = m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—";
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-semibold text-slate-700">{m.market}</span>
-        <span className={"rounded px-2 py-0.5 text-xs font-bold " + GRADE_CLS[m.grade]}>
-          {m.grade} {GRADE_LABEL[m.grade]}
-        </span>
+        {/* 코스닥 단독이면 등급과 무관하게 '관찰 — 동반 대기'(v3 §8-1). */}
+        {isSolo ? (
+          <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-800" title={`FEAR·신호상 ${m.grade}이나 코스피 미동반이라 관찰(0%)`}>
+            관찰 — 동반 대기
+          </span>
+        ) : (
+          <span className={"rounded px-2 py-0.5 text-xs font-bold " + GRADE_CLS[m.grade]}>
+            {m.grade} {GRADE_LABEL[m.grade]}
+          </span>
+        )}
       </div>
 
       {/* FEAR 게이지 */}
@@ -64,12 +73,11 @@ function MarketCard({ m }: { m: MarketFear }) {
         {/* 90 매수 임계선 */}
         <div className="absolute top-0 h-full w-px bg-slate-500/60" style={{ left: "90%" }} />
       </div>
-      {/* 최종 권장 비중 = depth × 등급계수 (코스닥 단독이면 상한). */}
+      {/* 최종 권장 비중 — v3: 코스닥 단독=0%(관찰) / STRONG=100%(depth 무시) / else depth×계수. */}
       <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
         <div className="flex items-baseline justify-between gap-2">
           <span className="text-xs font-medium text-slate-500">권장 비중</span>
           <span className="flex items-baseline gap-1.5">
-            {/* 코스닥 동반/단독 레짐 — 비중 % 바로 옆(대칭 유지, 중간 전폭 블록 제거). */}
             {showRegimeOk && (
               <span
                 className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700"
@@ -78,38 +86,44 @@ function MarketCard({ m }: { m: MarketFear }) {
                 ✓ 동반
               </span>
             )}
-            {showRegimeWarn && (
+            {isSolo && (
               <span
                 className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-700"
-                title="코스피 미동반 — 코스닥 단독 약세 가능성(과거 이 조합의 6개월 기대수익 낮음)"
+                title="코스닥 단독(코스피 미동반) — 6달 +0.5%·승률 50%·n=5 = 기대값 0. 동반 시 자동 승격."
               >
-                ⚠ 단독
+                관찰 — 코스피 동반 대기
               </span>
             )}
-            <span className="text-2xl font-bold tabular-nums text-slate-800">
-              {m.sizing.pct}%
-              {m.sizing.capped && <span className="ml-1 align-middle text-[10px] font-semibold text-amber-600">단독 상한</span>}
-            </span>
+            <span className="text-2xl font-bold tabular-nums text-slate-800">{m.sizing.pct}%</span>
           </span>
         </div>
         <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-400">
           <span>
-            depth <span className="font-medium text-slate-500">{m.sizing.base}%</span> × 등급 {m.grade}{" "}
-            <span className="font-medium text-slate-500">{m.sizing.coef.toFixed(2)}</span>
-            {m.regime === "KOSDAQ_ONLY" && ` → 코스닥 단독 ${KOSDAQ_ONLY_CAP}% 상한`}
+            {isSolo ? (
+              "코스닥 단독(코스피 미동반) → 0% 관찰"
+            ) : isOverride ? (
+              <>
+                <span className="font-medium text-red-600">STRONG</span> (3/3 신호) → depth 무시 · 100%
+              </>
+            ) : (
+              <>
+                depth <span className="font-medium text-slate-500">{m.sizing.base}%</span> × 등급 {m.grade}{" "}
+                <span className="font-medium text-slate-500">{m.sizing.coef.toFixed(2)}</span>
+              </>
+            )}
           </span>
           <span>{m.nOn}/3 신호</span>
         </div>
       </div>
-      {/* 사이징 사다리 — 신용 낙폭(depth)이 깊을수록 큰 분할. 도달한 단계 강조. */}
+      {/* depth 사다리 — BUY 이하만 유효(도달 구간 강조). STRONG/단독은 전체 회색 + 캡션. */}
       <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
-        <span className="text-slate-400">depth 사다리 (신용 {m.creditDd !== null ? `${(m.creditDd * 100).toFixed(1)}%` : "—"}) →</span>
+        <span className="text-slate-400">depth 사다리 (신용 {ddTxt}) →</span>
         {[
           { label: "1차", th: -8, alloc: "40%" },
           { label: "2차", th: -15, alloc: "70%" },
           { label: "3차", th: -25, alloc: "100%" },
         ].map((t) => {
-          const reached = m.creditDd !== null && m.creditDd * 100 <= t.th;
+          const reached = !isOverride && !isSolo && m.creditDd !== null && m.creditDd * 100 <= t.th;
           return (
             <span
               key={t.label}
@@ -119,7 +133,13 @@ function MarketCard({ m }: { m: MarketFear }) {
             </span>
           );
         })}
-        {(m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=20%</span>}
+        {isOverride ? (
+          <span className="text-slate-400">· STRONG 미적용 (n=10 · 1달 최악 −1%)</span>
+        ) : isSolo ? (
+          <span className="text-slate-400">· 단독 미적용 (0% 관찰)</span>
+        ) : (
+          (m.creditDd === null || m.creditDd * 100 > -8) && <span className="text-slate-400">· 미도달=20%</span>
+        )}
       </div>
 
       {/* 3신호 */}
@@ -211,13 +231,17 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
       </div>
 
       <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
-        <strong>권장 비중 = depth × 등급계수</strong> (코스닥 단독이면 상한).{" "}
-        <span className="text-slate-500">depth(신용 DD): −8%=40 · −15%=70 · −25%=100 · else 20. </span>
-        등급계수: <strong>STRONG 1.0 · BUY 0.75 · ARMED 0.65 · WATCH 0.45 · IDLE 0</strong>.{" "}
-        코스닥 <strong>단독(코스피 미동반)</strong>은 계수 대신 <strong>{KOSDAQ_ONLY_CAP}% 상한</strong>(6달 승률 50% 반반).
+        <strong>권장 비중 = depth × 등급계수.</strong> <strong className="text-red-600">STRONG(3/3 신호)은 depth 무시 100%</strong>{" "}
+        <span className="text-slate-500">[n=10 · 1달 최악 −1% — 3신호 동시 = 청산 클라이맥스]</span>. depth(신용 DD): −8%=40 · −15%=70 · −25%=100 · else 20.
+        등급계수: <strong>STRONG 1.0 · BUY 0.75 · ARMED 0.65 · WATCH 0.45 · IDLE 0</strong>{" "}
+        <span className="text-slate-500">[BUY 1달 최악 −22%가 depth 사다리의 존재 이유]</span>. 코스닥{" "}
+        <strong>단독(코스피 미동반)은 0%</strong> — 관찰만, 동반 시 자동 승격 <span className="text-slate-500">[단독 6달 +0.5% · 승률 50% · n=5 = 기대값 0]</span>.
         <span className="mt-1 block text-slate-500">
-          ※ 백테스트(2020~ 통합 n=10~31) 기준 — <strong className="text-slate-600">방향성(STRONG&gt;BUY&gt;ARMED&gt;WATCH)만 신뢰</strong>,
-          계수 소수점은 노이즈. 어느 등급이든 6개월 기대 +11~20%였음(다 플러스).
+          ※ 등급 승격 시(예: BUY→STRONG) 권장 비중이 <strong className="text-slate-600">15%→100%로 점프</strong>하는 것은 의도된 동작 — 실행은 2~3일 분할 권장.
+        </span>
+        <span className="mt-1 block text-slate-500">
+          ※ 백테스트 n=5~31 소표본 기준 — <strong className="text-slate-600">방향성(STRONG&gt;BUY&gt;ARMED&gt;WATCH)만 신뢰</strong>,
+          계수 소수점은 노이즈. 어느 등급이든 6개월 기대 +11~20%였음(다 플러스). 여기 "100%"는 이 시스템에 배정한 <strong>예비대 중 국내 집행분의 100%</strong>이지 전체 몰빵이 아님.
         </span>
       </div>
       <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
