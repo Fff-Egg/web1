@@ -190,10 +190,18 @@ function MarketCard({ m }: { m: MarketFear }) {
       )}
       {m.s2History.length > 1 && (
         <div className="mt-2">
-          <div className="text-[10px] font-medium text-slate-400">S2 반대매매 금액 1년 분위 추이 (95 = 상위5%)</div>
+          <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-400">
+            <span>S2 반대매매 금액 1년 분위 추이 (95 = 상위5%)</span>
+            <span className="inline-flex items-center gap-1 text-slate-500">
+              · <span className="inline-block h-2 w-2 rounded-full bg-red-500" /> S2 실제 ON ({m.s2OnDates.length})
+            </span>
+          </div>
+          <div className="text-[9px] text-slate-400">주황 곡선은 원재료(분위)로 자주 출렁 — 실제 S2는 95 스파이크 후 2일↓ 확인해야 점등(●)이라 훨씬 드묾</div>
           <InteractiveLineChart
             series={[{ points: m.s2History, color: "#f97316", label: "금액 분위" }]}
             baselines={[95]}
+            markers={m.s2OnDates}
+            markerColor="#ef4444"
             decimals={0}
             height={90}
           />

@@ -99,6 +99,7 @@ export interface MarketFear {
   s1History: SeriesPoint[];
   s2History: SeriesPoint[];
   s3History: SeriesPoint[];
+  s2OnDates: number[];
   /** 최종 권장 비중 = 등급 기본 비중 × 이중 얕음게이트 (코스닥 단독이면 0%). */
   sizing: Sizing;
   // 코스닥 전용:
@@ -274,6 +275,7 @@ interface Built {
   s1History: SeriesPoint[]; // 신용 DD(%) 추이 (임계 −8/−15)
   s2History: SeriesPoint[]; // 반대매매 금액 1년 분위(%) 추이 (임계 95=상위5%)
   s3History: SeriesPoint[]; // 60일선 이격도 편차(%) 추이 (임계 −8)
+  s2OnDates: number[]; // S2가 실제 ON이었던 날(ms) — 분위 차트 위 마커용
 }
 
 const nn = (v: number): number | null => (Number.isFinite(v) ? v : null);
@@ -315,6 +317,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s1History: [],
     s2History: [],
     s3History: [],
+    s2OnDates: [],
     signals: [
       { key: "S1 신용청산", met: false, value: "—", criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓", detail: "데이터 없음", level: 0 },
       { key: "S2 반대매매", met: false, value: "—", criteria: "스파이크(6일내, 금액 1년 상위5%) & 2일 연속↓", detail: "데이터 없음", level: 0 },
@@ -408,12 +411,14 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const s1History: SeriesPoint[] = []; // 신용 DD %
   const s2History: SeriesPoint[] = []; // 반대매매 금액 분위 %
   const s3History: SeriesPoint[] = []; // 이격도 편차 %
+  const s2OnDates: number[] = []; // S2 실제 점등일(마커)
   for (let i = 0; i < n; i++) {
     if (!(Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i]))) continue;
     fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
     if (Number.isFinite(creditDd[i])) s1History.push({ t: dates[i], v: Math.round(creditDd[i] * 1000) / 10 });
     if (Number.isFinite(amtPct[i])) s2History.push({ t: dates[i], v: Math.round(amtPct[i] * 1000) / 10 });
     if (Number.isFinite(disp[i])) s3History.push({ t: dates[i], v: Math.round((disp[i] - 100) * 10) / 10 });
+    if (s2[i]) s2OnDates.push(dates[i]);
   }
 
   // 최신 행
@@ -495,6 +500,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s1History,
     s2History,
     s3History,
+    s2OnDates,
   };
 }
 

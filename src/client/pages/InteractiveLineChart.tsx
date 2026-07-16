@@ -14,6 +14,9 @@ interface Props {
   height?: number;
   decimals?: number;
   suffix?: string;
+  /** 첫 시리즈 위에 강조 점을 찍을 타임스탬프(ms) — 예: S2가 실제 ON이었던 날. */
+  markers?: number[];
+  markerColor?: string;
 }
 
 /** Last point at-or-before time t (binary search — points are ascending). */
@@ -43,7 +46,7 @@ function valAt(pts: SeriesPoint[], t: number): number | null {
  * Hover only moves the crosshair overlay, so everything static (domain, ticks,
  * paths) is memoized on [series, viewport] — a mousemove re-render costs O(1).
  */
-export function InteractiveLineChart({ series, baselines = [], height = 150, decimals = 1, suffix = "" }: Props) {
+export function InteractiveLineChart({ series, baselines = [], height = 150, decimals = 1, suffix = "", markers = [], markerColor = "#ef4444" }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const nonEmpty = useMemo(() => series.filter((s) => s.points.length > 0), [series]);
   // Longest series drives the x-axis / index / dates.
@@ -126,7 +129,18 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
   if (!frame || nonEmpty.length === 0 || n === 0) {
     return <div className="py-8 text-center text-xs text-slate-400">차트 데이터 없음</div>;
   }
-  const { lo, hi, xOf, y, paths, ticks } = frame;
+  const { t0, t1, lo, hi, xOf, y, paths, ticks } = frame;
+  // S2 ON 등 강조 마커 — 첫 시리즈 선 위에 crisp HTML 점(SVG는 가로 스트레치라 원이 찌그러짐).
+  const markerDots =
+    markers.length > 0 && nonEmpty[0]
+      ? markers
+          .filter((t) => t >= t0 && t <= t1)
+          .map((t) => {
+            const v = valAt(nonEmpty[0].points, t);
+            return v === null ? null : { leftPct: (xOf(t) / W) * 100, top: y(v) };
+          })
+          .filter((d): d is { leftPct: number; top: number } => d !== null)
+      : [];
 
   const onMove = (e: React.MouseEvent) => {
     const el = wrapRef.current;
@@ -189,6 +203,23 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
             </>
           )}
         </svg>
+
+        {/* 강조 마커(S2 ON 등) — 선 위 crisp 점 + 옅은 후광 */}
+        {markerDots.map((d, i) => (
+          <span
+            key={`mk${i}`}
+            className="pointer-events-none absolute z-[5] block rounded-full"
+            style={{
+              left: `${d.leftPct}%`,
+              top: `${d.top}px`,
+              width: 8,
+              height: 8,
+              transform: "translate(-50%, -50%)",
+              background: markerColor,
+              boxShadow: `0 0 0 2.5px color-mix(in srgb, ${markerColor} 28%, transparent)`,
+            }}
+          />
+        ))}
 
         {hover && hoverT !== null && (
           <div
