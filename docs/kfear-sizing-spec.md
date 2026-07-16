@@ -80,6 +80,6 @@ computeSizing(grade, creditDd, dispDev, isSolo):
 
 1. **유닛테스트**: T1~T12 = scratchpad `v4_test.ts`(`computeSizing`/`phase`/`shallowGate`), S2/F2 금액·폴백 = `v4_s2_test.ts`.
 2. **코드 대조**: `GRADE_WEIGHT`·`SHALLOW_CREDIT/DISP`·`shallowGate`·`computeSizing`(①→②)이 §1과 일치.
-3. **화면 대조**: 권장비중 하단 `[등급] N × 게이트 G`, 이중게이트 칩(신용/이격 얕음·깊음), GATED 시 `⚠️ 둘 다 얕음 → ×0.5`. depth 사다리 UI 없음. S2 = "반대매매금액 1년 상위 X%".
+3. **화면 대조**: 권장비중 하단 `[등급] N × 게이트 G`, 이중게이트 칩(신용/이격 얕음·깊음), GATED 시 `⚠️ 둘 다 얕음 → ×0.5`. depth 사다리 UI 없음. S2(v5) = "정점 상위X% (M/D·N일전) · 2일 연속↓ 충족".
 
 > ⚠️ n=15~20 소표본 — 방향성만 신뢰(STRONG>BUY 견고, ARMED 승률 착시 가능), 게이트 각 칸 1~4건이라 정밀 계수는 노이즈. "100%"는 이 시스템 배정 예비대의 100%지 전체 몰빵 아님. 투자 권유 아님.

@@ -10,7 +10,7 @@ import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
  *
  * 3신호 (build_signals):
  *   S1 신용잔고 : 252일 피크 대비 ≤−8% & 10일 ≤−3% & 지수 10일 수익률 < 0
- *   S2 반대매매 : 반대매매 **금액** 252일 분위수 ≥0.95 (v4 — 6일 스파이크·2일 연속↓ 폐지)
+ *   S2 반대매매 : 반대매매 **금액** 스파이크(6일내 분위≥0.95) & 2일 연속↓ (v5 복원)
  *   S3 이격도60 : 종가/60일SMA×100 ≤92  또는  252일 분위수 ≤0.05
  * FEAR (build_fear): 4성분 동일가중 평균 ×100, 값이 높을수록 공포
  *   F1 = 1 − pct252(신용 10일 변화율)   (청산 속도, 시장별)
@@ -23,7 +23,8 @@ import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
 
 // ── 상수 (레퍼런스 기본값 고정) ──
 const PCT_WIN = 252; // 분위수 롤링 창
-const SPIKE_PCT = 0.95; // 상위 5% (S2: 반대매매금액 분위 ≥0.95)
+const SPIKE_PCT = 0.95; // 상위 5% (S2 스파이크: 반대매매금액 분위 ≥0.95)
+const SPIKE_LOOKBACK = 6; // S2 스파이크 탐색 창(거래일) — v5 복원
 const CREDIT_DD = -0.08; // 피크 대비 −8%
 const CREDIT_10D = -0.03; // 10거래일 −3%
 const PEAK_MINP = 200; // 피크 롤링 최소 관측
@@ -290,6 +291,11 @@ const botPctLabel = (p: number): string => {
   const x = Math.round(p * 100);
   return x <= 0 ? "최저권" : `하위 ${x}%`;
 };
+/** M/D from a UTC-epoch trading-day timestamp (S2 정점 날짜 표기). */
+const fmtMD = (t: number): string => {
+  const d = new Date(t);
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
+};
 
 /**
  * 한 시장(코스피 or 코스닥)의 3신호 + FEAR를 계산. price는 그 시장 지수 종가,
@@ -311,7 +317,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s3History: [],
     signals: [
       { key: "S1 신용청산", met: false, value: "—", criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓", detail: "데이터 없음", level: 0 },
-      { key: "S2 반대매매", met: false, value: "—", criteria: "반대매매금액 1년 상위5%", detail: "데이터 없음", level: 0 },
+      { key: "S2 반대매매", met: false, value: "—", criteria: "스파이크(6일내, 금액 1년 상위5%) & 2일 연속↓", detail: "데이터 없음", level: 0 },
       { key: "S3 이격도60", met: false, value: "—", criteria: "이격도 ≤−8% or 1년 하위5%", detail: "데이터 없음", level: 0 },
     ],
   };
@@ -353,9 +359,19 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const credit10d = pctChange(creditA, 10);
   const idx10d = pctChange(close, 10);
 
-  // S2 반대매매 — v4: 반대매매 **금액**의 252일 분위수가 상위5%(≥0.95)면 ON.
-  // (구 로직의 "6일 스파이크 + 2일 연속↓"는 성과 차이 없어 제거 — 절대금액 분위수만.)
-  const amtPct = rollPct(amtA, PCT_WIN);
+  // S2 반대매매 — v5: 반대매매 **금액** 스파이크(6일내 분위≥0.95) & 금액 2일 연속 하락.
+  // 청산 파도가 정점을 찍고 잦아드는 것을 확인한 뒤 점등(통상 정점+2일). 스파이크 당일은
+  // 금액이 오르는 중이라 OFF, 재급증(2차 파도) 시 decline2가 깨져 OFF, 동률(ffill 포함)은 감소 아님.
+  const amtPct = rollPct(amtA, PCT_WIN); // 금액 분위수(F2·스파이크 판정 공통)
+  const spike = amtPct.map((p) => Number.isFinite(p) && p >= SPIKE_PCT); // 상위5% 스파이크 당일
+  const spike6 = new Array<boolean>(n).fill(false);
+  for (let i = 0; i < n; i++) {
+    for (let j = Math.max(0, i - SPIKE_LOOKBACK + 1); j <= i; j++) {
+      if (spike[j]) { spike6[i] = true; break; }
+    }
+  }
+  const decline2 = new Array<boolean>(n).fill(false); // 금액 2일 연속 '엄격' 감소(동률 제외)
+  for (let i = 2; i < n; i++) decline2[i] = amtA[i] < amtA[i - 1] && amtA[i - 1] < amtA[i - 2];
 
   // S3 이격도
   const ma60 = rollMean(close, DISP_N);
@@ -384,7 +400,7 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s1[i] = creditDd[i] <= CREDIT_DD && credit10d[i] <= CREDIT_10D && idx10d[i] < 0;
     s3[i] = disp[i] <= DISP_ABS || dispPct[i] <= DISP_PCT;
   }
-  const s2 = amtPct.map((p) => Number.isFinite(p) && p >= SPIKE_PCT);
+  const s2 = spike6.map((sp, i) => sp && decline2[i]); // v5: 스파이크(6일내) & 2일 연속↓
 
   // 차트는 4성분이 **모두** 찬 뒤부터만(성분별 워밍업이 달라 — F4 20+252, F3 60+252 등
   // — 초기엔 일부 성분만으로 FEAR가 계산돼 왜곡됨). 완전 워밍업(~311거래일) 지점만 그림.
@@ -407,6 +423,29 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   // S1 강도 = 피크 되돌림 깊이 / S2 = 금액 분위 / S3 = 과매도 깊이
   const s1Level: CapLevel = creditDd[L] <= -0.2 ? 3 : creditDd[L] <= -0.08 ? 2 : creditDd[L] <= -0.04 ? 1 : 0;
   const s2Level = upperTailLevel(amtPct[L]); // 반대매매 금액 분위수 강도
+  // S2 표기: 6일 창의 **정점**(금액 최고일=스파이크)과 기준일 연속 하락 일수(v5 복원).
+  let peakIdx = -1;
+  for (let j = Math.max(0, L - SPIKE_LOOKBACK + 1); j <= L; j++) {
+    if (!Number.isFinite(amtA[j])) continue;
+    if (peakIdx < 0 || amtA[j] > amtA[peakIdx]) peakIdx = j;
+  }
+  const peakAgo = peakIdx < 0 ? Infinity : L - peakIdx;
+  let s2Decl = 0; // 기준일 기준 연속 '엄격' 하락 일수
+  for (let i = L; i >= 1; i--) {
+    if (amtA[i] < amtA[i - 1]) s2Decl++;
+    else break;
+  }
+  const s2Reason = s2[L]
+    ? "2일 연속↓ 충족"
+    : !spike6[L]
+      ? "6일 내 상위5% 스파이크 없음"
+      : s2Decl >= 1
+        ? `${s2Decl}일 연속↓ (2일 필요)`
+        : "정점 후 아직 안 꺾임";
+  const s2Note =
+    peakIdx < 0 || !spike6[L]
+      ? "최근 6일 상위5% 스파이크 없음"
+      : `정점 ${topPctLabel(amtPct[peakIdx])} (${fmtMD(dates[peakIdx])}·${peakAgo}일전) · ${s2Reason}`;
   const s3Level: CapLevel =
     dispPct[L] <= 0.01 || disp[L] <= 88 ? 3 : dispPct[L] <= 0.05 || disp[L] <= 92 ? 2 : dispPct[L] <= 0.15 || disp[L] <= 96 ? 1 : 0;
 
@@ -428,8 +467,8 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
       key: "S2 반대매매",
       met: s2[L],
       value: Number.isFinite(liqA[L]) ? `${liqA[L].toFixed(1)}%` : "—",
-      criteria: `반대매매금액 1년 상위5% (분위 ≥0.95)${usingAmount ? "" : " ⚠비중 폴백"}`,
-      detail: `금액 1년 ${topPctLabel(amtPct[L])}${usingAmount ? "" : " (금액 미수집→비중 분위)"} · 오늘 비중 ${Number.isFinite(liqA[L]) ? liqA[L].toFixed(1) + "%" : "—"}`,
+      criteria: `스파이크(6일내, 금액 1년 상위5%) & 2일 연속↓${usingAmount ? "" : " ⚠비중 폴백"}`,
+      detail: `${s2Note}${usingAmount ? "" : " (금액 미수집→비중 분위)"}`,
       level: s2Level,
     },
     {

@@ -267,7 +267,8 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
           [둘다얕음 +5.6% vs 하나만얕음 +23.8% — <strong className="text-slate-600">하나만 얕은 건 안 깎음</strong>]. 신용·이격도는 무상관(−0.04) 독립정보.
         </span>
         <span className="mt-1 block text-slate-500">
-          반대매매는 '비중(÷미수금)'이 아니라 <strong className="text-slate-600">'절대금액 상위5%'</strong> [비중은 분모왜곡 — 절대금액 +19.6% vs 비중 +16.4%]. FEAR의 F2도 동일하게 절대금액.
+          반대매매(S2)는 <strong className="text-slate-600">'절대금액 1년 상위5% 스파이크(6일내) &amp; 2일 연속 하락'</strong> — 청산 파도의 정점 통과를 확인 후 점등
+          [v5 복원: MDD 7/8 개선 · STRONG 진입가 평균 −2.4~−3.9%, 비용: 빠른 V반등 2일 지각]. 수익 우열은 소표본 노이즈로 미증명 — 채택 근거는 MDD·진입가. 비중(÷미수금)은 분모왜곡이라 금지, F2도 동일 절대금액.
           코스닥 <strong>단독(코스피 미동반)은 0%</strong> — 동반 시 자동 승격.
         </span>
         <span className="mt-1 block text-slate-500">
