@@ -1,13 +1,13 @@
 # Feed Watch — Investment Digest
 
-Multi-source feed collection → investment analysis (Claude) → daily evening digest, viewable on a web dashboard. Sources are managed entirely from the UI.
+Multi-source feed collection → LLM investment analysis → twice-daily digest, viewable on a web dashboard. Sources are managed entirely from the UI.
 
 > Built green-field in this repo. The original static HTML tutorial pages are preserved under [`legacy/`](./legacy).
 
 ## Stack
 - **Frontend**: React 19, Vite, Tailwind, tRPC (react-query)
 - **Backend**: Node + Express, tRPC, Drizzle ORM, MySQL
-- **Analysis**: Anthropic Claude (2-pass: cheap filter → deep analysis)
+- **Analysis**: Anthropic Claude or an OpenAI-compatible API (DeepSeek, Groq, OpenRouter, Ollama, …)
 - **Auth sources** (Phase 5): Playwright stored sessions
 
 ## Architecture (4 modules)
@@ -58,7 +58,8 @@ npm run dev            # client (5173) + server (3000)
 
 ### Deploy a real 24/7 server
 See **[DEPLOY.md](./DEPLOY.md)** — one-click-ish deploy to Railway (Node + MySQL),
-all in the browser. Needs an `ANTHROPIC_API_KEY`. `npm start` runs migrations
+all in the browser. Needs either `ANTHROPIC_API_KEY` or `LLM_BASE_URL` +
+`LLM_API_KEY` + `LLM_MODEL`. `npm start` runs migrations
 then serves the app on `$PORT`.
 
 ### With MySQL (persistent, local)
@@ -74,6 +75,8 @@ npm run dev
 | script | purpose |
 |---|---|
 | `npm run dev` | run client + server together |
+| `npm test` | run the security and signal-regression tests |
+| `npm run typecheck` / `npm run build` | verify TypeScript and the production bundle |
 | `npm run worker:collect` | one-shot collection pass |
 | `npm run db:generate` / `db:migrate` / `db:seed` | Drizzle migration + seed |
 | `npm run login -- --source=<sourceId>` | interactive browser login → save session (you log in with your own ID/PW) |
@@ -106,6 +109,9 @@ Sessions expire → the source is flagged "로그인 필요" (no silent re-login
 > site's terms; use for your own subscribed accounts only.
 
 ## Security
+- Set `APP_PASSWORD` on every public Railway deployment. `APP_USERNAME` defaults
+  to `admin`; the browser will show its native login dialog. `/api/health` stays
+  public for Railway health checks, while the dashboard and tRPC API are protected.
 - **Passwords are never stored** — not in the DB, env, or repo. Only login
   sessions (cookies) are saved locally.
 - `.env` and `sessions/` are git-ignored and must never be committed.
@@ -117,4 +123,3 @@ Sessions expire → the source is flagged "로그인 필요" (no silent re-login
 - ✅ **Phase 4** — evening digest cron (`DIGEST_HOUR` KST, node-cron) synthesizing the day's relevant analyses into a markdown report **with source attribution + original links**; digest worker (`worker:digest`); digest tRPC router (dates/get/generate); Daily Digest view (date picker + rendered markdown).
 - ✅ **Phase 5** — authenticated sources via **browser login (no stored passwords)**: `npm run login` saves a Playwright session; adapters for substack (paid full text), naver_premium, fanding, and x (session scrape; API path if `X_API_PROVIDER` set). Sources UI shows login status + the per-source login command. Requires a machine with a browser to log in.
 - ✅ **Manual analysis mode (no API key)** — for Claude Max users. The **분석(수동)** tab lists collected articles, copies an instructions+body block to paste into claude.ai, and saves the pasted JSON answer as an analysis (model="manual") → flows into Feed/Digest. Works without `ANTHROPIC_API_KEY`.
-- ⬜ Phase 5 — authenticated sources (login script, sessions, substack paid, naver_premium, fanding, x).

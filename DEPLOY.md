@@ -4,12 +4,12 @@
 한 프로젝트에서 제공해서 이 앱에 가장 잘 맞습니다.)
 
 > 비용: Railway는 무료가 아니며 사용량 기반 과금(소액, 보통 월 몇 달러)입니다.
-> 분석에는 Anthropic API 사용료가 별도로 듭니다.
+> 분석에는 선택한 LLM 공급자의 API 사용료가 별도로 듭니다.
 
 ## 0. 미리 준비할 것
 - **GitHub 계정** (이미 있음, `Fff-Egg`)
-- **Anthropic API 키**: https://console.anthropic.com → API Keys → 키 생성
-  (크레딧 충전 필요). 키는 `sk-ant-...` 형태.
+- **LLM API 키**: Anthropic 키 또는 DeepSeek·OpenRouter 등 OpenAI 호환 API의
+  Base URL/API 키/모델 이름을 준비합니다. 수동 분석만 쓰면 생략할 수 있습니다.
 
 ## 1. Railway 가입 & 프로젝트 생성
 1. https://railway.app → **Login with GitHub**
@@ -27,13 +27,17 @@
 | 변수 | 값 |
 |---|---|
 | `DATABASE_URL` | `${{ MySQL.MYSQL_URL }}` (Railway 변수 참조 — MySQL 서비스 이름이 다르면 맞게) |
-| `ANTHROPIC_API_KEY` | `sk-ant-...` (1단계에서 만든 키) |
-| `DIGEST_HOUR` | `21` (선택, 저녁 9시 KST 다이제스트) |
+| `APP_USERNAME` | 원하는 로그인 아이디 (생략 시 `admin`) |
+| `APP_PASSWORD` | **필수 권장:** 길고 고유한 사이트 접속 암호 |
+| `ANTHROPIC_API_KEY` | Claude 사용 시 `sk-ant-...` |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | DeepSeek 등 OpenAI 호환 API 사용 시 세 변수를 함께 설정 |
+| `DIGEST_HOUR` | `7` (선택, 하루 경계 다이제스트·피드 정리 시각 KST) |
+| `DIGEST_MIDDAY_HOUR` | `17` (선택, 두 번째 다이제스트 시각 KST) |
 | `COLLECT_INTERVAL_MIN` | `30` (선택, 수집 주기 분) |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (선택, 빌드 빨라짐 — 서버는 브라우저 불필요) |
 
-> `FILTER_MODEL` / `ANALYSIS_MODEL` 은 기본값이 있어 생략 가능
-> (Haiku로 1차 필터, Opus로 심층 분석).
+> `FILTER_MODEL` / `ANALYSIS_MODEL`은 기본값이 있어 생략 가능합니다.
+> `APP_PASSWORD`를 설정하지 않으면 서버 로그에 공개 접근 경고가 출력됩니다.
 
 ## 4. 배포
 - 환경변수를 저장하면 Railway가 자동으로 **빌드 → 마이그레이션 → 서버 시작**을 합니다.
@@ -57,7 +61,7 @@
   서버에 올리는 방식 — 필요해지면 그때 안내
 
 ## 문제가 생기면
-- **Deploy 로그가 빨갛게 crash**: 보통 `DATABASE_URL` 또는 `ANTHROPIC_API_KEY` 미설정.
+- **Deploy 로그가 빨갛게 crash**: 보통 `DATABASE_URL` 또는 LLM 변수 조합 오류.
   Variables 확인 후 재배포(Deploy).
-- **분석이 안 됨**: `ANTHROPIC_API_KEY` 크레딧 잔액 확인.
+- **분석이 안 됨**: 선택한 LLM API 키·모델·크레딧을 확인.
 - **수집이 비어 있음**: 일부 사이트가 봇 차단(403)할 수 있음. 다른 RSS로 테스트.
