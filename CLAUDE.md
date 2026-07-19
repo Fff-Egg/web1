@@ -3,6 +3,57 @@
 개인 투자 정보 수집·분석·다이제스트 대시보드. 여러 소스에서 글을 모아 1차로
 필터·요약하고, 하루 1회(또는 기간 지정) **다이제스트**로 종합한다.
 
+> 📖 **처음 오는 사람은 §0을 먼저 읽으면 앱 전체가 잡힌다.** 더 깊은 개요는 `docs/OVERVIEW.md`(앱 전체)와
+> `docs/fear-indicators.md`(K-공포지수·US 진입신호 지표 상세)에 자족적으로 정리돼 있다. 이 CLAUDE.md의
+> §0 이후는 세션 인수인계·주의사항·세부 구현 노트다.
+
+## 0. 전체 개요 — 처음 보는 사람용 (여기부터)
+
+**무엇인가**: 여러 소스(RSS·X·텔레그램·네이버블로그·한경·서브스택)에서 투자 관련 글을 **자동 수집 → LLM 1차
+분석(관련성·중요도·요약) → 하루 2회 다이제스트로 종합**하고, 별도로 **시장 공포·진입 신호**(국내 K-공포지수 ·
+미국 US 진입신호)를 실시간 계산하는 **개인용 웹 대시보드**. 목표 = "모든 글 훑기"를 버리고
+**"하루 2~3회 다이제스트 + 움직인 신호만 보기"**(신경 끄기).
+
+**스택**: TypeScript 단일 리포 풀스택 모노리스. 프론트 = React 19 · Vite 6 · Tailwind · tRPC 11 + react-query.
+백엔드 = Express · @trpc/server · Drizzle ORM · MySQL · node-cron. LLM = **DeepSeek**(OpenAI 호환).
+배포 = **Railway**(개발 브랜치 푸시 = 자동 재배포). 계산 무거운 지표(K-공포·US 진입)는 **전부 클라이언트**.
+
+**두 파이프라인** (node-cron 스케줄러가 오케스트레이션):
+```
+① 콘텐츠: 소스 8종 → 수집 collectAll(묘비 dedup) → 1차분석(LLM 1콜: 관련성·중요도·요약·논지신호 동시)
+          → Feed/보관함 · 다이제스트(맵리듀스·각주 인용) · 논지지도
+          ↖ 피드백 학습: 사용자 액션(삭제/남기기/복원) → filter_feedback → 1일 1회 '학습 메모' → 1차분석 중요도에 재주입
+② 시황분석: 시장데이터(CNN·TradingView WS·KOFIA·FRED·adrinfo) → 07시 스냅샷(settings KV)
+          → 클라 계산(K-공포지수 · US 진입신호) · 지표 카드
+```
+
+**10개 탭** (`src/client/App.tsx` + `src/client/pages/`):
+| 탭 | 역할 |
+|---|---|
+| **시황분석** | 시장지표 9카드 + K-공포지수 + US 진입신호 (앱에서 가장 큰 기능 → 아래 §탭 구성) |
+| **Daily Digest** | 기간 종합 리포트 생성·열람(맵리듀스·각주 인용, 하루 2슬롯) |
+| **Feed** | 오늘치 transient 글(중요/검토), 필터·다중선택·낙관적 업데이트 |
+| **보관함** | 저장·텔레그램 persistent 버킷 |
+| **분석(수동)** | API키 없이 Claude Max 붙여넣기 분석 |
+| **Sources** | 수집 소스 CRUD·'지금 수집'·피드 자동탐지 |
+| **휴지통** | soft-delete 복원/영구삭제(tombstone) |
+| **Settings** | 1·2차 분석 지침 + 자동 '학습 메모' |
+| **리포트** | 증권사 리포트 애그리게이터(커버리지·TP상향 티어) |
+| **논지 지도** | 투자 논지 스레드에 1차분석이 자동 기록한 신호 집계 |
+
+**핵심 DB 테이블** (`db/schema.ts`, 마이그레이션 0000~0010, **수동 작성**): `sources` · `articles`(soft-delete
+deletedAt·tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText) · `digests`(period·slot) ·
+`settings`(KV — 지침·filterGuidance·marketSnapshot) · `filter_feedback` · `research_reports` ·
+`threads`+`signals`(논지지도).
+
+**파일 지도**: `src/client/pages/`(14 페이지+차트 3개+계산모듈 `kfear.ts`/`usEntry.ts`) ·
+`src/client/data/client.ts`(tRPC 래퍼) · `src/server/adapters/`(소스 8종+registry) ·
+`src/server/{analysis,digest,market,research,repo,trpc,scheduler.ts}` · `src/shared/`(지침 기본값·타입·providers) ·
+`drizzle/`(마이그레이션). tRPC 라우터 8개: sources·settings·feed·digest·manual·market·research·thesis.
+
+**이 문서 나머지 읽는 법**: 배포/env=§실행 환경, 콘텐츠 파이프라인 상세=§파이프라인, 시황분석(K-공포 v5·US
+진입·데이터 정합성 앵커)=§탭 구성 안 큰 문단, 다이제스트 각주 버그 등=§알려진 버그, 다음 할 일=맨 아래 §방향.
+
 ## ⚠️ 새 세션 시작 시 먼저 할 것
 - 컨테이너가 가끔 **옛 커밋으로 리셋**된다. 작업 전 반드시:
   `git fetch origin claude/focused-planck-m3wgbz && git reset --hard origin/claude/focused-planck-m3wgbz`
