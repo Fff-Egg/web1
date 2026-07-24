@@ -1,6 +1,7 @@
 import type { CreditQuote, SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 import { assertAnchor, assertAnchorSum } from "./anchors.js";
+import { parseKofiaJson } from "./kofiaJson.js";
 
 /**
  * 신용거래융자 잔고 (Korean margin-loan balance) for KOSPI / KOSDAQ.
@@ -74,7 +75,7 @@ export async function fetchCreditSnapshot(timeoutMs = 20_000): Promise<CreditSna
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`KOFIA getMetaDataList HTTP ${res.status}`);
-    const json = (await res.json()) as { ds1?: CreditRow[] };
+    const json = parseKofiaJson(await res.text(), "credit") as { ds1?: CreditRow[] };
     rows = json.ds1 ?? [];
   } finally {
     clearTimeout(t);

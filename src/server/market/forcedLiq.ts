@@ -1,6 +1,7 @@
 import type { SeriesPoint } from "../../shared/market.js";
 import { sliceLastYear } from "../../shared/market.js";
 import { assertAnchor } from "./anchors.js";
+import { parseKofiaJson } from "./kofiaJson.js";
 
 /**
  * 미수 반대매매 비중 (unpaid-balance forced-liquidation ratio, %) — the public,
@@ -56,7 +57,7 @@ export async function fetchForcedLiqRatio(timeoutMs = 20_000): Promise<ForcedLiq
       signal: ctrl.signal,
     });
     if (!res.ok) throw new Error(`KOFIA 증시자금 HTTP ${res.status}`);
-    const json = (await res.json()) as { ds1?: Row[] };
+    const json = parseKofiaJson(await res.text(), "forcedLiq") as { ds1?: Row[] };
     rows = json.ds1 ?? [];
   } finally {
     clearTimeout(t);
