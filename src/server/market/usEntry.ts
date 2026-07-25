@@ -18,12 +18,16 @@ import { fetchCloses } from "./tradingview.js";
  *   VIX3M = CBOE:VIX3M  (폴백 TVC:VIX3M, 구명칭 VXV)
  *   HY    = FRED:BAMLH0A0HYM2  (ICE BofA US High Yield OAS, %p, T+1 — 클라에서 shift(1))
  *   IXIC  = NASDAQ:IXIC  (신호엔 불필요, 첫 발동가 대비 나스닥 등락률·성과추적용)
+ *   VVIX  = CBOE:VVIX  (**보조 신호 전용** — 단기 반등 확인. 실패해도 위 4개와 무관)
  */
 
 const VIX_SYMBOLS = ["TVC:VIX", "CBOE:VIX", "FRED:VIXCLS"];
 const VIX3M_SYMBOLS = ["CBOE:VIX3M", "TVC:VIX3M"];
 const HY_SYMBOLS = ["FRED:BAMLH0A0HYM2"];
 const IXIC_SYMBOLS = ["NASDAQ:IXIC", "TVC:IXIC"];
+// ⚠️ 폴백에 `TVC:VVIX`·`FRED:VVIXCLS`를 넣지 말 것 — 둘 다 **존재하지 않는 심볼**로 실측 확인됨
+// (invalid symbol, n=0). bare `VVIX`는 차트 ws가 CBOE:VVIX로 자동 해석하므로 그것만 폴백으로 둔다.
+const VVIX_SYMBOLS = ["CBOE:VVIX", "VVIX"];
 // TV가 주는 1300봉(≈5년)을 클리핑하지 않게 5년 유지 — Tier 0 검증 앵커(2023~)가 252일
 // 롤링 워밍업을 확보하려면 그 앵커보다 1년 이상 앞선 히스토리가 필요하다.
 const DAYS = HISTORY_DAYS;
@@ -36,14 +40,21 @@ async function firstWithData(symbols: string[], timeoutMs: number): Promise<Seri
   return [];
 }
 
-export async function fetchUsEntry(
-  timeoutMs = 22_000,
-): Promise<{ vix: SeriesPoint[]; vix3m: SeriesPoint[]; hyOas: SeriesPoint[]; ixic: SeriesPoint[] }> {
-  const [vix, vix3m, hyOas, ixic] = await Promise.all([
+export async function fetchUsEntry(timeoutMs = 22_000): Promise<{
+  vix: SeriesPoint[];
+  vix3m: SeriesPoint[];
+  hyOas: SeriesPoint[];
+  ixic: SeriesPoint[];
+  vvix: SeriesPoint[];
+}> {
+  const [vix, vix3m, hyOas, ixic, vvix] = await Promise.all([
     firstWithData(VIX_SYMBOLS, timeoutMs),
     firstWithData(VIX3M_SYMBOLS, timeoutMs),
     firstWithData(HY_SYMBOLS, timeoutMs),
     firstWithData(IXIC_SYMBOLS, timeoutMs),
+    // VVIX는 보조 신호 전용 — firstWithData가 심볼별 실패를 삼켜 빈 배열을 내므로
+    // 죽어도 위 4개(기존 신호)에 영향이 없다.
+    firstWithData(VVIX_SYMBOLS, timeoutMs),
   ]);
   // 진단(Railway 로그): 최신 TERM/HY/VIX — §4-4 스냅샷 앵커(2026-07-09 VIX 15.85·TERM
   // 0.835·HY 2.70) 대조용. 심볼이 바뀌거나 값이 어긋나면 여기서 먼저 드러난다.
@@ -57,5 +68,13 @@ export async function fetchUsEntry(
   } else {
     console.warn(`[usEntry] VIX/VIX3M 수집 실패 — vix=${vix.length} vix3m=${vix3m.length} hy=${hyOas.length}`);
   }
-  return { vix, vix3m, hyOas, ixic };
+  // VVIX는 **원시값만** 로그로 남긴다 — 판정(panicRecent/cooling/reboundStatus)은 전부 클라
+  // 계산이라 서버가 알 수 없다(CLAUDE.md '계산은 전부 클라' 원칙). 심볼이 죽으면 여기서 먼저 드러난다.
+  const lastVV = vvix.at(-1);
+  if (lastVV) {
+    console.log(`[usEntry] VVIX=${lastVV.v} VVIX_asOf=${new Date(lastVV.t).toISOString().slice(0, 10)} VVIX_n=${vvix.length}`);
+  } else {
+    console.warn(`[usEntry] VVIX 수집 실패(보조 신호만 영향, 기존 신호는 정상) — 심볼 ${VVIX_SYMBOLS.join("/")}`);
+  }
+  return { vix, vix3m, hyOas, ixic, vvix };
 }

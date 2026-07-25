@@ -658,6 +658,8 @@ const SAMPLE_MARKET: MarketSnapshot = {
     vix3m: sampleSeries(19, 3),
     hyOas: sampleSeries(3.2, 0.8),
     ixic: sampleSeries(18000, 1500),
+    // 데모는 VVIX_PANIC(140) 아래로만 진동시켜 정적 데모가 REBOUND로 오점등하지 않게 한다.
+    vvix: sampleSeries(100, 20),
   },
   errors: [],
 };

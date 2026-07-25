@@ -38,6 +38,7 @@ const EMPTY_HISTORY: MarketHistory = {
   vix3m: [],
   hyOas: [],
   ixic: [],
+  vvix: [],
 };
 
 /** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
@@ -108,7 +109,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
     }),
     fetchUsEntry().catch((e: unknown) => {
       errors.push(`US 진입신호(VIX/VIX3M/HY) 수집 실패: ${msg(e)}`);
-      return { vix: [], vix3m: [], hyOas: [], ixic: [] };
+      return { vix: [], vix3m: [], hyOas: [], ixic: [], vvix: [] };
     }),
   ]);
   // Partial liquidity failures (e.g. RRP only) don't throw — surface them too.
@@ -137,6 +138,7 @@ export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
   history.vix3m = usEntry.vix3m;
   history.hyOas = usEntry.hyOas;
   history.ixic = usEntry.ixic;
+  history.vvix = usEntry.vvix;
 
   const snapshot: MarketSnapshot = {
     fetchedAt: new Date().toISOString(),
@@ -186,6 +188,7 @@ export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
   if (snap.history.vix3m === undefined) snap.history.vix3m = [];
   if (snap.history.hyOas === undefined) snap.history.hyOas = [];
   if (snap.history.ixic === undefined) snap.history.ixic = [];
+  if (snap.history.vvix === undefined) snap.history.vvix = [];
   if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
   if (snap.liquidity === undefined) snap.liquidity = null;
   return snap;

@@ -163,6 +163,9 @@ export interface MarketHistory {
   vix3m: SeriesPoint[];
   hyOas: SeriesPoint[];
   ixic: SeriesPoint[];
+  /** VVIX(VIX의 변동성, CBOE) — **보조 신호 전용**. 단기 반등 확인(VVIX≥140 극단 후 VIX 진정)에만
+   *  쓰이고 TERM/A/B/fired/Tier/state/sizing에는 일절 영향이 없다. 없어도 기존 신호는 정상 작동. */
+  vvix: SeriesPoint[];
 }
 
 export interface MarketSnapshot {

@@ -48,6 +48,19 @@ export const TIER0_ANCHORS = [
   "2025-02-27",
 ];
 
+// ── VVIX 단기 반등 확인 (보조 신호) — 아래 상수/타입/함수는 기존 신호와 완전히 분리돼 있다 ──
+// fired·tier·state·sizing 어디에도 들어가지 않는다. "얼마나 살 것인가"는 Tier가 정하고,
+// 이 신호는 "공포가 진정되기 시작했는가"만 관찰한다.
+/** VVIX 공포 극단 임계(절대값). 표본 내에서 선택된 값 — 표본 외 검증 전까지 동결. */
+const VVIX_PANIC = 140;
+/** 극단 탐색 창(거래일, 기준일 포함). */
+const VVIX_LOOKBACK_TD = 3;
+/** 데이터 구멍 방어: lookback 창의 행이 기준일로부터 이 달력일을 넘으면 '최근'으로 안 친다.
+ *  (수집 실패 시 carryForwardEmpty가 묵은 시리즈를 되살리므로 행 인덱스만으론 부족하다.) */
+const VVIX_LOOKBACK_CAL_DAYS = 10;
+/** VVIX 기준일이 VIX 최신일보다 이 거래일 넘게 뒤처지면 stale → UNAVAILABLE. */
+const VVIX_STALE_TD = 3;
+
 export type UsState = "IDLE" | "WATCH" | "ARMED" | "ACTIVE_A" | "ACTIVE_B" | "ACTIVE_AB" | "POST";
 
 /** 현재 활성 티어: 0 조정매수(예비대 선발대) / 1 주 신호(본대) / 2 확인 상향(최대) / null 없음. */
@@ -155,7 +168,7 @@ function rollMean(arr: number[], win: number): number[] {
 }
 
 /** UTC 거래일 키(US 시계열은 UTC 자정 기준 일봉이라 일 단위로 내려 정렬). */
-const dayKey = (t: number): number => Math.floor(t / DAY);
+export const dayKey = (t: number): number => Math.floor(t / DAY);
 
 /** ts 이하(포함) 가장 최근 값 — 정렬된 [day, value] 목록에서 as-of ffill. null=이전 없음. */
 function asOf(sorted: Array<{ d: number; v: number }>, d: number): number | null {
@@ -393,4 +406,260 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
   };
 }
 
-export const __test = { computeUsEntry, dayKey, asOf, computeTier0, verifyTier0Anchors, rollMax, rollMean };
+// ══════════════════════════════════════════════════════════════════════════════
+// VVIX 단기 반등 확인 (보조 신호) — 기존 Tier/fired/state/sizing과 완전 분리
+// ══════════════════════════════════════════════════════════════════════════════
+/**
+ * 신호: **최근 3거래일 중 VVIX 종가 ≥ 140** AND **오늘 VIX 종가 < 직전 거래일 VIX 종가**.
+ * 옵션 변동성 공포가 극단에 갔다가 VIX가 진정되기 시작하는 시점을 잡아, 향후 1주~1개월
+ * 단기 반등 가능성을 관찰한다. **진입 규모(Tier)와 무관** — 티어를 올리지도 내리지도 않는다.
+ *
+ * ⚠️ `computeUsEntry` **밖의 독립 함수**인 이유: computeUsEntry는 VIX3M이 비면 아무 계산 전에
+ * `return EMPTY`한다. 안에 넣으면 VIX3M 하나가 죽을 때 VVIX 카드까지 영구 UNAVAILABLE이 돼
+ * "VVIX 실패만 격리한다"는 요구를 스스로 어긴다. 또 EMPTY는 모듈 공유 객체라 mutate 금지.
+ *
+ * 판정 행 배열 = **VVIX ∩ VIX 를 UTC dayKey 정확 일치로 조인**(ffill 금지, VIX3M/TERM과 독립).
+ * 교집합을 쓰는 이유는 실측 근거가 있다: TVC:VIX에는 5년간 미국 휴장일 유령봉이 22개 있고
+ * 값이 전일과 달라, raw VIX로 cooling을 재면 증시가 닫힌 날 하락으로 잡힌다. VVIX(CBOE)는
+ * 실거래일만 있어 교집합이 곧 실제 거래일 캘린더가 된다(실측: TERM 타임라인 1254/1254 = 100% 커버).
+ */
+export type ReboundStatus = "UNAVAILABLE" | "IDLE" | "PANIC" | "CONFIRMED";
+
+export const REBOUND_LABEL: Record<ReboundStatus, string> = {
+  UNAVAILABLE: "VVIX 데이터 없음",
+  IDLE: "평시",
+  PANIC: "VVIX 공포 극단 · VIX 진정 대기",
+  CONFIRMED: "반등 조건 충족",
+};
+
+export interface VvixRebound {
+  status: ReboundStatus;
+  /** 판정 기준일(조인 배열 마지막 행) ms — 메인 TERM 기준일과 다를 수 있다. */
+  asOf: number | null;
+  vvix: number | null; // 오늘 VVIX 종가
+  vvixRecentMax: number | null; // 최근 3거래일 최고 VVIX
+  panicToday: boolean; // 오늘 VVIX ≥ 140
+  panicRecent: boolean; // 최근 3거래일 중 하나라도 ≥ 140
+  panicDate: number | null; // 그 중 가장 최근 거래일 ms
+  vix: number | null; // 같은 행의 VIX 종가
+  vixPrev: number | null; // 직전 거래일 VIX 종가
+  vixChange1d: number | null; // 전일 대비 변화율(비율, 예 −0.081)
+  cooling: boolean; // 오늘 VIX < 전일 VIX (엄격 비교, 동률 불인정)
+  confirmed: boolean; // panicRecent && cooling
+  /** 현재 CONFIRMED 런의 첫날 ms — 성과 통계가 '첫날 진입' 기준이라 표시 단위를 맞춘다. */
+  episodeStart: number | null;
+  /** 연속 CONFIRMED 일차(0 = 오늘 미충족). */
+  days: number;
+  /** VVIX 기준일이 VIX 최신일보다 뒤처진 거래일 수(0=최신). */
+  staleTd: number | null;
+  history: SeriesPoint[]; // VVIX 차트용
+  confirmedDates: number[]; // CONFIRMED 발생일(차트 마커)
+}
+
+const EMPTY_REBOUND: VvixRebound = {
+  status: "UNAVAILABLE",
+  asOf: null,
+  vvix: null,
+  vvixRecentMax: null,
+  panicToday: false,
+  panicRecent: false,
+  panicDate: null,
+  vix: null,
+  vixPrev: null,
+  vixChange1d: null,
+  cooling: false,
+  confirmed: false,
+  episodeStart: null,
+  days: 0,
+  staleTd: null,
+  history: [],
+  confirmedDates: [],
+};
+
+/**
+ * 백테스트 성과 — **한 곳에만 정의**(UI 여러 곳에 중복 하드코딩 금지).
+ * `fullSample`은 사용자 제출 백테스트(2007~, 앱 데이터로는 재현 불가 구간 포함),
+ * `inWindow`는 앱이 실제 보유한 히스토리(≈5년)에서 **재현 검증된** 수치다. 둘을 병기해야
+ * "화면이 보여주는 창"과 "인용한 성과"의 괴리가 감춰지지 않는다. 실측상 fullSample의
+ * 최악값 4개는 전부 이 창(2021~)에서 나왔다 — 즉 좋은 성과는 대부분 창 밖에 있다.
+ */
+export interface BacktestRow {
+  label: string;
+  n: number;
+  wins: number;
+  mean: number;
+  median: number;
+  worst: number;
+}
+export const VVIX_REBOUND_BACKTEST: {
+  fullSample: { period: string; rows: BacktestRow[] };
+  inWindow: { period: string; rows: BacktestRow[] };
+} = {
+  fullSample: {
+    period: "2007~2026 (사용자 백테스트)",
+    rows: [
+      { label: "1주", n: 14, wins: 11, mean: 2.21, median: 1.21, worst: -0.96 },
+      { label: "1개월", n: 14, wins: 12, mean: 6.0, median: 3.92, worst: -1.73 },
+      { label: "3개월", n: 14, wins: 11, mean: 10.82, median: 9.5, worst: -11.49 },
+      { label: "6개월", n: 13, wins: 9, mean: 14.1, median: 13.76, worst: -22.8 },
+    ],
+  },
+  inWindow: {
+    period: "2021~2026 (앱 히스토리 창 · 재현 검증됨)",
+    rows: [
+      { label: "1주", n: 5, wins: 3, mean: 1.58, median: 0.96, worst: -0.96 },
+      { label: "1개월", n: 5, wins: 4, mean: 3.47, median: 1.31, worst: -1.73 },
+      { label: "3개월", n: 5, wins: 3, mean: 6.2, median: 13.14, worst: -11.49 },
+      { label: "6개월", n: 4, wins: 2, mean: 5.77, median: 20.55, worst: -22.8 },
+    ],
+  },
+};
+
+/**
+ * 창 안 검증 앵커 — 실데이터(CBOE:VVIX + TVC:VIX, 5년)에서 위 정의로 재현된 에피소드 첫날.
+ * TIER0_ANCHORS와 같은 역할: **파이프라인이 조용히 틀어지는 것**(심볼 변경·dayKey 조인 어긋남·
+ * 교집합 규칙 회귀)을 잡는다. ⚠️ 백테스트의 정당성을 증명하는 앵커가 아니라 — 우리 재현값이라
+ * 순환이다 — 어디까지나 회귀 감지용이다. 창 밖(2007~2020) 9건은 히스토리 부족으로 검증 불가.
+ */
+export const VVIX_REBOUND_ANCHORS = ["2021-11-29", "2022-01-27", "2024-08-06", "2025-04-09", "2026-03-09"];
+
+/** VVIX·VIX를 UTC 거래일로 정확 조인한 행(ffill 없음, 교집합). */
+function reboundRows(snap: MarketSnapshot): Array<{ t: number; d: number; vvix: number; vix: number }> {
+  const h = snap.history ?? ({} as MarketSnapshot["history"]);
+  const vvixBy = new Map<number, number>();
+  for (const p of h.vvix ?? []) if (Number.isFinite(p.v)) vvixBy.set(dayKey(p.t), p.v);
+  const rows: Array<{ t: number; d: number; vvix: number; vix: number }> = [];
+  for (const p of [...(h.vix ?? [])].sort((a, b) => a.t - b.t)) {
+    if (!Number.isFinite(p.v)) continue;
+    const d = dayKey(p.t);
+    const vv = vvixBy.get(d);
+    if (vv !== undefined) rows.push({ t: p.t, d, vvix: vv, vix: p.v });
+  }
+  return rows;
+}
+
+/** 어떤 인덱스 i에서의 CONFIRMED 여부(차트 마커·앵커 검증용). i≥1 필요. */
+function confirmedAt(rows: ReturnType<typeof reboundRows>, i: number): boolean {
+  if (i < 1) return false;
+  if (!(rows[i].vix < rows[i - 1].vix)) return false; // 엄격 비교 — 동률은 진정 아님
+  for (let j = Math.max(0, i - VVIX_LOOKBACK_TD + 1); j <= i; j++) {
+    if (rows[i].d - rows[j].d > VVIX_LOOKBACK_CAL_DAYS) continue; // 데이터 구멍 방어
+    if (rows[j].vvix >= VVIX_PANIC) return true;
+  }
+  return false;
+}
+
+export function computeVvixRebound(snap: MarketSnapshot): VvixRebound {
+  const rows = reboundRows(snap);
+  const history = rows.map((r) => ({ t: r.t, v: r.vvix }));
+  if (rows.length < 2) return { ...EMPTY_REBOUND, history };
+
+  const L = rows.length - 1;
+  const cur = rows[L];
+  const prev = rows[L - 1];
+
+  // stale 방어: VVIX가 못 따라오면(수집 실패 후 carryForward 등) 옛 VVIX와 오늘 VIX를 짝지어
+  // 잘못된 CONFIRMED가 뜬다. VIX 최신 거래일과 조인 기준일의 차이를 거래일로 센다.
+  const vixDays = [...new Set((snap.history?.vix ?? []).filter((p) => Number.isFinite(p.v)).map((p) => dayKey(p.t)))].sort(
+    (a, b) => a - b,
+  );
+  const staleTd = vixDays.length > 0 ? vixDays.filter((d) => d > cur.d).length : null;
+  if (staleTd !== null && staleTd > VVIX_STALE_TD) return { ...EMPTY_REBOUND, history, asOf: cur.t, staleTd };
+
+  // 최근 3거래일(기준일 포함) — 달력 상한 안의 행만 '최근'으로 인정.
+  const win = rows.slice(Math.max(0, L - VVIX_LOOKBACK_TD + 1)).filter((r) => cur.d - r.d <= VVIX_LOOKBACK_CAL_DAYS);
+  const vvixRecentMax = win.length > 0 ? Math.max(...win.map((r) => r.vvix)) : null;
+  const panicRows = win.filter((r) => r.vvix >= VVIX_PANIC);
+  const panicRecent = panicRows.length > 0;
+  const panicDate = panicRecent ? panicRows[panicRows.length - 1].t : null;
+  const panicToday = cur.vvix >= VVIX_PANIC;
+
+  const cooling = cur.vix < prev.vix; // 엄격 `<` — 동률은 진정 확인으로 인정하지 않는다
+  const vixChange1d = prev.vix > 0 ? cur.vix / prev.vix - 1 : null;
+  const confirmed = panicRecent && cooling;
+
+  // 연속 CONFIRMED 런(에피소드 첫날) — 성과 통계가 '에피소드 첫날 진입' 기준이라 표시를 맞춘다.
+  let days = 0;
+  let episodeStart: number | null = null;
+  if (confirmed) {
+    let i = L;
+    while (i >= 1 && confirmedAt(rows, i)) {
+      days++;
+      episodeStart = rows[i].t;
+      i--;
+    }
+  }
+
+  const confirmedDates: number[] = [];
+  for (let i = 1; i < rows.length; i++) if (confirmedAt(rows, i)) confirmedDates.push(rows[i].t);
+
+  const status: ReboundStatus = confirmed ? "CONFIRMED" : panicRecent ? "PANIC" : "IDLE";
+  return {
+    status,
+    asOf: cur.t,
+    vvix: cur.vvix,
+    vvixRecentMax,
+    panicToday,
+    panicRecent,
+    panicDate,
+    vix: cur.vix,
+    vixPrev: prev.vix,
+    vixChange1d,
+    cooling,
+    confirmed,
+    episodeStart,
+    days,
+    staleTd,
+    history,
+    confirmedDates,
+  };
+}
+
+/** VVIX_REBOUND_ANCHORS가 실데이터에서 재현되는지(리콜) — verifyTier0Anchors와 동형. */
+export function verifyVvixAnchors(snap: MarketSnapshot, tolDays = 2): Tier0Verify {
+  const rows = reboundRows(snap);
+  const onByDay = new Map<number, boolean>();
+  for (let i = 1; i < rows.length; i++) onByDay.set(rows[i].d, confirmedAt(rows, i));
+  const days = [...onByDay.keys()].sort((a, b) => a - b);
+  const misses: string[] = [];
+  const outOfWindow: string[] = [];
+  let hit = 0;
+  let inWindow = 0;
+  for (const s of VVIX_REBOUND_ANCHORS) {
+    const parsed = Date.parse(`${s}T00:00:00Z`);
+    if (Number.isNaN(parsed) || days.length === 0 || dayKey(parsed) < days[0] || dayKey(parsed) > days[days.length - 1]) {
+      outOfWindow.push(s);
+      continue;
+    }
+    inWindow++;
+    const d = dayKey(parsed);
+    let fired = false;
+    for (let k = -tolDays; k <= tolDays; k++) {
+      if (onByDay.get(d + k)) {
+        fired = true;
+        break;
+      }
+    }
+    if (fired) hit++;
+    else misses.push(s);
+  }
+  return { hit, inWindow, misses, outOfWindow };
+}
+
+export const __test = {
+  computeUsEntry,
+  dayKey,
+  asOf,
+  computeTier0,
+  verifyTier0Anchors,
+  rollMax,
+  rollMean,
+  computeVvixRebound,
+  verifyVvixAnchors,
+  reboundRows,
+  confirmedAt,
+  VVIX_PANIC,
+  VVIX_LOOKBACK_TD,
+  VVIX_LOOKBACK_CAL_DAYS,
+  VVIX_STALE_TD,
+};
