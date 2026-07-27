@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { MarketSnapshot, SeriesPoint } from "../src/shared/market.js";
-import { __test, computeUsEntry, computeVvixRebound } from "../src/client/pages/usEntry.js";
+import { __test, computeUsEntry, computeVvixRebound, VVIX_REBOUND_BACKTEST } from "../src/client/pages/usEntry.js";
 
 /**
  * VVIX 단기 반등 확인(보조 신호) 유닛테스트 — 지시서 §17 A~H.
@@ -134,7 +134,7 @@ test("D-3. panicRecent=true & cooling=true → CONFIRMED", () => {
   assert.equal(r.status, "CONFIRMED");
   assert.equal(r.confirmed, true);
   assert.equal(r.days, 1);
-  assert.equal(r.episodeStart, r.asOf);
+  assert.equal(r.runStart, r.asOf);
 });
 
 test("D-4. VVIX 시리즈 없음 → UNAVAILABLE", () => {
@@ -389,4 +389,58 @@ test("computeVvixRebound는 입력을 변형하지 않는다(순수)", () => {
   const before = JSON.stringify(s);
   computeVvixRebound(s);
   assert.equal(JSON.stringify(s), before);
+});
+
+// ── 리뷰 회귀 방어 (적대적 리뷰에서 확인된 문제들) ─────────────────────────────
+test("R-1. stale로 UNAVAILABLE이어도 과거 CONFIRMED 발생일은 보존된다(차트 캡션 거짓말 방지)", () => {
+  // VVIX가 2행에서 끊기고 VIX만 계속 갱신 → stale. 과거 CONFIRMED는 사실이므로 남아야 한다.
+  const history = {
+    vvix: [
+      { t: td(0), v: 150 },
+      { t: td(1), v: 150 },
+    ],
+    vix: [
+      { t: td(0), v: 30 },
+      { t: td(1), v: 29 }, // 여기서 CONFIRMED 성립
+      { t: td(2), v: 28 },
+      { t: td(3), v: 27 },
+      { t: td(4), v: 26 },
+      { t: td(5), v: 25 },
+    ],
+    vix3m: [],
+    hyOas: [],
+    ixic: [],
+  };
+  const r = computeVvixRebound({ history } as unknown as MarketSnapshot);
+  assert.equal(r.status, "UNAVAILABLE", "stale이므로 오늘 판정은 못 한다");
+  assert.equal(r.confirmedDates.length, 1, "과거 발생일은 사실이라 보존");
+  assert.ok(r.history.length > 0, "차트 데이터도 보존");
+});
+
+test("R-2. days/runStart는 21거래일 병합이 아니라 연속 런이다", () => {
+  // 3거래일 연속 CONFIRMED → days=3, runStart=첫날.
+  const r = computeVvixRebound(snap([150, 150, 150, 150], [30, 29, 28, 27]));
+  assert.equal(r.status, "CONFIRMED");
+  assert.equal(r.days, 3, "td(1),(2),(3) 세 행 (td(0)은 직전 행이 없어 판정 불가)");
+  assert.equal(r.runStart, td(1));
+});
+
+test("R-3. 조건이 하루 끊기면 연속 런이 리셋된다", () => {
+  // VIX: 30,29,30,29 → td(2)는 상승이라 CONFIRMED 아님 → 오늘(td3)은 1일차
+  const r = computeVvixRebound(snap([150, 150, 150, 150], [30, 29, 30, 29]));
+  assert.equal(r.status, "CONFIRMED");
+  assert.equal(r.days, 1, "끊겼으므로 1일차로 리셋");
+});
+
+test("R-4. 앱 창 성과표의 중앙값이 산술적으로 맞다 (짝수 n 포함)", () => {
+  // 6개월 in-window 실측 4건: −22.80, −10.18, +20.55, +35.50 → 중앙값 = (−10.18+20.55)/2
+  const six = VVIX_REBOUND_BACKTEST.inWindow.rows.find((x) => x.label === "6개월");
+  assert.ok(six);
+  assert.equal(six.n, 4);
+  assert.ok(Math.abs(six.median - 5.19) < 0.01, `6개월 중앙값이 ${six.median} — 5.19여야 함`);
+  // 승/n 은 항상 0..n
+  for (const row of [...VVIX_REBOUND_BACKTEST.inWindow.rows, ...VVIX_REBOUND_BACKTEST.fullSample.rows]) {
+    assert.ok(row.wins >= 0 && row.wins <= row.n, `${row.label} 승수 이상`);
+    assert.ok(row.worst <= row.median, `${row.label} 최악이 중앙값보다 큼`);
+  }
 });

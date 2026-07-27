@@ -52,13 +52,15 @@ export const TIER0_ANCHORS = [
 // fired·tier·state·sizing 어디에도 들어가지 않는다. "얼마나 살 것인가"는 Tier가 정하고,
 // 이 신호는 "공포가 진정되기 시작했는가"만 관찰한다.
 /** VVIX 공포 극단 임계(절대값). 표본 내에서 선택된 값 — 표본 외 검증 전까지 동결. */
-const VVIX_PANIC = 140;
+export const VVIX_PANIC = 140;
 /** 극단 탐색 창(거래일, 기준일 포함). */
 const VVIX_LOOKBACK_TD = 3;
 /** 데이터 구멍 방어: lookback 창의 행이 기준일로부터 이 달력일을 넘으면 '최근'으로 안 친다.
  *  (수집 실패 시 carryForwardEmpty가 묵은 시리즈를 되살리므로 행 인덱스만으론 부족하다.) */
 const VVIX_LOOKBACK_CAL_DAYS = 10;
-/** VVIX 기준일이 VIX 최신일보다 이 거래일 넘게 뒤처지면 stale → UNAVAILABLE. */
+/** VVIX 기준일이 VIX 최신일보다 이 거래일 넘게 뒤처지면 stale → UNAVAILABLE.
+ *  ⚠️ 정확 조인이라 '묵은 VVIX × 오늘 VIX'가 한 행에서 섞이는 일은 구조적으로 불가능하다.
+ *  이 가드가 막는 것은 그게 아니라 **판정 기준일이 과거에 묶인 채 화면은 오늘처럼 보이는 것**이다. */
 const VVIX_STALE_TD = 3;
 
 export type UsState = "IDLE" | "WATCH" | "ARMED" | "ACTIVE_A" | "ACTIVE_B" | "ACTIVE_AB" | "POST";
@@ -425,13 +427,6 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
  */
 export type ReboundStatus = "UNAVAILABLE" | "IDLE" | "PANIC" | "CONFIRMED";
 
-export const REBOUND_LABEL: Record<ReboundStatus, string> = {
-  UNAVAILABLE: "VVIX 데이터 없음",
-  IDLE: "평시",
-  PANIC: "VVIX 공포 극단 · VIX 진정 대기",
-  CONFIRMED: "반등 조건 충족",
-};
-
 export interface VvixRebound {
   status: ReboundStatus;
   /** 판정 기준일(조인 배열 마지막 행) ms — 메인 TERM 기준일과 다를 수 있다. */
@@ -446,8 +441,8 @@ export interface VvixRebound {
   vixChange1d: number | null; // 전일 대비 변화율(비율, 예 −0.081)
   cooling: boolean; // 오늘 VIX < 전일 VIX (엄격 비교, 동률 불인정)
   confirmed: boolean; // panicRecent && cooling
-  /** 현재 CONFIRMED 런의 첫날 ms — 성과 통계가 '첫날 진입' 기준이라 표시 단위를 맞춘다. */
-  episodeStart: number | null;
+  /** 현재 **연속** CONFIRMED 런의 첫날 ms. 성과표의 21거래일 병합 '에피소드'와는 다른 단위다. */
+  runStart: number | null;
   /** 연속 CONFIRMED 일차(0 = 오늘 미충족). */
   days: number;
   /** VVIX 기준일이 VIX 최신일보다 뒤처진 거래일 수(0=최신). */
@@ -469,7 +464,7 @@ const EMPTY_REBOUND: VvixRebound = {
   vixChange1d: null,
   cooling: false,
   confirmed: false,
-  episodeStart: null,
+  runStart: null,
   days: 0,
   staleTd: null,
   history: [],
@@ -510,7 +505,7 @@ export const VVIX_REBOUND_BACKTEST: {
       { label: "1주", n: 5, wins: 3, mean: 1.58, median: 0.96, worst: -0.96 },
       { label: "1개월", n: 5, wins: 4, mean: 3.47, median: 1.31, worst: -1.73 },
       { label: "3개월", n: 5, wins: 3, mean: 6.2, median: 13.14, worst: -11.49 },
-      { label: "6개월", n: 4, wins: 2, mean: 5.77, median: 20.55, worst: -22.8 },
+      { label: "6개월", n: 4, wins: 2, mean: 5.77, median: 5.19, worst: -22.8 },
     ],
   },
 };
@@ -552,19 +547,29 @@ function confirmedAt(rows: ReturnType<typeof reboundRows>, i: number): boolean {
 export function computeVvixRebound(snap: MarketSnapshot): VvixRebound {
   const rows = reboundRows(snap);
   const history = rows.map((r) => ({ t: r.t, v: r.vvix }));
-  if (rows.length < 2) return { ...EMPTY_REBOUND, history };
+  // 과거 CONFIRMED 발생일(차트 마커) — **오늘의 stale 여부와 무관한 과거 사실**이라 조기 반환
+  // 경로에서도 그대로 넘긴다. (예전엔 stale일 때 빈 배열을 넘겨 차트 캡션이 '발생일 0건'이라고
+  // 거짓말을 했다.)
+  const confirmedDates: number[] = [];
+  for (let i = 1; i < rows.length; i++) if (confirmedAt(rows, i)) confirmedDates.push(rows[i].t);
+
+  if (rows.length < 2) return { ...EMPTY_REBOUND, history, confirmedDates };
 
   const L = rows.length - 1;
   const cur = rows[L];
   const prev = rows[L - 1];
 
-  // stale 방어: VVIX가 못 따라오면(수집 실패 후 carryForward 등) 옛 VVIX와 오늘 VIX를 짝지어
-  // 잘못된 CONFIRMED가 뜬다. VIX 최신 거래일과 조인 기준일의 차이를 거래일로 센다.
-  const vixDays = [...new Set((snap.history?.vix ?? []).filter((p) => Number.isFinite(p.v)).map((p) => dayKey(p.t)))].sort(
-    (a, b) => a - b,
-  );
+  // stale 방어: VVIX만 수집이 끊기면(carryForwardEmpty가 묵은 시리즈를 되살리는 경우 등) 판정
+  // 기준일이 과거에 묶인 채 화면은 '오늘'처럼 보인다. VVIX가 못 따라온 VIX 거래일 수를 센다.
+  // ⚠️ 여기서만은 **raw VIX 일자**를 센다(판정 행의 교집합이 아니라). 데이터만으로는
+  // "미국 휴장일 유령봉"과 "VVIX 수집 중단"을 구분할 수 없는데, 교집합으로 세면 VVIX가 통째로
+  // 끊긴 경우가 0으로 집계돼 **stale 감지 자체가 무력화**된다. raw로 세면 최근 며칠에 휴장일이
+  // 끼었을 때 카운트가 1~2 부풀어 게이트가 조금 일찍 트립하지만, 안전장치는 그 방향(보수적)이 맞다.
+  const vixDays = [...new Set((snap.history?.vix ?? []).filter((p) => Number.isFinite(p.v)).map((p) => dayKey(p.t)))];
   const staleTd = vixDays.length > 0 ? vixDays.filter((d) => d > cur.d).length : null;
-  if (staleTd !== null && staleTd > VVIX_STALE_TD) return { ...EMPTY_REBOUND, history, asOf: cur.t, staleTd };
+  if (staleTd !== null && staleTd > VVIX_STALE_TD) {
+    return { ...EMPTY_REBOUND, history, confirmedDates, asOf: cur.t, staleTd };
+  }
 
   // 최근 3거래일(기준일 포함) — 달력 상한 안의 행만 '최근'으로 인정.
   const win = rows.slice(Math.max(0, L - VVIX_LOOKBACK_TD + 1)).filter((r) => cur.d - r.d <= VVIX_LOOKBACK_CAL_DAYS);
@@ -578,20 +583,21 @@ export function computeVvixRebound(snap: MarketSnapshot): VvixRebound {
   const vixChange1d = prev.vix > 0 ? cur.vix / prev.vix - 1 : null;
   const confirmed = panicRecent && cooling;
 
-  // 연속 CONFIRMED 런(에피소드 첫날) — 성과 통계가 '에피소드 첫날 진입' 기준이라 표시를 맞춘다.
+  // **연속 CONFIRMED 런**(gap 0) — "오늘까지 며칠째 켜져 있나"를 보여주기 위한 것이다.
+  // ⚠️ 성과표의 '에피소드'(21거래일 병합)와는 **다른 단위**다. 실데이터에서 CONFIRMED 18일이
+  // 연속 런 10개 / 21거래일 에피소드 5개로 갈린다. 여기서 21거래일 병합을 쓰면 조건이 꺼진
+  // 날에도 '연속 N일차'가 계속 올라가 화면이 거짓말을 하므로, 표시는 런 기준을 쓰고 성과표에는
+  // '첫날 진입 기준'이라고 따로 적는다(용어를 섞지 말 것).
   let days = 0;
-  let episodeStart: number | null = null;
+  let runStart: number | null = null;
   if (confirmed) {
     let i = L;
     while (i >= 1 && confirmedAt(rows, i)) {
       days++;
-      episodeStart = rows[i].t;
+      runStart = rows[i].t;
       i--;
     }
   }
-
-  const confirmedDates: number[] = [];
-  for (let i = 1; i < rows.length; i++) if (confirmedAt(rows, i)) confirmedDates.push(rows[i].t);
 
   const status: ReboundStatus = confirmed ? "CONFIRMED" : panicRecent ? "PANIC" : "IDLE";
   return {
@@ -607,7 +613,7 @@ export function computeVvixRebound(snap: MarketSnapshot): VvixRebound {
     vixChange1d,
     cooling,
     confirmed,
-    episodeStart,
+    runStart,
     days,
     staleTd,
     history,

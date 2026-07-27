@@ -8,6 +8,7 @@ import {
   TIER0_ANCHORS,
   VVIX_REBOUND_ANCHORS,
   VVIX_REBOUND_BACKTEST,
+  VVIX_PANIC,
   STATE_LABEL,
   type BacktestRow,
   type ReboundStatus,
@@ -109,7 +110,8 @@ const REBOUND_BADGE: Record<ReboundStatus, string> = {
 /** 성과 표 한 줄. 승률은 n을 감추지 않게 'W/N건 (P%)' 형태로 쓴다(n=14에 소수점 승률만 쓰면 오도). */
 function BacktestTable({ rows, dim }: { rows: BacktestRow[]; dim?: boolean }) {
   return (
-    <table className={"mt-1 w-full text-[11px] tabular-nums " + (dim ? "text-slate-400" : "text-slate-600")}>
+    <div className="mt-1 overflow-x-auto">
+    <table className={"w-full min-w-[19rem] text-[11px] tabular-nums " + (dim ? "text-slate-400" : "text-slate-600")}>
       <thead>
         <tr className="text-left text-[10px] text-slate-400">
           <th className="font-medium">기간</th>
@@ -139,6 +141,7 @@ function BacktestTable({ rows, dim }: { rows: BacktestRow[]; dim?: boolean }) {
         ))}
       </tbody>
     </table>
+    </div>
   );
 }
 
@@ -152,15 +155,18 @@ function ReboundBlock({ r, v }: { r: VvixRebound; v: ReturnType<typeof verifyVvi
       r.staleTd !== null && r.staleTd > 0
         ? `VVIX 데이터가 최신이 아닙니다 (마지막 관측 ${fmtDate(r.asOf)} · VIX보다 ${r.staleTd}거래일 뒤처짐). 기존 Tier 0·1·2는 정상 계산됩니다.`
         : "VVIX 데이터를 가져오지 못했습니다. 기존 Tier 0·1·2는 정상 계산됩니다.",
-    IDLE: "최근 3거래일 VVIX 140 이상 신호가 없습니다.",
-    PANIC: "최근 3거래일 VVIX 140 이상 — 옵션 변동성 공포는 극단이지만 VIX 하락 확인은 아직 없습니다.",
-    CONFIRMED: "최근 3거래일 VVIX 140 이상 + VIX 전일 대비 하락 — 1주~1개월 단기 반등 확인 신호입니다.",
+    IDLE: `최근 3거래일 VVIX ${VVIX_PANIC} 이상 신호가 없습니다.`,
+    PANIC: `최근 3거래일 VVIX ${VVIX_PANIC} 이상 — 옵션 변동성 공포는 극단이지만 VIX 하락 확인은 아직 없습니다.`,
+    CONFIRMED: `최근 3거래일 VVIX ${VVIX_PANIC} 이상 + VIX 전일 대비 하락 — 1주~1개월 단기 반등 확인 신호입니다.`,
   };
   const sub: Partial<Record<ReboundStatus, string>> = {
     PANIC: "공포 진정 대기",
     CONFIRMED: "Tier 상향 또는 독립 진입권은 아닙니다.",
   };
   const chg = r.vixChange1d === null ? "—" : `${r.vixChange1d >= 0 ? "+" : ""}${(r.vixChange1d * 100).toFixed(1)}%`;
+  // VVIX가 며칠 뒤처졌지만 아직 stale 게이트(3거래일) 안이면 판정은 유효하다. 다만 아래
+  // 값들의 '오늘'은 기준일 기준이라 실제 최신 거래일이 아니다 — 그 사실을 감추지 않는다.
+  const lagging = r.status !== "UNAVAILABLE" && r.staleTd !== null && r.staleTd > 0;
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 p-3">
@@ -178,7 +184,12 @@ function ReboundBlock({ r, v }: { r: VvixRebound; v: ReturnType<typeof verifyVvi
         <span className={"rounded px-2 py-0.5 text-xs font-bold " + REBOUND_CLS[r.status]}>{REBOUND_BADGE[r.status]}</span>
         {r.status === "CONFIRMED" && r.days > 0 && (
           <span className="text-[11px] text-slate-500">
-            첫 확인 {fmtDate(r.episodeStart)} · 연속 {r.days}일차
+            연속 확인 시작 {fmtDate(r.runStart)} · {r.days}일차
+          </span>
+        )}
+        {lagging && (
+          <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800">
+            ⚠️ VVIX가 VIX보다 {r.staleTd}거래일 뒤처짐 — 아래 '오늘'은 {fmtDate(r.asOf)} 기준
           </span>
         )}
       </div>
@@ -199,15 +210,15 @@ function ReboundBlock({ r, v }: { r: VvixRebound; v: ReturnType<typeof verifyVvi
             <span className="text-slate-400">최근 3거래일 최고</span>{" "}
             <span
               className={
-                "font-semibold tabular-nums " + (r.vvixRecentMax !== null && r.vvixRecentMax >= 140 ? "text-indigo-600" : "text-slate-700")
+                "font-semibold tabular-nums " + (r.vvixRecentMax !== null && r.vvixRecentMax >= VVIX_PANIC ? "text-indigo-600" : "text-slate-700")
               }
             >
               {r.vvixRecentMax === null ? "—" : r.vvixRecentMax.toFixed(2)}
             </span>
-            <span className="text-slate-400"> / 140</span>
+            <span className="text-slate-400"> / {VVIX_PANIC}</span>
           </div>
           <div>
-            <span className="text-slate-400">140↑ 발생</span>{" "}
+            <span className="text-slate-400">{VVIX_PANIC}↑ 발생</span>{" "}
             <span className="font-semibold tabular-nums text-slate-700">{r.panicRecent ? fmtDate(r.panicDate) : "없음"}</span>
           </div>
           <div>
@@ -237,7 +248,13 @@ function ReboundBlock({ r, v }: { r: VvixRebound; v: ReturnType<typeof verifyVvi
           <p className="mt-2 text-[10px] leading-relaxed text-slate-500">
             표의 수치는 <strong>에피소드 첫날 진입</strong> 기준(21거래일 병합)입니다. 앱이 보유한 히스토리는 약 5년이라
             <strong> 전체표본 14건 중 5건만 화면에서 재현</strong>되며, 전체표본의 최악값 4개는 전부 이 창(2021~)에서 나왔습니다 —
-            즉 좋은 성과는 대부분 창 밖에 있습니다. 3개월 이후로 갈수록 약세장 중간 반등 실패가 드러납니다(최악 −11.5%/−22.8%).
+            즉 좋은 성과는 대부분 창 밖에 있습니다. 3개월 이후로 갈수록 약세장 중간 반등 실패가 드러납니다
+            (최악{" "}
+            {VVIX_REBOUND_BACKTEST.fullSample.rows
+              .filter((x) => x.label === "3개월" || x.label === "6개월")
+              .map((x) => `${x.label} ${x.worst.toFixed(1)}%`)
+              .join(" · ")}
+            ).
           </p>
           <p className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
             <strong>역할 구분</strong> — Tier 0·1·2는 공포의 깊이와 진입 규모를 판단합니다. VVIX REBOUND는 공포가 진정되기
@@ -268,7 +285,8 @@ function ReboundBlock({ r, v }: { r: VvixRebound; v: ReturnType<typeof verifyVvi
           <summary className="cursor-pointer text-[11px] font-medium text-slate-500">VVIX 단기 반등 확인 차트</summary>
           <div className="mt-1">
             <div className="text-[10px] font-medium text-slate-400">
-              VVIX 종가 (140 = 공포 극단 임계 · 점 = REBOUND CONFIRMED 발생일 {r.confirmedDates.length}건)
+              VVIX 종가 ({VVIX_PANIC} = 공포 극단 임계 · 점 = REBOUND CONFIRMED 발생일, 전 구간 {r.confirmedDates.length}건 —
+              차트는 기본으로 최근 구간만 보여주니 휠로 축소하면 나머지가 보입니다)
             </div>
             <InteractiveLineChart
               series={[{ points: r.history, color: "#4f46e5", label: "VVIX" }]}
@@ -299,7 +317,9 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
       <div className="rounded-lg border border-slate-200 bg-white p-4">
         <h3 className="text-sm font-semibold text-slate-700">US 진입신호 · 나스닥</h3>
         <p className="mt-2 rounded bg-slate-50 px-3 py-2 text-sm text-slate-500">
-          데이터 수집 전 — '지금 갱신'을 눌러 VIX·VIX3M·HY OAS를 수집하세요.
+          {reb.status !== "UNAVAILABLE"
+            ? "TERM(VIX/VIX3M) 판정에 필요한 VIX3M을 못 가져왔습니다 — '지금 갱신'을 눌러보세요. 아래 보조 신호는 VVIX·VIX만 쓰므로 정상 계산됩니다."
+            : "데이터 수집 전 — '지금 갱신'을 눌러 VIX·VIX3M·HY OAS를 수집하세요."}
         </p>
         {/* 메인이 비어도(예: VIX3M만 실패) 보조 신호는 독립적으로 살아있으면 보여준다. */}
         {reb.status !== "UNAVAILABLE" && <ReboundBlock r={reb} v={vv} />}
@@ -448,8 +468,6 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
 
         {/* 보조 신호(VVIX 단기 반등) — Tier 사다리 아래 독립 블록. 위 요소들과 상호작용 없음. */}
         <ReboundBlock r={reb} v={vv} />
-
-
         {/* TERM 추이 + 1.00/1.05 임계선 */}
         {u.termHistory.length > 1 && (
           <div className="mt-3">
