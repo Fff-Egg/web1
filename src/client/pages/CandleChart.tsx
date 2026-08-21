@@ -80,7 +80,7 @@ export function CandleChart({ candles, baselines = [], intraday = false, height 
   const cx = (i: number) => (i + 0.5) * slot;
   const y = (v: number) => PAD + (1 - (v - lo) / (hi - lo)) * (H - 2 * PAD);
 
-  const onMove = (e: React.MouseEvent) => {
+  const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = wrapRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -104,16 +104,18 @@ export function CandleChart({ candles, baselines = [], intraday = false, height 
     <div className="flex select-none" style={{ height: H }}>
       <div
         ref={wrapRef}
-        className="relative flex-1 cursor-crosshair"
-        onMouseMove={onMove}
-        onMouseLeave={() => {
+        className="relative flex-1 touch-pan-y cursor-crosshair"
+        onPointerMove={onMove}
+        onPointerLeave={() => {
           setHover(null);
           drag.current = null;
         }}
-        onMouseDown={(e) => {
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
           drag.current = { x: e.clientX, end };
         }}
-        onMouseUp={() => (drag.current = null)}
+        onPointerUp={() => (drag.current = null)}
+        onPointerCancel={() => (drag.current = null)}
       >
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full" style={{ height: H }}>
           {ticks.map((t) => (
@@ -145,7 +147,7 @@ export function CandleChart({ candles, baselines = [], intraday = false, height 
         {/* OHLC tooltip */}
         {hc && (
           <div
-            className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded bg-slate-800 px-2 py-1 text-[11px] leading-tight text-white shadow"
+            className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 rounded bg-slate-800 px-2 py-1 text-xs leading-tight text-white shadow sm:text-[11px]"
             style={{ left: `${Math.max(12, Math.min(88, hoverRatio * 100))}%` }}
           >
             <div className="mb-0.5 text-slate-300">
@@ -163,7 +165,7 @@ export function CandleChart({ candles, baselines = [], intraday = false, height 
       </div>
 
       {/* right price axis (HTML overlay — not distorted by the SVG stretch) */}
-      <div className="relative shrink-0 text-[10px] text-slate-400" style={{ width: AXIS_W, height: H }}>
+      <div className="relative shrink-0 text-[11px] text-slate-400 sm:text-[10px]" style={{ width: AXIS_W, height: H }}>
         {ticks.map((t) => (
           <div key={t} className="absolute left-1 -translate-y-1/2 tabular-nums" style={{ top: y(t) }}>
             {fmt(t)}

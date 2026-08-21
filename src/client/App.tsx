@@ -49,9 +49,9 @@ export function App() {
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
 
   return (
-    <div className="mx-auto max-w-4xl p-4 sm:p-6">
-      <header className="mb-4 sm:mb-6">
-        <h1 className="text-xl font-bold sm:text-2xl">Feed Watch — Investment Digest</h1>
+    <div className="mx-auto max-w-4xl p-3 sm:p-6">
+      <header className="mb-3 sm:mb-6">
+        <h1 className="text-lg font-bold leading-tight sm:text-2xl">Feed Watch — Investment Digest</h1>
         <p className="text-sm text-slate-500">
           {api.mode === "static" ? "static demo" : "server"}{" "}
           {health.data?.ok ? "online" : "…"}
@@ -72,13 +72,13 @@ export function App() {
           spilling off-screen. -mx pulls it to the screen edges so chips aren't clipped.
           overflow-y-hidden + touch-pan-x keep the swipe strictly horizontal (otherwise
           overflow-x:auto promotes overflow-y to auto and the strip jiggles vertically). */}
-      <nav className="no-scrollbar mb-4 -mx-4 flex gap-1 overflow-x-auto overflow-y-hidden touch-pan-x border-b border-slate-200 px-4 sm:mx-0 sm:mb-6 sm:px-0">
+      <nav className="no-scrollbar mb-4 -mx-3 flex gap-1 overflow-x-auto overflow-y-hidden touch-pan-x border-b border-slate-200 px-3 sm:mx-0 sm:mb-6 sm:px-0">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
             className={
-              "shrink-0 whitespace-nowrap px-3 py-2 text-sm font-medium -mb-px border-b-2 sm:px-4 " +
+              "-mb-px min-h-11 shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium sm:px-4 " +
               (tab === t.id
                 ? "border-slate-900 text-slate-900"
                 : "border-transparent text-slate-500 hover:text-slate-800")

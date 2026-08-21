@@ -8,6 +8,14 @@ export interface LineSeries {
   label: string;
 }
 
+export interface EventMarkerGroup {
+  timestamps: number[];
+  color: string;
+  label: string;
+  shape?: "dot" | "square" | "diamond" | "ring";
+  showLabel?: boolean;
+}
+
 interface Props {
   series: LineSeries[];
   baselines?: number[];
@@ -17,6 +25,8 @@ interface Props {
   /** 첫 시리즈 위에 강조 점을 찍을 타임스탬프(ms) — 예: S2가 실제 ON이었던 날. */
   markers?: number[];
   markerColor?: string;
+  /** 서로 다른 이벤트를 색·모양·라벨로 구분한다. legacy markers와 함께 사용 가능. */
+  eventMarkers?: EventMarkerGroup[];
 }
 
 /** Last point at-or-before time t (binary search — points are ascending). */
@@ -46,7 +56,16 @@ function valAt(pts: SeriesPoint[], t: number): number | null {
  * Hover only moves the crosshair overlay, so everything static (domain, ticks,
  * paths) is memoized on [series, viewport] — a mousemove re-render costs O(1).
  */
-export function InteractiveLineChart({ series, baselines = [], height = 150, decimals = 1, suffix = "", markers = [], markerColor = "#ef4444" }: Props) {
+export function InteractiveLineChart({
+  series,
+  baselines = [],
+  height = 150,
+  decimals = 1,
+  suffix = "",
+  markers = [],
+  markerColor = "#ef4444",
+  eventMarkers = [],
+}: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const nonEmpty = useMemo(() => series.filter((s) => s.points.length > 0), [series]);
   // Longest series drives the x-axis / index / dates.
@@ -131,18 +150,25 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
   }
   const { t0, t1, lo, hi, xOf, y, paths, ticks } = frame;
   // S2 ON 등 강조 마커 — 첫 시리즈 선 위에 crisp HTML 점(SVG는 가로 스트레치라 원이 찌그러짐).
-  const markerDots =
-    markers.length > 0 && nonEmpty[0]
-      ? markers
+  const markerGroups: EventMarkerGroup[] = [
+    ...(markers.length ? [{ timestamps: markers, color: markerColor, label: "강조", shape: "dot" as const }] : []),
+    ...eventMarkers,
+  ];
+  const markerDots = nonEmpty[0]
+    ? markerGroups.flatMap((group, groupIndex) =>
+        group.timestamps
           .filter((t) => t >= t0 && t <= t1)
           .map((t) => {
             const v = valAt(nonEmpty[0].points, t);
-            return v === null ? null : { leftPct: (xOf(t) / W) * 100, top: y(v) };
+            return v === null
+              ? null
+              : { leftPct: (xOf(t) / W) * 100, top: y(v), group, groupIndex, t };
           })
-          .filter((d): d is { leftPct: number; top: number } => d !== null)
-      : [];
+          .filter((d): d is { leftPct: number; top: number; group: EventMarkerGroup; groupIndex: number; t: number } => d !== null),
+      )
+    : [];
 
-  const onMove = (e: React.MouseEvent) => {
+  const onMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = wrapRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
@@ -171,14 +197,18 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
     <div className="flex select-none" style={{ height: H }}>
       <div
         ref={wrapRef}
-        className="relative flex-1 cursor-crosshair"
-        onMouseMove={onMove}
-        onMouseLeave={() => {
+        className="relative flex-1 touch-pan-y cursor-crosshair"
+        onPointerMove={onMove}
+        onPointerLeave={() => {
           setHover(null);
           drag.current = null;
         }}
-        onMouseDown={(e) => (drag.current = { x: e.clientX, end })}
-        onMouseUp={() => (drag.current = null)}
+        onPointerDown={(e) => {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          drag.current = { x: e.clientX, end };
+        }}
+        onPointerUp={() => (drag.current = null)}
+        onPointerCancel={() => (drag.current = null)}
       >
         <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full" style={{ height: H }}>
           {ticks.map((t) => (
@@ -205,25 +235,42 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
         </svg>
 
         {/* 강조 마커(S2 ON 등) — 선 위 crisp 점 + 옅은 후광 */}
-        {markerDots.map((d, i) => (
-          <span
-            key={`mk${i}`}
-            className="pointer-events-none absolute z-[5] block rounded-full"
-            style={{
-              left: `${d.leftPct}%`,
-              top: `${d.top}px`,
-              width: 8,
-              height: 8,
-              transform: "translate(-50%, -50%)",
-              background: markerColor,
-              boxShadow: `0 0 0 2.5px color-mix(in srgb, ${markerColor} 28%, transparent)`,
-            }}
-          />
-        ))}
+        {markerDots.map((d, i) => {
+          const shape = d.group.shape ?? "dot";
+          const transform = shape === "diamond" ? "translate(-50%, -50%) rotate(45deg)" : "translate(-50%, -50%)";
+          return (
+            <span key={`mk${d.t}-${d.groupIndex}-${i}`}>
+              <span
+                className="absolute z-[5] block"
+                title={`${d.group.label} · ${new Date(d.t).toLocaleDateString("ko-KR")}`}
+                aria-label={d.group.label}
+                style={{
+                  left: `${d.leftPct}%`,
+                  top: `${d.top}px`,
+                  width: 8,
+                  height: 8,
+                  transform,
+                  borderRadius: shape === "dot" || shape === "ring" ? "9999px" : shape === "square" ? "2px" : "1px",
+                  border: shape === "ring" ? `2px solid ${d.group.color}` : undefined,
+                  background: shape === "ring" ? "white" : d.group.color,
+                  boxShadow: `0 0 0 2.5px color-mix(in srgb, ${d.group.color} 28%, transparent)`,
+                }}
+              />
+              {d.group.showLabel && (
+                <span
+                  className="pointer-events-none absolute z-[6] -translate-x-1/2 whitespace-nowrap rounded bg-white/90 px-1 py-0.5 text-[9px] font-semibold shadow-sm sm:text-[8px]"
+                  style={{ left: `${d.leftPct}%`, top: Math.max(0, d.top - 19), color: d.group.color }}
+                >
+                  {d.group.label}
+                </span>
+              )}
+            </span>
+          );
+        })}
 
         {hover && hoverT !== null && (
           <div
-            className="pointer-events-none absolute top-0 z-10 rounded bg-slate-800/90 px-2 py-1 text-[11px] leading-tight text-white shadow"
+            className="pointer-events-none absolute top-0 z-10 rounded bg-slate-800/90 px-2 py-1 text-xs leading-tight text-white shadow sm:text-[11px]"
             style={{
               left: `${hoverLeftPct}%`,
               // Sit beside the crosshair (never on it): flip to the left of the
@@ -250,7 +297,7 @@ export function InteractiveLineChart({ series, baselines = [], height = 150, dec
       </div>
 
       {/* right price axis (HTML overlay) */}
-      <div className="relative shrink-0 text-[10px] text-slate-400" style={{ width: AXIS_W, height: H }}>
+      <div className="relative shrink-0 text-[11px] text-slate-400 sm:text-[10px]" style={{ width: AXIS_W, height: H }}>
         {ticks.map((t) => (
           <div key={t} className="absolute left-1 -translate-y-1/2 tabular-nums" style={{ top: y(t) }}>
             {t.toFixed(decimals)}

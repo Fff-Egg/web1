@@ -1,4 +1,7 @@
 import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
+import { computeLiveUsConfirmation, computeStagedExecutionTimeline } from "./kfearStaged.js";
+import type { StagedExecutionDay, StagedTargetPct, StagedAddedPct, UsTierValue, UsConfirmationLabel } from "./kfearStaged.js";
+import { computeUsEntry } from "./usEntry.js";
 
 /**
  * K-공포지수 (0~100) + 캐피출레이션 3신호 — 코스피/코스닥 개별 계산.
@@ -100,6 +103,29 @@ export interface MarketFear {
   s2History: SeriesPoint[];
   s3History: SeriesPoint[];
   s2OnDates: number[];
+  officialStrongOnDates: number[];
+  /** 공식 v5와 분리된 실험적 계단식 실행 상태. */
+  spikeToday: boolean;
+  spikePeakDate: string | null;
+  spikeDaysAgo: number | null;
+  decline1: boolean;
+  decline2: boolean;
+  stage1EntryEvent: boolean;
+  stage2UpgradeEvent: boolean;
+  stageEpisodeId: string | null;
+  stage1Date: string | null;
+  stage2Date: string | null;
+  stagedTargetPct: StagedTargetPct;
+  stagedAddedPct: StagedAddedPct;
+  officialS2: boolean;
+  officialStrong: boolean;
+  stage1OnDates: number[];
+  firstDeclineOnDates: number[];
+  stage2OnDates: number[];
+  /** 미국 티어는 확인 정보일 뿐 공식/계단식 비중을 바꾸지 않는다. */
+  usTierNow: UsTierValue;
+  usConfirmedAsOfDate: string | null;
+  usConfirmationLabel: UsConfirmationLabel;
   /** 최종 권장 비중 = 등급 기본 비중 × 이중 얕음게이트 (코스닥 단독이면 0%). */
   sizing: Sizing;
   // 코스닥 전용:
@@ -111,6 +137,48 @@ export interface KFearResult {
   kospi: MarketFear;
   kosdaq: MarketFear;
   kospiAccompanies: boolean;
+}
+
+/** 업로드된 장기 원자료로 재검증한 공식 v5 STRONG 회귀 앵커. */
+export const OFFICIAL_STRONG_ANCHORS = [
+  "2008-10-29",
+  "2011-08-25",
+  "2011-09-29",
+  "2018-11-01",
+  "2020-03-23",
+  "2022-06-17",
+  "2023-10-24",
+] as const;
+
+export interface OfficialStrongAnchorVerify {
+  hit: number;
+  inWindow: number;
+  misses: string[];
+  outOfWindow: string[];
+}
+
+/** 저장된 히스토리 범위 안에서 공식 STRONG 앵커가 그대로 켜지는지 확인한다. */
+export function verifyOfficialStrongAnchors(market: MarketFear): OfficialStrongAnchorVerify {
+  if (market.fearHistory.length === 0) {
+    return { hit: 0, inWindow: 0, misses: [], outOfWindow: [...OFFICIAL_STRONG_ANCHORS] };
+  }
+  const min = market.fearHistory[0].t;
+  const max = market.fearHistory[market.fearHistory.length - 1].t;
+  const on = new Set(market.officialStrongOnDates.map((t) => new Date(t + 9 * 3_600_000).toISOString().slice(0, 10)));
+  const misses: string[] = [];
+  const outOfWindow: string[] = [];
+  let hit = 0;
+  let inWindow = 0;
+  for (const anchor of OFFICIAL_STRONG_ANCHORS) {
+    const t = Date.parse(`${anchor}T00:00:00Z`);
+    if (t < min || t > max) outOfWindow.push(anchor);
+    else {
+      inWindow++;
+      if (on.has(anchor)) hit++;
+      else misses.push(anchor);
+    }
+  }
+  return { hit, inWindow, misses, outOfWindow };
 }
 
 // ── 시계열 헬퍼 (pandas 동작 이식) ──
@@ -276,6 +344,11 @@ interface Built {
   s2History: SeriesPoint[]; // 반대매매 금액 1년 분위(%) 추이 (임계 95=상위5%)
   s3History: SeriesPoint[]; // 60일선 이격도 편차(%) 추이 (임계 −8)
   s2OnDates: number[]; // S2가 실제 ON이었던 날(ms) — 분위 차트 위 마커용
+  officialStrongOnDates: number[];
+  staged: StagedExecutionDay;
+  stage1OnDates: number[];
+  firstDeclineOnDates: number[];
+  stage2OnDates: number[];
 }
 
 const nn = (v: number): number | null => (Number.isFinite(v) ? v : null);
@@ -299,6 +372,25 @@ const fmtMD = (t: number): string => {
   return `${d.getUTCMonth() + 1}/${d.getUTCDate()}`;
 };
 
+const EMPTY_STAGED: StagedExecutionDay = {
+  t: 0,
+  spikeToday: false,
+  spikeWithin6Days: false,
+  spikePeakDate: null,
+  spikeDaysAgo: null,
+  decline1: false,
+  decline2: false,
+  stage1EntryEvent: false,
+  stage2UpgradeEvent: false,
+  stageEpisodeId: null,
+  stage1Date: null,
+  stage2Date: null,
+  stagedTargetPct: 0,
+  stagedAddedPct: 0,
+  officialS2: false,
+  officialStrong: false,
+};
+
 /**
  * 한 시장(코스피 or 코스닥)의 3신호 + FEAR를 계산. price는 그 시장 지수 종가,
  * credit은 그 시장 신용거래융자(유가 or 코스닥), liq는 공통 반대매매 비중.
@@ -318,6 +410,11 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s2History: [],
     s3History: [],
     s2OnDates: [],
+    officialStrongOnDates: [],
+    staged: EMPTY_STAGED,
+    stage1OnDates: [],
+    firstDeclineOnDates: [],
+    stage2OnDates: [],
     signals: [
       { key: "S1 신용청산", met: false, value: "—", criteria: "1년 피크 −8%↓ & 10일 −3%↓ & 지수 10일↓", detail: "데이터 없음", level: 0 },
       { key: "S2 반대매매", met: false, value: "—", criteria: "스파이크(6일내, 금액 1년 상위5%) & 2일 연속↓", detail: "데이터 없음", level: 0 },
@@ -405,6 +502,20 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   }
   const s2 = spike6.map((sp, i) => sp && decline2[i]); // v5: 스파이크(6일내) & 2일 연속↓
 
+  // 공식 v5 S2는 위 배열 그대로 유지하고, 계단식 실행은 별도 상태머신에서 계산한다.
+  // 4성분 완전 워밍업 이전 FEAR는 Stage 1 후보로 전달하지 않는다.
+  const stagedTimeline = computeStagedExecutionTimeline(
+    dates.map((t, i) => ({
+      t,
+      fear: Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i]) ? fear[i] : null,
+      s1: s1[i],
+      s3: s3[i],
+      amount: nn(amtA[i]),
+      amountPercentile: nn(amtPct[i]),
+      officialS2: s2[i],
+    })),
+  );
+
   // 차트는 4성분이 **모두** 찬 뒤부터만(성분별 워밍업이 달라 — F4 20+252, F3 60+252 등
   // — 초기엔 일부 성분만으로 FEAR가 계산돼 왜곡됨). 완전 워밍업(~311거래일) 지점만 그림.
   const fearHistory: SeriesPoint[] = [];
@@ -412,6 +523,11 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
   const s2History: SeriesPoint[] = []; // 반대매매 금액 분위 %
   const s3History: SeriesPoint[] = []; // 이격도 편차 %
   const s2OnDates: number[] = []; // S2 실제 점등일(마커)
+  const officialStrongOnDates: number[] = [];
+  const stage1OnDates: number[] = [];
+  const firstDeclineOnDates: number[] = [];
+  const stage2OnDates: number[] = [];
+  const firstDeclineSeen = new Set<string>();
   for (let i = 0; i < n; i++) {
     if (!(Number.isFinite(f1[i]) && Number.isFinite(f2[i]) && Number.isFinite(f3[i]) && Number.isFinite(f4[i]))) continue;
     fearHistory.push({ t: dates[i], v: Math.round(fear[i] * 10) / 10 });
@@ -419,6 +535,14 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     if (Number.isFinite(amtPct[i])) s2History.push({ t: dates[i], v: Math.round(amtPct[i] * 1000) / 10 });
     if (Number.isFinite(disp[i])) s3History.push({ t: dates[i], v: Math.round((disp[i] - 100) * 10) / 10 });
     if (s2[i]) s2OnDates.push(dates[i]);
+    if (fear[i] >= FEAR_ARM && s1[i] && s2[i] && s3[i]) officialStrongOnDates.push(dates[i]);
+    const stagedDay = stagedTimeline[i];
+    if (stagedDay.stage1EntryEvent) stage1OnDates.push(dates[i]);
+    if (stagedDay.stage2UpgradeEvent) stage2OnDates.push(dates[i]);
+    if (stagedDay.stageEpisodeId && stagedDay.decline1 && !firstDeclineSeen.has(stagedDay.stageEpisodeId)) {
+      firstDeclineSeen.add(stagedDay.stageEpisodeId);
+      firstDeclineOnDates.push(dates[i]);
+    }
   }
 
   // 최신 행
@@ -501,6 +625,11 @@ function buildMarket(price: SeriesPoint[], credit: SeriesPoint[], liq: SeriesPoi
     s2History,
     s3History,
     s2OnDates,
+    officialStrongOnDates,
+    staged: stagedTimeline[L] ?? EMPTY_STAGED,
+    stage1OnDates,
+    firstDeclineOnDates,
+    stage2OnDates,
   };
 }
 
@@ -564,6 +693,9 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
 
   const pk = phase(bk.fear, bk.all3, bk.nOn, bk.creditDd);
   const pq = phase(bq.fear, bq.all3, bq.nOn, bq.creditDd);
+  const us = computeUsEntry(snap);
+  const usKospi = computeLiveUsConfirmation(us.tierHistory, bk.asOf);
+  const usKosdaq = computeLiveUsConfirmation(us.tierHistory, bq.asOf);
 
   // 코스피 동반 판정 (3-3): 코스닥 신호의 신뢰 등급을 좌우.
   // FEAR≥90 단독으로 단순화 — FEAR는 4성분(신용속도·반대매매·이격도·변동성) 종합이라
@@ -579,6 +711,21 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
     grade: pk.grade,
     size: pk.size,
     sizing: computeSizing(pk.grade, bk.creditDd, bk.dispDev, false), // 코스피는 단독 개념 없음(기준 시장)
+    spikeToday: bk.staged.spikeToday,
+    spikePeakDate: bk.staged.spikePeakDate,
+    spikeDaysAgo: bk.staged.spikeDaysAgo,
+    decline1: bk.staged.decline1,
+    decline2: bk.staged.decline2,
+    stage1EntryEvent: bk.staged.stage1EntryEvent,
+    stage2UpgradeEvent: bk.staged.stage2UpgradeEvent,
+    stageEpisodeId: bk.staged.stageEpisodeId,
+    stage1Date: bk.staged.stage1Date,
+    stage2Date: bk.staged.stage2Date,
+    stagedTargetPct: bk.staged.stagedTargetPct,
+    stagedAddedPct: bk.staged.stagedAddedPct,
+    officialS2: bk.staged.officialS2,
+    officialStrong: bk.staged.officialStrong,
+    ...usKospi,
   };
   const kosdaq: MarketFear = {
     market: "코스닥",
@@ -588,6 +735,21 @@ export function computeKFear(snap: MarketSnapshot): KFearResult {
     sizing: computeSizing(pq.grade, bq.creditDd, bq.dispDev, kosdaqRegime === "KOSDAQ_ONLY"), // 단독(미동반)=0%
     regime: kosdaqRegime,
     signaling: kosdaqSignaling,
+    spikeToday: bq.staged.spikeToday,
+    spikePeakDate: bq.staged.spikePeakDate,
+    spikeDaysAgo: bq.staged.spikeDaysAgo,
+    decline1: bq.staged.decline1,
+    decline2: bq.staged.decline2,
+    stage1EntryEvent: bq.staged.stage1EntryEvent,
+    stage2UpgradeEvent: bq.staged.stage2UpgradeEvent,
+    stageEpisodeId: bq.staged.stageEpisodeId,
+    stage1Date: bq.staged.stage1Date,
+    stage2Date: bq.staged.stage2Date,
+    stagedTargetPct: bq.staged.stagedTargetPct,
+    stagedAddedPct: bq.staged.stagedAddedPct,
+    officialS2: bq.staged.officialS2,
+    officialStrong: bq.staged.officialStrong,
+    ...usKosdaq,
   };
   return { kospi, kosdaq, kospiAccompanies };
 }

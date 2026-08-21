@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { MarketSnapshot } from "../data/client.js";
 import { computeKFear, GRADE_LABEL, type Grade, type MarketFear } from "./kfear.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
+import { MobileFold } from "./MobileFold.js";
 
 /**
  * K-공포지수 대시보드 — 시황분석 맨 아래. 코스피/코스닥 각각 0~100 공포지수(FEAR)
@@ -52,23 +53,23 @@ function MarketCard({ m }: { m: MarketFear }) {
 
   return (
     <div className="rounded-lg border border-slate-200 p-3">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-semibold text-slate-700">{m.market}</span>
+      <div className="flex flex-col items-start gap-1.5 sm:flex-row sm:items-center sm:justify-between sm:gap-2">
+        <span className="text-base font-semibold text-slate-700 sm:text-sm">{m.market}</span>
         {/* 코스닥 단독이면 등급과 무관하게 '관찰 — 동반 대기'(v3 §8-1). */}
         {isSolo ? (
           <span className="rounded bg-amber-200 px-2 py-0.5 text-xs font-bold text-amber-800" title={`FEAR·신호상 ${m.grade}이나 코스피 미동반이라 관찰(0%)`}>
             관찰 — 동반 대기
           </span>
         ) : (
-          <span className={"rounded px-2 py-0.5 text-xs font-bold " + GRADE_CLS[m.grade]}>
-            {m.grade} {GRADE_LABEL[m.grade]}
+          <span className={"rounded px-2 py-1 text-xs font-bold sm:py-0.5 " + GRADE_CLS[m.grade]}>
+            공식 v5 · {m.grade} {GRADE_LABEL[m.grade]}
           </span>
         )}
       </div>
 
       {/* FEAR 게이지 */}
       <div className="mt-2 flex items-end gap-2">
-        <span className={"text-3xl font-bold tabular-nums " + c.text}>{m.fear === null ? "—" : m.fear.toFixed(1)}</span>
+        <span className={"text-4xl font-bold tabular-nums sm:text-3xl " + c.text}>{m.fear === null ? "—" : m.fear.toFixed(1)}</span>
         <span className="pb-1 text-xs text-slate-400">/ 100 공포지수</span>
       </div>
       <div className="relative mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -78,9 +79,9 @@ function MarketCard({ m }: { m: MarketFear }) {
       </div>
       {/* 최종 권장 비중 — v4: 코스닥 단독=0% / 등급 기본비중 × 이중 얕음게이트. */}
       <div className="mt-2 rounded-md bg-slate-50 px-2.5 py-2">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="text-xs font-medium text-slate-500">권장 비중</span>
-          <span className="flex items-baseline gap-1.5">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <span className="text-sm font-medium text-slate-500 sm:text-xs">공식 v5 권장 비중</span>
+          <span className="flex flex-wrap items-baseline justify-end gap-1.5">
             {showRegimeOk && (
               <span
                 className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold text-emerald-700"
@@ -97,10 +98,10 @@ function MarketCard({ m }: { m: MarketFear }) {
                 관찰 — 코스피 동반 대기
               </span>
             )}
-            <span className="text-2xl font-bold tabular-nums text-slate-800">{m.sizing.pct}%</span>
+            <span className="text-3xl font-bold tabular-nums text-slate-800 sm:text-2xl">{m.sizing.pct}%</span>
           </span>
         </div>
-        <div className="mt-0.5 flex items-center justify-between text-[10px] text-slate-400">
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-400 sm:mt-0.5 sm:text-[10px]">
           <span>
             {isSolo ? (
               "코스닥 단독(코스피 미동반) → 0% 관찰"
@@ -116,9 +117,54 @@ function MarketCard({ m }: { m: MarketFear }) {
           <span>{m.nOn}/3 신호</span>
         </div>
       </div>
+
+      {/* 공식 등급/권장비중을 덮지 않는 실험적 계단식 실행 레이어. */}
+      <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/60 px-2.5 py-2">
+        <div className="flex flex-wrap items-center justify-between gap-1.5">
+          <span className="text-sm font-semibold text-indigo-800 sm:text-xs">계단식 실행 실험</span>
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            {m.stagedTargetPct === 60 && (
+              <span className="rounded bg-teal-600 px-1.5 py-0.5 text-[10px] font-bold text-white">1차 진입 · 60%</span>
+            )}
+            {m.stagedTargetPct === 100 && (
+              <span className="rounded bg-indigo-600 px-1.5 py-0.5 text-[10px] font-bold text-white">2차 확인 · +40%</span>
+            )}
+            <span className="text-2xl font-bold tabular-nums text-indigo-900 sm:text-lg">목표 {m.stagedTargetPct}%</span>
+          </div>
+        </div>
+        <div className="mt-0.5 text-xs font-medium text-indigo-600 sm:text-[10px]">예비대 기준 비중 · 공식 v5 비중과 별도</div>
+        {m.stagedTargetPct === 60 ? (
+          <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-[11px]">
+            FEAR≥90·신용청산·이격도와 함께 반대매매 금액이 1년 상위 5%에 진입했습니다. 빠른 V자 반등 참여를 위한
+            1차 구간이며 청산 정점 통과는 아직 미확인입니다.
+          </p>
+        ) : m.stagedTargetPct === 100 ? (
+          <p className="mt-1 text-xs leading-relaxed text-slate-600 sm:text-[11px]">
+            같은 스파이크 이후 반대매매 금액이 2일 연속 엄격 감소했습니다. 청산 정점 통과 확인으로 남은 40%를
+            추가한 상태입니다. 공식 STRONG은 별도 조건으로 판정됩니다.
+          </p>
+        ) : (
+          <p className="mt-1 text-xs leading-relaxed text-slate-500 sm:text-[11px]">현재 신규 계단식 진입 이벤트 없음. 목표 0% 표시는 기존 보유분 매도 지시가 아닙니다.</p>
+        )}
+        {(m.stage1Date || m.stage2Date) && (
+          <div className="mt-1 text-[10px] tabular-nums text-slate-500">
+            에피소드 {m.stageEpisodeId ?? "—"} · 1차 {m.stage1Date ?? "—"} · 2차 {m.stage2Date ?? "대기"}
+          </div>
+        )}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs sm:mt-1 sm:text-[10px]">
+          <span className={"rounded px-1.5 py-0.5 font-semibold " + (m.usConfirmationLabel === "미국 확인 없음" ? "bg-amber-100 text-amber-700" : "bg-emerald-100 text-emerald-700")}>
+            미국 {m.usConfirmationLabel}
+          </span>
+          {m.usConfirmedAsOfDate && <span className="text-slate-500">첫 확인 {m.usConfirmedAsOfDate}</span>}
+          {m.usConfirmationLabel === "미국 확인 없음" && (
+            <span className="text-amber-700">· 국내 청산만으로 글로벌 약세장 지속 위험을 판별할 수 없음(비중 자동 축소 없음)</span>
+          )}
+        </div>
+      </div>
+      <MobileFold label="신호 조건 · 세부 차트 보기" className="mt-2">
       {/* 이중 얕음게이트 상태 (depth 사다리 폐지 — v4 §7-3). 신용·이격도 각각 얕음/깊음. */}
       {!isSolo && m.sizing.weight > 0 && (
-        <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px] tabular-nums">
+        <div className="mt-2 flex flex-wrap items-center gap-1 text-xs tabular-nums sm:mt-1 sm:text-[10px]">
           <span className="text-slate-400">이중 게이트 →</span>
           <span className={"rounded px-1.5 py-0.5 " + (creditShallow ? "bg-slate-100 text-slate-400" : "bg-red-100 font-semibold text-red-700")}>
             신용 {ddTxt} {creditShallow ? "얕음" : "깊음✓"}
@@ -149,15 +195,15 @@ function MarketCard({ m }: { m: MarketFear }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline justify-between gap-2">
                 <div className="flex min-w-0 items-center gap-1.5">
-                  <span className="text-xs font-medium text-slate-700">{s.key}</span>
-                  <span className={"shrink-0 rounded px-1 py-0.5 text-[9px] font-semibold " + LEVEL_CLS[s.level]}>
+                  <span className="text-sm font-medium text-slate-700 sm:text-xs">{s.key}</span>
+                  <span className={"shrink-0 rounded px-1 py-0.5 text-[10px] font-semibold sm:text-[9px] " + LEVEL_CLS[s.level]}>
                     {LEVEL_LABEL[s.level]}
                   </span>
                 </div>
-                <span className="shrink-0 text-xs font-semibold tabular-nums text-slate-800">{s.value}</span>
+                <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-800 sm:text-xs">{s.value}</span>
               </div>
-              <div className="text-[10px] text-slate-400">조건: {s.criteria}</div>
-              <div className="text-[11px] text-slate-500">{s.detail}</div>
+              <div className="mt-0.5 text-xs leading-relaxed text-slate-400 sm:mt-0 sm:text-[10px]">조건: {s.criteria}</div>
+              <div className="text-xs leading-relaxed text-slate-500 sm:text-[11px]">{s.detail}</div>
             </div>
           </li>
         ))}
@@ -190,18 +236,23 @@ function MarketCard({ m }: { m: MarketFear }) {
       )}
       {m.s2History.length > 1 && (
         <div className="mt-2">
-          <div className="flex items-center gap-1.5 text-[10px] font-medium text-slate-400">
-            <span>S2 반대매매 금액 1년 분위 추이 (95 = 상위5%)</span>
-            <span className="inline-flex items-center gap-1 text-slate-500">
-              · <span className="inline-block h-2 w-2 rounded-full bg-red-500" /> S2 실제 ON ({m.s2OnDates.length})
-            </span>
+          <div className="text-[10px] font-medium text-slate-400">S2 반대매매 금액 1년 분위 추이 (95 = 상위5%)</div>
+          <div className="flex flex-wrap gap-x-2 text-[9px] text-slate-500">
+            <span className="text-teal-700">● 1차 60% ({m.stage1OnDates.length})</span>
+            <span className="text-amber-700">■ 첫 감소·추가 0% ({m.firstDeclineOnDates.length})</span>
+            <span className="text-indigo-700">◆ 2차 +40% ({m.stage2OnDates.length})</span>
+            <span className="text-red-600">○ 공식 v5 S2 ({m.s2OnDates.length})</span>
           </div>
-          <div className="text-[9px] text-slate-400">주황 곡선은 원재료(분위)로 자주 출렁 — 실제 S2는 95 스파이크 후 2일↓ 확인해야 점등(●)이라 훨씬 드묾</div>
+          <div className="text-[9px] text-slate-400">계단식 이벤트와 공식 S2는 별도 상태입니다. 첫 감소는 참고만 하며 비중은 바뀌지 않습니다.</div>
           <InteractiveLineChart
             series={[{ points: m.s2History, color: "#f97316", label: "금액 분위" }]}
             baselines={[95]}
-            markers={m.s2OnDates}
-            markerColor="#ef4444"
+            eventMarkers={[
+              { timestamps: m.s2OnDates, color: "#ef4444", label: "공식 v5 S2", shape: "ring" },
+              { timestamps: m.firstDeclineOnDates, color: "#d97706", label: "첫 감소 · 추가 0%", shape: "square" },
+              { timestamps: m.stage1OnDates, color: "#0d9488", label: "1차 60%", shape: "dot", showLabel: true },
+              { timestamps: m.stage2OnDates, color: "#4f46e5", label: "2차 +40%", shape: "diamond", showLabel: true },
+            ]}
             decimals={0}
             height={90}
           />
@@ -219,6 +270,7 @@ function MarketCard({ m }: { m: MarketFear }) {
           />
         </div>
       )}
+      </MobileFold>
     </div>
   );
 }
@@ -241,10 +293,10 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
         : "오늘 특이 공포 신호 없음 (양시장 대기/관찰)";
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-700">
-          K-공포지수 · 캐피출레이션 바닥 <span className="text-xs font-normal text-slate-400">코스피·코스닥 · FEAR(0~100)+3신호</span>
+    <div className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4">
+      <div className="mb-2 flex flex-col items-start gap-0.5 sm:mb-1 sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between sm:gap-2">
+        <h3 className="text-base font-semibold leading-tight text-slate-700 sm:text-sm">
+          K-공포지수 · 캐피출레이션 바닥 <span className="mt-0.5 block text-[11px] font-normal text-slate-400 sm:mt-0 sm:inline sm:text-xs">코스피·코스닥 · FEAR(0~100)+3신호</span>
         </h3>
         <span className="text-xs text-slate-400">
           기준일 {fmtDate(asOf)}
@@ -254,7 +306,7 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
 
       <div
         className={
-          "mb-3 rounded px-3 py-2 text-sm font-medium " +
+          "mb-3 rounded px-3 py-2.5 text-sm font-semibold leading-relaxed sm:py-2 sm:font-medium " +
           (active.length > 0 ? "bg-red-50 text-red-700" : "bg-slate-50 text-slate-600")
         }
       >
@@ -266,7 +318,8 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
         <MarketCard m={kosdaq} />
       </div>
 
-      <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+      <MobileFold label="계산 방식 · 백테스트 설명 보기" className="mt-3">
+      <div className="rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
         <strong>권장 비중 = 등급비중 × 이중게이트.</strong> 등급은 FEAR≥90 + 신호개수:{" "}
         <strong>STRONG(3신호) 100 · BUY(2신호) 60 · ARMED(1신호) 50 · WATCH(FEAR&lt;90&amp;2신호+) 45 · IDLE 0</strong>.{" "}
         <span className="text-slate-500">depth 사다리 폐지 [FEAR≥90 시점엔 신용이 이미 깊어 4단 무의미 — 20건 중 18건이 이미 DD≤−8%].</span>
@@ -288,6 +341,7 @@ export function KFearPanel({ data }: { data: MarketSnapshot }) {
         ⚠️ 이 지표는 <strong>소표본 백테스트</strong> 기반이며 <strong>투자 권유가 아닙니다</strong>. 모든 판단과 결과는
         사용자 책임입니다. FEAR·신호는 완전 워밍업(~311거래일) 이후만 신뢰하세요(차트는 그 이후만 표시).
       </p>
+      </MobileFold>
     </div>
   );
 }

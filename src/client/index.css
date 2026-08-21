@@ -11,6 +11,15 @@ body {
   @apply bg-slate-50 text-slate-900 antialiased;
 }
 
+/* Long dashboard details are folded on phones and opened programmatically on
+   desktop so the existing wide-screen layout remains unchanged. */
+.mobile-fold-summary::-webkit-details-marker { display: none; }
+.mobile-fold[open] .mobile-fold-chevron { transform: rotate(180deg); }
+.mobile-fold[open] > .mobile-fold-content { @apply mt-2; }
+@media (min-width: 640px) {
+  .mobile-fold[open] > .mobile-fold-content { margin-top: 0; }
+}
+
 /* Horizontal scroll strips (e.g. the mobile tab bar): scroll within, no visible bar. */
 .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
 .no-scrollbar::-webkit-scrollbar { display: none; }

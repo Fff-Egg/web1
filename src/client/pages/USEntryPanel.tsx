@@ -17,6 +17,7 @@ import {
   type VvixRebound,
 } from "./usEntry.js";
 import { InteractiveLineChart } from "./InteractiveLineChart.js";
+import { MobileFold } from "./MobileFold.js";
 
 /**
  * US 진입신호 실행기 — 시황분석 K-공포지수 바로 아래. 나스닥 진입신호를 절대값 2트랙
@@ -84,7 +85,7 @@ function MetricRow({
           <span className="text-xs font-medium text-slate-700">{label}</span>
           <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-800">{value}</span>
         </div>
-        <div className="text-[10px] text-slate-400">{thresholds}</div>
+        <div className="text-xs leading-relaxed text-slate-400 sm:text-[10px]">{thresholds}</div>
       </div>
     </div>
   );
@@ -314,7 +315,7 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
 
   if (!u.hasData) {
     return (
-      <div className="rounded-lg border border-slate-200 bg-white p-4">
+      <div className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4">
         <h3 className="text-sm font-semibold text-slate-700">US 진입신호 · 나스닥</h3>
         <p className="mt-2 rounded bg-slate-50 px-3 py-2 text-sm text-slate-500">
           {reb.status !== "UNAVAILABLE"
@@ -341,11 +342,11 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
             : "평시 — 진입 신호 없음";
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-700">
+    <div className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4">
+      <div className="mb-2 flex flex-col items-start gap-0.5 sm:mb-1 sm:flex-row sm:flex-wrap sm:items-baseline sm:justify-between sm:gap-2">
+        <h3 className="text-base font-semibold leading-tight text-slate-700 sm:text-sm">
           US 진입신호 · 나스닥{" "}
-          <span className="text-xs font-normal text-slate-400">TERM(VIX/VIX3M) 2트랙 · A≥1.05 / B≥1.00&amp;HY≥4.5</span>
+          <span className="mt-0.5 block text-[11px] font-normal text-slate-400 sm:mt-0 sm:inline sm:text-xs">TERM(VIX/VIX3M) 2트랙 · A≥1.05 / B≥1.00&amp;HY≥4.5</span>
         </h3>
         <span className="text-xs text-slate-400">
           기준일 {fmtDate(u.asOf)} · HY {fmtDate(u.hyAsOf)}
@@ -354,7 +355,7 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
 
       <div
         className={
-          "mb-3 rounded px-3 py-2 text-sm font-medium " +
+          "mb-3 rounded px-3 py-2.5 text-sm font-semibold leading-relaxed sm:py-2 sm:font-medium " +
           (active ? "bg-red-50 text-red-700" : u.tier0 ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-slate-600")
         }
       >
@@ -364,14 +365,14 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
       <div className="rounded-lg border border-slate-200 p-3">
         {/* 상태 배지 + Tier 0 칩 + TERM 큰 값 */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className={"rounded px-2 py-0.5 text-xs font-bold " + STATE_CLS[u.state]}>
+          <span className={"rounded px-2 py-1 text-xs font-bold sm:py-0.5 " + STATE_CLS[u.state]}>
             {u.state} {STATE_LABEL[u.state]}
           </span>
           {u.tier0 && <span className="rounded bg-emerald-600 px-2 py-0.5 text-xs font-bold text-white">Tier 0 조정매수</span>}
           {u.mega && <span className="rounded bg-purple-700 px-2 py-0.5 text-xs font-bold text-white">⚡ MEGA (VIX≥40)</span>}
         </div>
         <div className="mt-2 flex items-end gap-2">
-          <span className={"text-3xl font-bold tabular-nums " + tc.text}>{u.term === null ? "—" : u.term.toFixed(3)}</span>
+          <span className={"text-4xl font-bold tabular-nums sm:text-3xl " + tc.text}>{u.term === null ? "—" : u.term.toFixed(3)}</span>
           <span className="pb-1 text-xs text-slate-400">TERM = VIX/VIX3M</span>
         </div>
         <div className="relative mt-1 h-2 w-full overflow-hidden rounded-full bg-slate-100">
@@ -384,7 +385,7 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
         {/* ACTIVE 추가 표시 — 추격 진입 판단용 */}
         {active && (
           <div className="mt-2 rounded-md bg-red-50 px-2.5 py-2 text-xs text-red-800">
-            <div className="flex items-baseline justify-between">
+            <div className="flex flex-wrap items-baseline justify-between gap-1">
               <span className="font-medium">첫 발동 {fmtDate(u.firstFired)}</span>
               {u.nasdaqSince !== null && (
                 <span className="tabular-nums">
@@ -396,12 +397,13 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
                 </span>
               )}
             </div>
-            <div className="mt-0.5 text-[11px] text-red-600">
+            <div className="mt-1 text-xs leading-relaxed text-red-600 sm:mt-0.5 sm:text-[11px]">
               사이징: 일괄 기본 [백테스트 6달 +21.3%·승률 100%·최악 +2.7%] · 보험형 70% 즉시 + 30% @첫진입가 −10%
             </div>
           </div>
         )}
 
+        <MobileFold label="조건 · 티어 · 세부 차트 보기" className="mt-3 sm:mt-2">
         {/* 3지표 */}
         <div className="mt-2 divide-y divide-slate-100">
           <MetricRow
@@ -444,7 +446,7 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
               <div
                 key={row.t}
                 className={
-                  "flex flex-wrap items-center justify-between gap-x-2 rounded px-2 py-1 text-[11px] " +
+                  "flex flex-col items-start gap-0.5 rounded px-2 py-1.5 text-xs sm:flex-row sm:items-center sm:justify-between sm:gap-x-2 sm:py-1 sm:text-[11px] " +
                   (on ? tierActiveCls(row.t) : "bg-slate-50 text-slate-400")
                 }
               >
@@ -506,9 +508,11 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
             />
           </div>
         )}
+        </MobileFold>
       </div>
 
-      <div className="mt-3 rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
+      <MobileFold label="티어 계산 · 검증 설명 보기" className="mt-3">
+      <div className="rounded bg-slate-50 px-3 py-2 text-xs leading-relaxed text-slate-600">
         <strong>3단 티어(예비대→본대→최대)</strong> — <strong>Tier 0 조정매수</strong>: 나스닥 −8% &amp; 200일선 위 → 소량(10~20%){" "}
         <span className="text-slate-400">[n=13·6달 +21.1%·승률 100%·최악 +5.4%·2022년 0건]</span>. <strong>Tier 1 주신호</strong>: A(TERM≥1.05) or
         B(≥1.00&amp;HY≥4.5) → 본대 <span className="text-slate-400">[n=10·6달 +21.3%·최악 +2.7%]</span>. <strong>Tier 2 확인상향</strong>: AB/MEGA(VIX≥40) → 최대.{" "}
@@ -528,6 +532,7 @@ export function USEntryPanel({ data }: { data: MarketSnapshot }) {
           </span>
         )}
       </div>
+      </MobileFold>
     </div>
   );
 }

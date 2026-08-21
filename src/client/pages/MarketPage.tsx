@@ -9,6 +9,7 @@ import type { LineSeries } from "./InteractiveLineChart.js";
 import { CandleChart } from "./CandleChart.js";
 import { KFearPanel } from "./KFearPanel.js";
 import { USEntryPanel } from "./USEntryPanel.js";
+import { MobileFold } from "./MobileFold.js";
 
 const COL = {
   fg: "#0ea5e9",
@@ -56,7 +57,7 @@ export function MarketPage() {
         <button
           onClick={() => refresh.mutate()}
           disabled={refresh.isPending}
-          className="shrink-0 rounded border border-slate-300 px-3 py-1.5 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="min-h-11 shrink-0 rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 sm:min-h-0 sm:font-normal"
         >
           {refresh.isPending ? "갱신 중…" : "지금 갱신"}
         </button>
@@ -226,15 +227,18 @@ function LineChartBlock({
   const rs = useMemo(() => series.map((s) => ({ ...s, points: resample(s.points, tf) })), [series, tf]);
   return (
     <div className="mt-4 border-t border-slate-100 pt-3">
-      <div className="mb-1 flex items-center justify-between">
-        <span className="text-xs text-slate-400">휠=확대 · 드래그=이동</span>
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-[11px] text-slate-400 sm:text-xs">
+          <span className="sm:hidden">좌우 드래그=이동</span>
+          <span className="hidden sm:inline">휠=확대 · 드래그=이동</span>
+        </span>
         <div className="flex gap-0.5">
           {TF_ORDER.map((t) => (
             <button
               key={t}
               onClick={() => setTf(t)}
               className={
-                "rounded px-1.5 py-0.5 text-xs font-medium " +
+                "min-h-9 min-w-9 rounded px-2 py-1 text-xs font-medium sm:min-h-0 sm:min-w-0 sm:px-1.5 sm:py-0.5 " +
                 (tf === t ? "bg-slate-800 text-white" : "text-slate-500 hover:bg-slate-100")
               }
             >
@@ -281,9 +285,9 @@ function RefControls({ lines, onChange }: { lines: RefLines; onChange: (v: RefLi
     const n = Number(s);
     return s.trim() === "" || Number.isNaN(n) ? null : n;
   };
-  const box = "w-16 rounded border border-slate-200 px-1.5 py-0.5 text-slate-700";
+  const box = "h-10 w-20 rounded border border-slate-200 px-2 py-1 text-sm text-slate-700 sm:h-auto sm:w-16 sm:px-1.5 sm:py-0.5 sm:text-xs";
   return (
-    <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
+    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
       <span>기준선</span>
       <input
         type="number"
@@ -307,10 +311,10 @@ function RefControls({ lines, onChange }: { lines: RefLines; onChange: (v: RefLi
 
 function Card({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4">
-      <div className="mb-3 flex items-baseline justify-between">
-        <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
-        {subtitle && <span className="text-xs text-slate-400">{subtitle}</span>}
+    <div className="rounded-lg border border-slate-200 bg-white p-3 sm:p-4">
+      <div className="mb-3 flex flex-col items-start gap-0.5 sm:flex-row sm:items-baseline sm:justify-between">
+        <h3 className="text-base font-semibold leading-tight text-slate-700 sm:text-sm">{title}</h3>
+        {subtitle && <span className="text-[11px] leading-snug text-slate-400 sm:text-xs">{subtitle}</span>}
       </div>
       {children}
     </div>
@@ -385,14 +389,16 @@ function MetricCard({
             )}
           </div>
           {quote.note && <div className="mt-0.5 text-xs text-slate-400">{quote.note}</div>}
-          <LineChartBlock
-            id={id}
-            series={[{ points: history, color, label: title }]}
-            baselines={baselines}
-            decimals={decimals}
-            suffix={suffix}
-          />
-          <RefControls lines={lines} onChange={setLines} />
+          <MobileFold label="차트 · 기준선 보기" className="mt-3 sm:mt-0">
+            <LineChartBlock
+              id={id}
+              series={[{ points: history, color, label: title }]}
+              baselines={baselines}
+              decimals={decimals}
+              suffix={suffix}
+            />
+            <RefControls lines={lines} onChange={setLines} />
+          </MobileFold>
         </>
       )}
     </Card>
@@ -438,69 +444,69 @@ function LiquidityCard({ data }: { data: MarketSnapshot }) {
             {liq.rrp !== null && <span>RRP ${liq.rrp.toFixed(2)}T</span>}
             {liq.asOf && <span>· {new Date(liq.asOf).toLocaleDateString("ko-KR")} 기준</span>}
           </div>
-          {/* Two stacked single-line charts, each auto-scaled to its own range —
-              a shared overlay wasted vertical space (net ~$5.8T vs reserves ~$3T
-              sit ~3T apart, so each line only used a sliver of the axis). */}
-          {data.history.netLiquidity.length > 0 && (
-            <div className="mt-1">
-              <div className="text-xs font-medium text-teal-700">
-                순유동성 <span className="font-normal text-slate-400">(연준자산 − RRP − TGA · ↑확대 ↓축소)</span>
+          <MobileFold label="유동성 세부 차트 4개 보기" className="mt-3 sm:mt-1">
+            {/* Two stacked single-line charts, each auto-scaled to its own range. */}
+            {data.history.netLiquidity.length > 0 && (
+              <div className="mt-1">
+                <div className="text-xs font-medium text-teal-700">
+                  순유동성 <span className="font-normal text-slate-400">(연준자산 − RRP − TGA · ↑확대 ↓축소)</span>
+                </div>
+                <LineChartBlock
+                  id="netLiquidity"
+                  series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
+                  decimals={2}
+                  suffix="T"
+                  height={130}
+                />
               </div>
-              <LineChartBlock
-                id="netLiquidity"
-                series={[{ points: data.history.netLiquidity, color: "#0d9488", label: "순유동성" }]}
-                decimals={2}
-                suffix="T"
-                height={130}
-              />
-            </div>
-          )}
-          {data.history.reserves.length > 0 && (
-            <div className="mt-3">
-              <div className="text-xs font-medium text-amber-600">
-                지급준비금 <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
+            )}
+            {data.history.reserves.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs font-medium text-amber-600">
+                  지급준비금 <span className="font-normal text-slate-400">($3T 아래 = 레포 스트레스 위험 구간)</span>
+                </div>
+                <LineChartBlock
+                  id="reserves"
+                  series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
+                  decimals={2}
+                  suffix="T"
+                  height={130}
+                />
               </div>
-              <LineChartBlock
-                id="reserves"
-                series={[{ points: data.history.reserves, color: "#f59e0b", label: "지급준비금" }]}
-                decimals={2}
-                suffix="T"
-                height={130}
-              />
-            </div>
-          )}
-          {data.history.tga.length > 0 && (
-            <div className="mt-3">
-              <div className="text-xs font-medium text-rose-600">
-                TGA (재무부 계정){" "}
-                <span className="font-normal text-slate-400">↑오르면 유동성 흡수(드레인) · ↓내리면 방출 — 순유동성과 역방향</span>
+            )}
+            {data.history.tga.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs font-medium text-rose-600">
+                  TGA (재무부 계정){" "}
+                  <span className="font-normal text-slate-400">↑오르면 유동성 흡수(드레인) · ↓내리면 방출 — 순유동성과 역방향</span>
+                </div>
+                <LineChartBlock
+                  id="tga"
+                  series={[{ points: data.history.tga, color: "#e11d48", label: "TGA" }]}
+                  decimals={2}
+                  suffix="T"
+                  height={130}
+                />
               </div>
-              <LineChartBlock
-                id="tga"
-                series={[{ points: data.history.tga, color: "#e11d48", label: "TGA" }]}
-                decimals={2}
-                suffix="T"
-                height={130}
-              />
-            </div>
-          )}
-          {data.history.rrp.length > 0 && (
-            <div className="mt-3">
-              <div className="text-xs font-medium text-slate-500">
-                RRP (역레포){" "}
-                <span className="font-normal text-slate-400">
-                  ↑흡수 ↓방출 · 2026 현재 ~0으로 소진(사라진 게 아니라 값이 0에 가까움)
-                </span>
+            )}
+            {data.history.rrp.length > 0 && (
+              <div className="mt-3">
+                <div className="text-xs font-medium text-slate-500">
+                  RRP (역레포){" "}
+                  <span className="font-normal text-slate-400">
+                    ↑흡수 ↓방출 · 2026 현재 ~0으로 소진(사라진 게 아니라 값이 0에 가까움)
+                  </span>
+                </div>
+                <LineChartBlock
+                  id="rrp"
+                  series={[{ points: data.history.rrp, color: "#64748b", label: "RRP" }]}
+                  decimals={3}
+                  suffix="T"
+                  height={110}
+                />
               </div>
-              <LineChartBlock
-                id="rrp"
-                series={[{ points: data.history.rrp, color: "#64748b", label: "RRP" }]}
-                decimals={3}
-                suffix="T"
-                height={110}
-              />
-            </div>
-          )}
+            )}
+          </MobileFold>
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs leading-relaxed text-slate-500">
             ⚠️ <strong>뒤에서 물이 차오르나 빠지나</strong>를 보는 배경 지표입니다. 이걸 보고 사고팔지 마세요 —
             AI·반도체 집중장에선 이 지표와 지수가 몇 달씩 <strong>반대로</strong> 간 전례(2023)가 있습니다. 레벨보다
@@ -538,13 +544,15 @@ function FearGreedCard({ data }: { data: MarketSnapshot }) {
             <Stat label="1달 전" value={fg.month} />
             <Stat label="1년 전" value={fg.year} />
           </dl>
-          <LineChartBlock
-            id="fearGreed"
-            series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
-            baselines={baselines}
-            decimals={0}
-          />
-          <RefControls lines={lines} onChange={setLines} />
+          <MobileFold label="차트 · 기준선 보기" className="mt-3 sm:mt-0">
+            <LineChartBlock
+              id="fearGreed"
+              series={[{ points: data.history.fearGreed, color: COL.fg, label: "F&G" }]}
+              baselines={baselines}
+              decimals={0}
+            />
+            <RefControls lines={lines} onChange={setLines} />
+          </MobileFold>
         </div>
       )}
     </Card>
@@ -610,7 +618,7 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         <button
           type="submit"
           disabled={setSymbol.isPending}
-          className="shrink-0 rounded border border-slate-300 px-3 py-1 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          className="min-h-11 shrink-0 rounded border border-slate-300 px-3 py-1 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 sm:min-h-0 sm:font-normal"
         >
           {setSymbol.isPending ? "…" : "적용"}
         </button>
@@ -631,12 +639,12 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         <span className="text-xs text-slate-400">{symbol}</span>
       </div>
 
-      <div className="mt-3 flex gap-1">
+      <div className="no-scrollbar mt-3 flex gap-1 overflow-x-auto pb-1">
         {TIMEFRAMES.map((t) => (
           <button
             key={t}
             onClick={() => pickTf(t)}
-            className={`rounded px-2 py-1 text-xs ${
+            className={`min-h-10 shrink-0 rounded px-2.5 py-1 text-xs font-medium sm:min-h-0 sm:px-2 sm:font-normal ${
               tf === t ? "bg-slate-800 text-white" : "border border-slate-200 text-slate-600 hover:bg-slate-50"
             }`}
           >
@@ -645,18 +653,20 @@ function CustomCard({ data }: { data: MarketSnapshot }) {
         ))}
       </div>
 
-      <div className="mt-3">
-        {candles.isLoading || setSymbol.isPending ? (
-          <div className="py-10 text-center text-xs text-slate-400">불러오는 중…</div>
-        ) : candles.data && candles.data.candles.length > 0 ? (
-          <CandleChart key={`${symbol}:${tf}`} candles={candles.data.candles} baselines={baselines} intraday={tf === "4h"} />
-        ) : (
-          <div className="py-10 text-center text-xs text-slate-400">
-            캔들 데이터를 받지 못했습니다. 심볼을 확인하세요.
-          </div>
-        )}
-      </div>
-      <RefControls lines={lines} onChange={setLines} />
+      <MobileFold label="캔들 차트 · 기준선 보기" className="mt-3">
+        <div className="mt-3">
+          {candles.isLoading || setSymbol.isPending ? (
+            <div className="py-10 text-center text-xs text-slate-400">불러오는 중…</div>
+          ) : candles.data && candles.data.candles.length > 0 ? (
+            <CandleChart key={`${symbol}:${tf}`} candles={candles.data.candles} baselines={baselines} intraday={tf === "4h"} />
+          ) : (
+            <div className="py-10 text-center text-xs text-slate-400">
+              캔들 데이터를 받지 못했습니다. 심볼을 확인하세요.
+            </div>
+          )}
+        </div>
+        <RefControls lines={lines} onChange={setLines} />
+      </MobileFold>
     </Card>
   );
 }

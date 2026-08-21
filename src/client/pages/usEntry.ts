@@ -1,4 +1,5 @@
 import type { MarketSnapshot, SeriesPoint } from "../../shared/market.js";
+import type { UsTierPoint } from "./kfearStaged.js";
 
 /**
  * US 진입신호 실행기 — 나스닥 진입신호를 절대값 2트랙으로 계산한다(지시서 v1.0).
@@ -104,6 +105,8 @@ export interface UsEntry {
   above200: boolean; // 200일선 위 여부(추세 필터)
   tier0: boolean; // DD≤−8% & 200일선 위
   tier: Tier; // 현재 활성 티어(0/1/2/null)
+  /** K-공포 라이브 확인/과거 연구용 일별 티어와 21거래일 에피소드 첫 점등. */
+  tierHistory: UsTierPoint[];
   termHistory: SeriesPoint[]; // TERM 추이 차트
   hyHistory: SeriesPoint[]; // HY OAS 추이 차트
   ddHistory: SeriesPoint[]; // 나스닥 고점대비 낙폭(%) 추이
@@ -128,6 +131,7 @@ const EMPTY: UsEntry = {
   above200: false,
   tier0: false,
   tier: null,
+  tierHistory: [],
   termHistory: [],
   hyHistory: [],
   ddHistory: [],
@@ -373,12 +377,28 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
       : null;
 
   // ── Tier 0 (조정 매수): 나스닥 IXIC 고점대비 −8% & 200일선 위 ──
-  const { dd, above200, tier0, ddHistory } = computeTier0(ixicPts);
+  const { dd, above200, tier0, ddHistory, onByDay } = computeTier0(ixicPts);
 
   // 활성 티어: 2 확인상향(AB or MEGA) / 1 주신호(A or B) / 0 조정매수 / null.
   let tier: Tier = null;
   if (fired[L]) tier = (A[L] && B[L]) || megaNow ? 2 : 1;
   else if (tier0) tier = 0;
+
+  // Tier0·1·2를 하나의 확인 타임라인으로 병합. 미래 데이터는 여기서 참조하지 않고,
+  // 소비자가 asOf로 자르는 live 함수와 ±21일을 허용하는 연구 함수가 각각 해석한다.
+  let lastTierActive = -Infinity;
+  const tierHistory: UsTierPoint[] = tl.map((row, i) => {
+    const dailyTier: Tier = fired[i]
+      ? (A[i] && B[i]) || row.vix >= VIX_MEGA
+        ? 2
+        : 1
+      : onByDay.get(row.d)
+        ? 0
+        : null;
+    const episodeStart = dailyTier !== null && i - lastTierActive > MERGE_TD;
+    if (dailyTier !== null) lastTierActive = i;
+    return { t: row.t, tier: dailyTier, episodeStart };
+  });
 
   const termHistory = tl.map((r) => ({ t: r.t, v: Math.round(r.term * 1000) / 1000 }));
   const hyHistory = hySorted.map((p) => ({ t: p.t, v: p.v }));
@@ -402,6 +422,7 @@ export function computeUsEntry(snap: MarketSnapshot): UsEntry {
     above200,
     tier0,
     tier,
+    tierHistory,
     termHistory,
     hyHistory,
     ddHistory,
