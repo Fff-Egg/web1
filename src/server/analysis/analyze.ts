@@ -27,9 +27,13 @@ function isRateLimit(msg: string): boolean {
   return msg.includes("429") || /rate limit|quota|TPD|tokens per day/i.test(msg);
 }
 
+// ⚠️ 이모지 등 서로게이트 페어를 한가운데서 자르면 반쪽(lone surrogate)이 남아
+// LLM API의 엄격한 JSON 파서가 400(unexpected end of hex escape)을 낸다. 한 칸 당겨 자른다.
 function clip(s: string | null | undefined, n: number): string {
   if (!s) return "";
-  return s.length > n ? s.slice(0, n) : s;
+  if (s.length <= n) return s;
+  const c = s.charCodeAt(n - 1);
+  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n);
 }
 
 /** True if the text contains Hangul (i.e., it's actually Korean). */

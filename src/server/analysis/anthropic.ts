@@ -35,6 +35,23 @@ export const FILTER_MODEL = () =>
 export const ANALYSIS_MODEL = () =>
   process.env.ANALYSIS_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-opus-4-8");
 
+
+/**
+ * 짝 없는(lone) 서로게이트 제거 — **LLM 호출 직전 최종 방어**.
+ *
+ * 이모지·일부 한자는 UTF-16에서 2칸(서로게이트 페어)을 차지한다. 프롬프트를 만들 때
+ * `slice(0, n)`이 그 한가운데를 자르면 반쪽만 남고, `JSON.stringify`는 그것을
+ * `\ud83d` 같은 형태로 그대로 내보낸다. Node의 파서는 이를 허용하지만 **서버 쪽
+ * 엄격한 파서(Rust serde_json 등)는 거부**한다 — high 서로게이트 뒤에 `\u`가
+ * 안 오면 정확히 `unexpected end of hex escape` 400이 난다(2026-08 실제 장애).
+ *
+ * 우리 코드의 절단부는 개별로 고쳤지만, 소스 피드가 애초에 깨진 문자를 줄 수도 있어
+ * **모든 LLM 요청이 반드시 지나는 이 지점**에서 한 번 더 거른다. 정상 페어는 보존된다.
+ */
+export function stripLoneSurrogates(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
+}
+
 export interface CompleteOpts {
   model: string;
   system: string;
@@ -57,8 +74,8 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
   const res = await getAnthropic().messages.create({
     model: opts.model,
     max_tokens: opts.maxTokens ?? 1024,
-    system: opts.system,
-    messages: [{ role: "user", content: opts.user }],
+    system: stripLoneSurrogates(opts.system),
+    messages: [{ role: "user", content: stripLoneSurrogates(opts.user) }],
   });
   return res.content
     .filter((b): b is Anthropic.TextBlock => b.type === "text")
@@ -87,8 +104,8 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       max_tokens: opts.maxTokens ?? 1024,
       temperature: 0,
       messages: [
-        { role: "system", content: opts.system },
-        { role: "user", content: opts.user },
+        { role: "system", content: stripLoneSurrogates(opts.system) },
+        { role: "user", content: stripLoneSurrogates(opts.user) },
       ],
     }),
   });

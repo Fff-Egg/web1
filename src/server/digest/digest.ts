@@ -165,9 +165,18 @@ interface DigestItem {
   themes: string[] | null;
 }
 
+// ⚠️ 이모지 등 서로게이트 페어를 한가운데서 자르면 반쪽(lone surrogate)이 남아
+// LLM API의 엄격한 JSON 파서가 400(unexpected end of hex escape)을 낸다. 한 칸 당겨 자른다.
 function clip(s: string | null | undefined, n: number): string {
   if (!s) return "";
-  return s.length > n ? s.slice(0, n) + "…" : s;
+  if (s.length <= n) return s;
+  const end = isHighSurrogate(s.charCodeAt(n - 1)) ? n - 1 : n;
+  return s.slice(0, end) + "…";
+}
+
+/** UTF-16 상위 서로게이트(페어의 앞쪽 절반) 여부. */
+function isHighSurrogate(c: number): boolean {
+  return c >= 0xd800 && c <= 0xdbff;
 }
 
 /** Escape text for safe interpolation into raw HTML (digest renders via dangerouslySetInnerHTML). */
