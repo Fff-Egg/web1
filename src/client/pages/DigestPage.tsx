@@ -112,21 +112,28 @@ export function DigestPage() {
   // Run the midday 작업 now (낮분 다이제스트만 — sweep 없음). 슬롯 마감 전엔 거부.
   const runMidday = useMutation({
     mutationFn: () => api.runMiddayDigest(),
+    onMutate: () => {
+      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
+    },
     onSuccess: (res) => {
       invalidate();
-      if (res?.digest?.id) setSelectedId(res.digest.id);
+      // 백그라운드 실행 — 새 다이제스트가 목록에 뜰 때까지 폴링(생성 버튼과 같은 방식).
+      if (res?.started) setGenState("pending");
     },
   });
   // Run the boundary routine now (auto-digest + that window's feed sweep + memo).
   const runEvening = useMutation({
     mutationFn: () => api.runEveningDigest(),
+    onMutate: () => {
+      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
+    },
     onSuccess: (res) => {
       invalidate();
       qc.invalidateQueries({ queryKey: ["feed"] });
       qc.invalidateQueries({ queryKey: ["feedCounts"] });
       qc.invalidateQueries({ queryKey: ["filterGuidance"] });
-      const id = res?.evening?.id ?? res?.midday?.id;
-      if (id) setSelectedId(id);
+      // 경계 루틴은 백그라운드로 돈다 — 결과(다이제스트·sweep·메모)는 폴링으로 반영.
+      if (res?.started) setGenState("pending");
     },
   });
   // Tidy a past range's feed (no digest, no feedback signal).
@@ -439,11 +446,9 @@ export function DigestPage() {
             <p className="mt-2 text-xs text-slate-600">
               {runMidday.data.tooEarly
                 ? `아직 ${midH}(KST)분이 다 안 모였습니다 — 지금 실행하면 낮분 창이 일찍 닫혀 이후 글이 누락되므로 실행하지 않았습니다.`
-                : runMidday.data.digest
-                  ? `${runMidday.data.date} 낮분 “${runMidday.data.digest.title}” 생성(${runMidday.data.digest.itemCount}건).`
-                  : runMidday.data.existed
-                    ? `${runMidday.data.date} 낮분이 이미 있습니다.`
-                    : `${runMidday.data.date} 낮분 구간에 새 글이 없습니다.`}
+                : runMidday.data.existed
+                  ? `${runMidday.data.date} 낮분이 이미 있습니다.`
+                  : `${runMidday.data.date} 낮분 생성을 시작했습니다 — 백그라운드로 돌며 완료되면 아래 목록에 나타납니다(1~3분).`}
             </p>
           )}
           {runMidday.error && (
@@ -465,27 +470,10 @@ export function DigestPage() {
           {runEvening.data && (
             <>
               <p className="mt-2 text-xs text-slate-600">
-                {(() => {
-                  const r = runEvening.data;
-                  if (r.tooEarly)
-                    return `아직 ${evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`;
-                  const part = (
-                    label: string,
-                    gen: { title: string; itemCount: number } | null,
-                    existed: boolean,
-                  ) => (gen ? `${label} 생성(${gen.itemCount}건)` : existed ? `${label} 이미 있음` : `${label} 새 글 없음`);
-                  return (
-                    `오늘(${r.date}) 실행: ${part("낮분", r.midday, r.middayExisted)} · ` +
-                    `${part("아침분", r.evening, r.eveningExisted)} · 피드 ${r.swept}건 휴지통으로.`
-                  );
-                })()}
-                {" "}
-                {runEvening.data.memo &&
-                  `학습 메모: ${
-                    runEvening.data.memo.updated
-                      ? `갱신됨 (신규 ${runEvening.data.memo.newCount} · 누적 ${runEvening.data.memo.total})`
-                      : `변화 없음 (누적 ${runEvening.data.memo.total})`
-                  }.`}
+                {runEvening.data.tooEarly
+                  ? `아직 ${evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`
+                  : `오늘(${runEvening.data.date}) 경계 루틴을 시작했습니다 — 학습 메모 · 낮분 보충 · 아침분 · 피드 정리를 ` +
+                    `백그라운드로 처리합니다. 완료되면 아래 목록에 나타납니다(글이 많으면 몇 분 걸립니다).`}
               </p>
               <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
                 진단: 창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}

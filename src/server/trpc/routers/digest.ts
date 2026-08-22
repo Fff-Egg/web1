@@ -137,19 +137,25 @@ export const digestRouter = router({
         diag,
       };
     }
-    const memo = await feedbackRepo.refreshGuidance();
-    const run = await runDailyDigests();
-    return {
-      date: today,
-      tooEarly: false,
-      midday: run.midday,
-      evening: run.evening,
-      middayExisted: run.middayExisted,
-      eveningExisted: run.eveningExisted,
-      swept: run.swept,
-      memo,
-      diag,
-    };
+    // ⚠️ 경계 루틴은 앱에서 가장 무거운 작업이다 — 학습메모 distill(LLM 1회) + 낮분 보충
+    // + 아침분 생성(각각 풀데이 맵리듀스) + 하루 창 sweep. 이걸 HTTP 요청 안에서 await하면
+    // 모바일 브라우저/엣지 타임아웃을 넘겨 "Load failed"로 끊긴다(2026-08 실장애).
+    // `generate`와 동일하게 **즉시 반환 + 백그라운드 실행**으로 처리하고, 클라는 다이제스트
+    // 목록을 폴링해 결과를 잡는다. 빠른 부분(진단 쿼리·tooEarly 판정)은 동기로 남긴다.
+    void (async () => {
+      try {
+        const memo = await feedbackRepo.refreshGuidance();
+        const run = await runDailyDigests();
+        console.log(
+          `[digest] 경계 루틴 완료(${today}): 낮분 ${run.midday ? `"${run.midday.title}"` : run.middayExisted ? "이미 있음" : "없음"} · ` +
+            `아침분 ${run.evening ? `"${run.evening.title}"` : run.eveningExisted ? "이미 있음" : "없음"} · ` +
+            `sweep ${run.swept}건 · 메모 ${memo?.updated ? `갱신(신규 ${memo.newCount})` : "변화 없음"}`,
+        );
+      } catch (e) {
+        console.error("[digest] 경계 루틴 실패:", e);
+      }
+    })();
+    return { date: today, tooEarly: false, started: true, diag };
   }),
 
   /** Schedule hours (KST) + the currently-open window's date, for the UI to label
@@ -172,8 +178,13 @@ export const digestRouter = router({
       return { date, tooEarly: true, existed: false, digest: null };
     }
     const existed = await hasMiddayFor(date);
-    const digest = existed ? null : await runMiddayDigest(date);
-    return { date, tooEarly: false, existed, digest };
+    // 낮분도 맵리듀스라 오래 걸릴 수 있다 — runEvening과 같은 이유로 백그라운드 실행.
+    if (!existed) {
+      void runMiddayDigest(date)
+        .then((d) => console.log(`[digest] 낮분 완료(${date}): ${d ? `"${d.title}" (${d.itemCount}건)` : "새 글 없음"}`))
+        .catch((e) => console.error("[digest] 낮분 실패:", e));
+    }
+    return { date, tooEarly: false, existed, started: !existed };
   }),
 
   /** Sweep a date range's feed to trash — no digest, no feedback signal (for tidying past days). */
