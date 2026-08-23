@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
+import { renderMarkdown } from "../markdown.js";
 
 /**
  * Optimistically drop articles from every cached feed list so trash/promote feel
@@ -214,7 +214,7 @@ export function FeedCard({
           {showFull && (
             <div
               className="prose-digest mt-1 rounded border border-slate-200 bg-slate-50 p-3 text-sm"
-              dangerouslySetInnerHTML={{ __html: marked.parse(item.fullText) as string }}
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(item.fullText) }}
             />
           )}
         </div>

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { marked } from "marked";
 import { api } from "../data/client.js";
 import type { DigestSummary } from "../data/client.js";
+import { renderMarkdown } from "../markdown.js";
 
 const todayStr = () => new Date().toLocaleDateString("en-CA");
 
@@ -154,7 +154,7 @@ export function DigestPage() {
   // Memoized so the article's innerHTML reference is stable: a re-render (e.g. a
   // mutation settling) must NOT re-set innerHTML, or it would wipe the yellow
   // marker we add to the footnote on jump.
-  const html = useMemo(() => (digest.data ? (marked.parse(digest.data.markdown) as string) : ""), [digest.data]);
+  const html = useMemo(() => (digest.data ? renderMarkdown(digest.data.markdown) : ""), [digest.data]);
 
   const articleRef = useRef<HTMLElement | null>(null);
   // Per-ref memory of WHICH [N] occurrence the user last clicked, so the footnote
