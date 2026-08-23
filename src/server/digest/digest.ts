@@ -675,21 +675,15 @@ export async function generateDigest(
   // under: made 밤 10시 7/7 → "7/7" (that day's window, already closed at 07시), made
   // 새벽 1시 7/8 → "7/8". An explicit `start` (past-date backfill) wins.
   //
-  // Robustness: a STALE cached client (pre-fix) still defaults its date field to the
-  // old currentWindowDate — the still-OPEN future window (after 07시, "내일"). Nobody
-  // deliberately backfills a window that hasn't closed yet, so treat that exact value
-  // as the "지금 만들기" default too and re-date it to the creation day. (Before the
-  // 07시 boundary currentWindowDate == kstToday, so this is a no-op then.) This makes
-  // the filing date correct even if Railway hasn't redeployed or the browser is cached.
-  const manualNow = !opts.auto && !opts.slot && !opts.fromDigests;
-  const looksLikeStaleDefault =
-    manualNow &&
-    opts.start != null &&
-    (opts.end ?? opts.start) === opts.start &&
-    opts.start === currentWindowDate();
-  const startDate = opts.start == null || looksLikeStaleDefault ? kstToday() : opts.start;
+  // ⚠️ 예전엔 여기서 "사용자가 고른 날짜가 아직 안 닫힌 창(currentWindowDate)이면 실수겠거니"
+  // 하고 조용히 kstToday()로 되돌렸다. 그 전제("아직 안 닫힌 창을 일부러 만들 사람은 없다")가
+  // 틀렸다 — 07시 경계 루틴은 종합을 마친 창을 곧바로 휴지통으로 sweep하므로, 기본 날짜가
+  // 가리키는 창은 **이미 비워진 창**이다. 오늘 모인 글로 다이제스트를 만들려면 열린 창을
+  // 골라야 하는데 서버가 그걸 되돌려버려 **아예 불가능**했다(2026-08 사용자 보고).
+  // 이제 사용자가 명시한 날짜는 그대로 존중한다. 날짜를 안 보내면(=기본) 만든 날로 파일링.
+  const startDate = opts.start ?? kstToday();
   // Slot runs are single-day by definition (they split one day's window).
-  const endDate = opts.slot || looksLikeStaleDefault ? startDate : opts.end ?? startDate;
+  const endDate = opts.slot ? startDate : opts.end ?? startDate;
   const title = opts.title?.trim() || (startDate === endDate ? `${startDate}` : `${startDate} ~ ${endDate}`);
   const { start, end } = opts.slot ? slotBounds(startDate, opts.slot) : kstRangeBounds(startDate, endDate);
   const cfg = await settingsRepo.getAnalysisConfig();

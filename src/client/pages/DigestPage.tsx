@@ -337,18 +337,32 @@ export function DigestPage() {
   // Show the ACTUAL time window the picked dates resolve to (date D = [(D-1) evH,
   // D evH)), so the boundary-hour mapping is obvious instead of having to pick
   // "tomorrow's" label for today's content.
+  const shiftDay = (iso: string, by: number) => {
+    const d = new Date(`${iso}T12:00:00+09:00`);
+    d.setDate(d.getDate() + by);
+    return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  };
   const mdy = (iso: string) => {
     const p = iso.split("-");
     return p.length === 3 ? `${Number(p[1])}/${Number(p[2])}` : iso;
   };
-  const prevDay = (iso: string) => {
-    const d = new Date(`${iso}T12:00:00+09:00`);
-    d.setDate(d.getDate() - 1);
-    return d.toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
-  };
+  const prevDay = (iso: string) => shiftDay(iso, -1);
+  const nextDay = (iso: string) => shiftDay(iso, 1);
+  /** 선택 날짜 하나가 뜻하는 창을 "8/22 07시 ~ 8/23 07시"로. 날짜=끝나는 날 규칙. */
+  const spanOf = (iso: string) => (iso ? `${mdy(prevDay(iso))} ${evH} ~ ${mdy(iso)} ${evH}` : "");
   const winFrom = start ? `${mdy(prevDay(start))} ${evH}` : "";
   const winTo = end ? `${mdy(end)} ${evH}` : "";
   const isLiveWindow = start === end && start === schedule.data?.currentWindowDate;
+  // 빠른 선택. 07시 경계 루틴은 종합을 마친 창을 곧바로 sweep하므로, "오늘 모인 글"을
+  // 보려면 아직 **열려 있는 창**을 골라야 한다. 매번 날짜를 손으로 계산하지 않게 버튼을 둔다.
+  const liveDate = schedule.data?.currentWindowDate ?? nextDay(todayStr());
+  const closedDate = schedule.data?.today ?? todayStr();
+  const pick = (d: string) => {
+    dateDirty.current = true;
+    setStart(d);
+    setEnd(d);
+  };
+  const quickBtn = "rounded border px-2 py-1 text-[11px] font-medium transition";
 
   return (
     <div className="space-y-4">
@@ -367,6 +381,9 @@ export function DigestPage() {
               }}
               className="mt-0.5 block rounded border border-slate-300 px-2 py-1 text-sm"
             />
+            {/* 날짜 하나가 어떤 구간을 뜻하는지 입력 바로 밑에 붙인다 — "23일"만 보면
+                [22일 07시, 23일 07시)인지 [23일 07시, 24일 07시)인지 알 수 없다. */}
+            <span className="mt-0.5 block text-[10px] tabular-nums text-slate-400">{spanOf(start)}</span>
           </label>
           <label className="text-xs text-slate-500">
             종료일
@@ -379,6 +396,7 @@ export function DigestPage() {
               }}
               className="mt-0.5 block rounded border border-slate-300 px-2 py-1 text-sm"
             />
+            <span className="mt-0.5 block text-[10px] tabular-nums text-slate-400">{spanOf(end)}</span>
           </label>
           <label className="flex-1 text-xs text-slate-500">
             이름 (선택)
@@ -406,6 +424,35 @@ export function DigestPage() {
             {genState === "pending" ? "생성 중…" : "생성"}
           </button>
         </div>
+        {/* 빠른 선택 — "오늘 모인 글"을 보려면 아직 열려 있는 창을 골라야 한다.
+            경계 루틴이 종합을 마친 창은 곧바로 sweep되므로 닫힌 창은 대개 비어 있다. */}
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <span className="text-[11px] text-slate-400">빠른 선택:</span>
+          <button
+            type="button"
+            onClick={() => pick(liveDate)}
+            className={
+              quickBtn +
+              (start === liveDate && end === liveDate
+                ? " border-emerald-500 bg-emerald-50 text-emerald-700"
+                : " border-slate-300 text-slate-600 hover:bg-slate-50")
+            }
+          >
+            오늘 모인 글 <span className="font-normal opacity-70">({spanOf(liveDate)} · 진행 중)</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => pick(closedDate)}
+            className={
+              quickBtn +
+              (start === closedDate && end === closedDate
+                ? " border-slate-500 bg-slate-100 text-slate-700"
+                : " border-slate-300 text-slate-600 hover:bg-slate-50")
+            }
+          >
+            어제분 <span className="font-normal opacity-70">({spanOf(closedDate)} · 마감됨)</span>
+          </button>
+        </div>
         {winFrom && winTo && (
           <p className="mt-2 rounded bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
             🕒 실제 종합 기간: <strong>{winFrom} ~ {winTo}</strong>
@@ -413,9 +460,9 @@ export function DigestPage() {
           </p>
         )}
         <p className="mt-2 text-xs text-slate-400">
-          날짜는 <strong>{evH} 경계</strong> 기준이라 끝나는 날을 고릅니다(예: 6/17 선택 → 6/16 {evH} ~ 6/17 {evH}).
-          위 “실제 종합 기간”을 보고 고르세요. 과거 날짜는 피드가 비어 있으면 그 기간의 저장된 다이제스트를
-          자동으로 종합합니다(위 체크로 강제 가능).
+          날짜는 <strong>{evH} 경계</strong> 기준이라 <strong>끝나는 날</strong>을 고릅니다 — 날짜 칸 아래의 실제 구간을 보세요.
+          ⚠️ <strong>{evH} 경계 루틴은 종합을 마친 창을 곧바로 휴지통으로 정리</strong>하므로, 이미 마감된 날을 고르면
+          피드가 비어 저장된 다이제스트로 대체 종합됩니다. <strong>오늘 모인 글로 만들려면 위 “오늘 모인 글”</strong>을 누르세요.
         </p>
         {genState === "pending" && (
           <p className="mt-2 text-xs text-blue-600">
