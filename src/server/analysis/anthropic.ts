@@ -52,6 +52,31 @@ export function stripLoneSurrogates(s: string): string {
   return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "");
 }
 
+
+/**
+ * 제공자별 추가 요청 파라미터(JSON) — `LLM_EXTRA_BODY` env로 주입한다.
+ *
+ * 왜 필요한가: **추론형(thinking) 모델은 `max_tokens` 예산을 사고 과정에 먼저 쓴다.**
+ * 예산이 모자라면 사고만 하다 잘려서 `content`가 빈 채로 200이 온다(2026-08 실장애:
+ * deepseek-v4-pro가 요청당 출력 ~7,000토큰을 쓰고도 다이제스트 내용은 빈 문자열).
+ * 사고를 끄는 파라미터 이름은 제공자·모델마다 달라서 코드에 못 박지 않고 env로 뺀다.
+ *   예) LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}
+ *       LLM_EXTRA_BODY={"reasoning_effort":"none"}
+ * 파싱 실패는 무시하고 경고만 남긴다 — 잘못된 env가 분석 전체를 막으면 안 된다.
+ */
+function extraBody(): Record<string, unknown> {
+  const raw = process.env.LLM_EXTRA_BODY?.trim();
+  if (!raw) return {};
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed as Record<string, unknown>;
+    console.warn("[llm] LLM_EXTRA_BODY는 JSON 객체여야 합니다 — 무시합니다.");
+  } catch (e) {
+    console.warn(`[llm] LLM_EXTRA_BODY 파싱 실패 — 무시합니다: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  return {};
+}
+
 export interface CompleteOpts {
   model: string;
   system: string;
@@ -107,6 +132,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         { role: "system", content: stripLoneSurrogates(opts.system) },
         { role: "user", content: stripLoneSurrogates(opts.user) },
       ],
+      ...extraBody(),
     }),
   });
   if (!res.ok) {
@@ -122,7 +148,17 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   };
   const choice = data.choices?.[0];
   const text = (choice?.message?.content ?? "").trim();
-  if (text) return text;
+  if (text) {
+    // 내용은 왔지만 한도에서 잘린 경우 — 조용히 반쪽짜리 결과를 쓰지 않도록 경고를 남긴다.
+    if (choice?.finish_reason === "length") {
+      const u = data.usage;
+      console.warn(
+        `[llm] 응답이 max_tokens(${opts.maxTokens ?? 1024})에서 잘림 (model=${opts.model}` +
+          `${u ? `, completion=${u.completion_tokens ?? "?"}` : ""}) — 예산을 올리세요.`,
+      );
+    }
+    return text;
+  }
 
   // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
   // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는

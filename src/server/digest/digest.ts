@@ -320,7 +320,10 @@ const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 
 // call small: no context overflow, no "lost in the middle" skipping.
 const MAP_MAX_ITEMS = (): number => Math.max(5, Number(process.env.DIGEST_MAP_ITEMS ?? 30));
 const MAP_MAX_CHARS = (): number => Math.max(10_000, Number(process.env.DIGEST_MAP_CHARS ?? 45_000));
-const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 3000);
+// ⚠️ 추론형 모델은 이 예산을 **사고 과정에 먼저** 쓴다 — 3000은 사고만 하다 잘려
+// 빈 응답이 오기에 충분한 값이었다(2026-08 실장애). 여유를 둔다. 출력 토큰은 실제
+// 사용량만큼만 과금되므로 상한을 올려도 성공하는 호출의 비용은 늘지 않는다.
+const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 8000);
 const MAP_CONCURRENCY = 3;
 /** Chars of each pick's body sent to the map/synthesis prompt. Raise to feed
  *  more of long articles (their conclusions/numbers sit past the cut). */
