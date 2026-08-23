@@ -26,7 +26,13 @@ app.use((req, res, next) => {
   next();
 });
 
-app.get("/api/health", (_req, res) => res.json({ ok: true }));
+app.get("/api/health", (_req, res) =>
+  res.json({
+    ok: true,
+    revision: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
+    features: ["source-review"],
+  }),
+);
 
 // Keep the liveness endpoint public for Railway, but protect every user-facing
 // page and mutation when APP_PASSWORD is configured. Browser-native Basic Auth
