@@ -174,22 +174,6 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   };
   const choice = data.choices?.[0];
   const text = (choice?.message?.content ?? "").trim();
-  if (text) {
-    // 내용은 왔지만 한도에서 잘린 경우 — 조용히 반쪽짜리 결과를 쓰지 않도록 경고를 남긴다.
-    if (choice?.finish_reason === "length") {
-      const u = data.usage;
-      console.warn(
-        `[llm] 응답이 max_tokens(${opts.maxTokens ?? 1024})에서 잘림 (model=${opts.model}` +
-          `${u ? `, completion=${u.completion_tokens ?? "?"}` : ""}) — 예산을 올리세요.`,
-      );
-    }
-    return text;
-  }
-
-  // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
-  // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
-  // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
-  // 이제는 던져서 ① completeRetry가 재시도하고 ② 실패 시 원인이 화면·로그에 드러나게 한다.
   const reason = choice?.finish_reason ?? "?";
   const reasoning = (choice?.message?.reasoning_content ?? "").length;
   const u = data.usage;
@@ -198,6 +182,28 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
     (reasoning > 0 ? ` reasoning_len=${reasoning}` : "") +
     (u ? ` tokens(prompt=${u.prompt_tokens ?? "?"}, completion=${u.completion_tokens ?? "?"})` : "") +
     ` max_tokens=${opts.maxTokens ?? 1024}`;
+
+  // `finish_reason=length` means the answer is incomplete even when content is
+  // non-empty. Returning that partial text used to save reports cut off halfway
+  // through a sentence (the deterministic bibliography still made them look
+  // superficially complete). Throw so the digest policy retries the SAME Pro
+  // with a larger budget, then falls back only if both Pro attempts fail.
+  if (reason === "length") {
+    console.warn(
+      `[llm] 불완전 응답 폐기 (model=${opts.model}) ${detail}` +
+        (text ? ` partial_chars=${text.length}` : ""),
+    );
+    throw new Error(
+      `LLM 응답 잘림 (${detail}${text ? ` partial_chars=${text.length}` : ""})` +
+        " — 부분 결과는 저장하지 않습니다.",
+    );
+  }
+  if (text) return text;
+
+  // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
+  // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
+  // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
+  // 이제는 던져서 ① completeRetry가 재시도하고 ② 실패 시 원인이 화면·로그에 드러나게 한다.
   console.error(`[llm] 빈 응답 (model=${opts.model}) ${detail}`);
   const hint =
     reason === "length"
