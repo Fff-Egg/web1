@@ -2,6 +2,7 @@ import type { Source } from "../db/schema.js";
 import type { SourceAdapter, NormalizedArticle } from "./types.js";
 import { fetchRss } from "./rss.js";
 import { getXScraper, hasXSession } from "../x/client.js";
+import { SOURCE_REVIEW_MARKER } from "../../shared/sourceReview.js";
 
 function handle(identifier: string): string {
   return identifier.trim().replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//i, "").replace(/\/.*$/, "");
@@ -13,6 +14,10 @@ function tweetTitle(text: string): string {
   return firstLine.length > 90 ? firstLine.slice(0, 90) + "…" : firstLine;
 }
 
+function isXArticleUrl(url: string): boolean {
+  return /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/(?:i\/)?article\//i.test(url);
+}
+
 /**
  * Direct timeline fetch via the user's X account cookies (X_AUTH_TOKEN/X_CT0) —
  * no browser, no bridge. Dedup relies on the stable tweet id as externalId.
@@ -22,13 +27,24 @@ async function fetchDirect(h: string, maxItems: number): Promise<NormalizedArtic
   const out: NormalizedArticle[] = [];
   try {
     for await (const t of scraper.getTweets(h, maxItems)) {
-      const text = t.text?.trim();
-      if (!t.id || !text) continue; // media-only or malformed entries
+      const text = t.text?.trim() ?? "";
+      if (!t.id) continue;
+      // X Articles are sometimes returned as only a title/ticker shell, while
+      // media-only posts can have no text at all. Keep the stable post URL and
+      // route the shell to the persistent manual-review bucket instead of
+      // dropping it at collection time.
+      const articleShell = t.urls.some(isXArticleUrl);
+      const needsReview = !text || articleShell;
+      const body = needsReview
+        ? `${SOURCE_REVIEW_MARKER}${text ? `\n${text}` : ""}`
+        : text;
       out.push({
         externalId: t.id,
         url: t.permanentUrl ?? `https://x.com/${h}/status/${t.id}`,
-        title: (t.isRetweet ? "RT " : "") + tweetTitle(text),
-        body: text,
+        title:
+          (t.isRetweet ? "RT " : "") +
+          (text ? tweetTitle(text) : `X 원문 확인 필요 (@${t.username ?? h})`),
+        body,
         author: `@${t.username ?? h}`,
         publishedAt: t.timeParsed ?? (t.timestamp ? new Date(t.timestamp * 1000) : null),
       });

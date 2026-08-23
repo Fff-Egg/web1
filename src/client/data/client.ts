@@ -41,7 +41,7 @@ export interface FeedFilter {
   impact?: Impact;
   ticker?: string;
   theme?: string;
-  priority?: "important" | "low" | "saved" | "telegram";
+  priority?: "important" | "low" | "source-review" | "saved" | "telegram";
   date?: string;
 }
 
@@ -62,6 +62,7 @@ export interface FeedItem {
   themes: string[] | null;
   impact: Impact | null;
   lowPriority?: boolean;
+  needsSourceReview?: boolean;
   saved?: boolean;
 }
 
@@ -134,7 +135,7 @@ export interface DataApi {
   setFilterGuidance(text: string): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   getFeedItem(id: number): Promise<FeedItem | null>;
-  feedCounts(): Promise<{ important: number; low: number; saved: number; telegram: number }>;
+  feedCounts(): Promise<{ important: number; low: number; sourceReview: number; saved: number; telegram: number }>;
   trashFeed(): Promise<FeedItem[]>;
   deleteFeedItem(id: number): Promise<void>;
   restoreFeedItem(id: number): Promise<void>;
@@ -297,7 +298,13 @@ function makeTrpcApi(): DataApi {
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
     feedCounts: () =>
-      client.feed.counts.query() as Promise<{ important: number; low: number; saved: number; telegram: number }>,
+      client.feed.counts.query() as Promise<{
+        important: number;
+        low: number;
+        sourceReview: number;
+        saved: number;
+        telegram: number;
+      }>,
     trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
     deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
     restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
@@ -464,7 +471,8 @@ function makeStaticApi(): DataApi {
       const all = [...loadSavedFeed(), ...SAMPLE_FEED];
       if (filter?.priority === "saved") return all.filter((x) => x.saved);
       if (filter?.priority === "telegram") return all.filter((x) => x.provider === "telegram");
-      const transient = all.filter((x) => !x.saved && x.provider !== "telegram");
+      if (filter?.priority === "source-review") return all.filter((x) => x.needsSourceReview);
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram" && !x.needsSourceReview);
       return transient.filter((x) => !!x.lowPriority === (filter?.priority === "low"));
     },
     async getFeedItem(id) {
@@ -472,10 +480,11 @@ function makeStaticApi(): DataApi {
     },
     async feedCounts() {
       const all = [...loadSavedFeed(), ...SAMPLE_FEED];
-      const transient = all.filter((x) => !x.saved && x.provider !== "telegram");
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram" && !x.needsSourceReview);
       return {
         important: transient.filter((x) => !x.lowPriority).length,
         low: transient.filter((x) => !!x.lowPriority).length,
+        sourceReview: all.filter((x) => !!x.needsSourceReview && !x.saved).length,
         saved: all.filter((x) => x.saved).length,
         telegram: all.filter((x) => x.provider === "telegram").length,
       };

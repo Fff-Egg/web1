@@ -24,6 +24,7 @@ const feedSelect = {
   themes: analyses.themes,
   impact: analyses.impact,
   lowPriority: analyses.lowPriority,
+  needsSourceReview: analyses.needsSourceReview,
   saved: analyses.saved,
 };
 
@@ -39,7 +40,7 @@ export const feedRouter = router({
           impact: z.enum(IMPACTS).optional(),
           ticker: z.string().optional(),
           theme: z.string().optional(),
-          priority: z.enum(["important", "low", "saved", "telegram"]).default("important"),
+          priority: z.enum(["important", "low", "source-review", "saved", "telegram"]).default("important"),
           /** Filter to items added to the feed on this KST date (YYYY-MM-DD). */
           date: z.string().optional(),
           limit: z.number().min(1).max(2000).default(500),
@@ -53,16 +54,23 @@ export const feedRouter = router({
       if (input?.priority === "saved") {
         // ⭐저장 — read-later, any provider, survives the sweep.
         conds.push(eq(analyses.saved, true));
+        conds.push(eq(analyses.needsSourceReview, false));
       } else if (input?.priority === "telegram") {
         // 보관함 텔레그램 — telegram that has aged past the current day window
         // (today's telegram still lives in the Feed until 21시 moves the edge).
         conds.push(eq(sources.provider, "telegram"));
         conds.push(lt(analyses.createdAt, wStart));
+      } else if (input?.priority === "source-review") {
+        // Incomplete X Article/title shells persist here until the user opens
+        // the original and explicitly promotes or deletes them.
+        conds.push(eq(analyses.needsSourceReview, true));
+        conds.push(eq(analyses.saved, false));
       } else {
         // 중요/검토 = the day's transient feed. Non-telegram shows until the 21시
         // sweep clears it; telegram shows only while in the current window, then
         // moves to 보관함 at 21시. ⭐saved is excluded either way (it's its own bucket).
         conds.push(eq(analyses.lowPriority, input?.priority === "low"));
+        conds.push(eq(analyses.needsSourceReview, false));
         conds.push(eq(analyses.saved, false));
         conds.push(or(ne(sources.provider, "telegram"), gte(analyses.createdAt, wStart))!);
       }
@@ -116,15 +124,16 @@ export const feedRouter = router({
    *  (⭐saved excluded; telegram only counts while in the current day window);
    *  saved = ⭐ bucket, telegram = 보관함 (aged-out telegram). */
   counts: publicProcedure.query(async () => {
-    if (!hasDb) return { important: 0, low: 0, saved: 0, telegram: 0 };
+    if (!hasDb) return { important: 0, low: 0, sourceReview: 0, saved: 0, telegram: 0 };
     const wStart = currentWindowStart();
     // In the Feed: not saved, and (non-telegram OR telegram still in this window).
     const inFeed = sql`${analyses.saved} = false AND (${sources.provider} <> 'telegram' OR ${analyses.createdAt} >= ${wStart})`;
     const [row] = await db
       .select({
-        important: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = false AND ${inFeed} THEN 1 ELSE 0 END)`,
-        low: sql<number>`SUM(CASE WHEN ${analyses.lowPriority} = true AND ${inFeed} THEN 1 ELSE 0 END)`,
-        saved: sql<number>`SUM(CASE WHEN ${analyses.saved} = true THEN 1 ELSE 0 END)`,
+        important: sql<number>`SUM(CASE WHEN ${analyses.needsSourceReview} = false AND ${analyses.lowPriority} = false AND ${inFeed} THEN 1 ELSE 0 END)`,
+        low: sql<number>`SUM(CASE WHEN ${analyses.needsSourceReview} = false AND ${analyses.lowPriority} = true AND ${inFeed} THEN 1 ELSE 0 END)`,
+        sourceReview: sql<number>`SUM(CASE WHEN ${analyses.needsSourceReview} = true AND ${analyses.saved} = false THEN 1 ELSE 0 END)`,
+        saved: sql<number>`SUM(CASE WHEN ${analyses.needsSourceReview} = false AND ${analyses.saved} = true THEN 1 ELSE 0 END)`,
         telegram: sql<number>`SUM(CASE WHEN ${sources.provider} = 'telegram' AND ${analyses.createdAt} < ${wStart} THEN 1 ELSE 0 END)`,
       })
       .from(analyses)
@@ -134,6 +143,7 @@ export const feedRouter = router({
     return {
       important: Number(row?.important ?? 0),
       low: Number(row?.low ?? 0),
+      sourceReview: Number(row?.sourceReview ?? 0),
       saved: Number(row?.saved ?? 0),
       telegram: Number(row?.telegram ?? 0),
     };
@@ -157,7 +167,14 @@ export const feedRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
-      await feedbackRepo.logArticles([input.id], "negative", "trash");
+      const [row] = await db
+        .select({ needsSourceReview: analyses.needsSourceReview })
+        .from(analyses)
+        .where(eq(analyses.articleId, input.id))
+        .limit(1);
+      if (!row?.needsSourceReview) {
+        await feedbackRepo.logArticles([input.id], "negative", "trash");
+      }
       await db.update(articles).set({ deletedAt: new Date() }).where(eq(articles.id, input.id));
       return { ok: true };
     }),
@@ -195,8 +212,19 @@ export const feedRouter = router({
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
-      await feedbackRepo.logArticles([input.id], "positive", "promote");
-      await db.update(analyses).set({ lowPriority: false }).where(eq(analyses.articleId, input.id));
+      const [row] = await db
+        .select({ needsSourceReview: analyses.needsSourceReview })
+        .from(analyses)
+        .where(eq(analyses.articleId, input.id))
+        .limit(1);
+      // Resolving a collection failure is not a content-preference signal.
+      if (!row?.needsSourceReview) {
+        await feedbackRepo.logArticles([input.id], "positive", "promote");
+      }
+      await db
+        .update(analyses)
+        .set({ lowPriority: false, needsSourceReview: false })
+        .where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
 
@@ -205,6 +233,14 @@ export const feedRouter = router({
     .input(z.object({ id: z.number(), saved: z.boolean() }))
     .mutation(async ({ input }) => {
       if (!hasDb) throw new Error("DATABASE_URL required");
+      if (input.saved) {
+        const [row] = await db
+          .select({ needsSourceReview: analyses.needsSourceReview })
+          .from(analyses)
+          .where(eq(analyses.articleId, input.id))
+          .limit(1);
+        if (row?.needsSourceReview) throw new Error("원문을 확인하고 먼저 '남기기'를 눌러 주세요.");
+      }
       await db.update(analyses).set({ saved: input.saved }).where(eq(analyses.articleId, input.id));
       return { ok: true };
     }),
@@ -214,7 +250,13 @@ export const feedRouter = router({
     .input(z.object({ ids: z.array(z.number()) }))
     .mutation(async ({ input }) => {
       if (!hasDb || input.ids.length === 0) return { ok: true };
-      await feedbackRepo.logArticles(input.ids, "negative", "trash");
+      const reviewRows = await db
+        .select({ articleId: analyses.articleId })
+        .from(analyses)
+        .where(and(inArray(analyses.articleId, input.ids), eq(analyses.needsSourceReview, true)));
+      const sourceReviewIds = new Set(reviewRows.map((r) => r.articleId));
+      const feedbackIds = input.ids.filter((id) => !sourceReviewIds.has(id));
+      await feedbackRepo.logArticles(feedbackIds, "negative", "trash");
       await db.update(articles).set({ deletedAt: new Date() }).where(inArray(articles.id, input.ids));
       return { ok: true };
     }),

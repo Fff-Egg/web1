@@ -45,6 +45,10 @@ export function SettingsPage() {
             <strong>Flash</strong>가 글을 넓게 선별·정리하고, <strong>Pro</strong>가 여러 글의 연결과 함의를
             최종 다이제스트로 종합하도록 단계별 모델을 나눌 수 있습니다.
           </p>
+          <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-800">
+            논지 지도는 글을 거르는 필터가 아니라 선별 후 붙이는 사후 태그입니다. 바이오·방산·크립토 등 현재
+            논지 밖의 신호도 같은 기준으로 수집됩니다.
+          </p>
         </div>
 
         <label className="block">
@@ -58,7 +62,7 @@ export function SettingsPage() {
             value={form.relevanceCriteria ?? ""}
             onChange={(e) => set({ relevanceCriteria: e.target.value })}
             rows={6}
-            placeholder="예: 반도체·AI 인프라·메모리/스토리지·광인터커넥트와 관련된 신호만. 단순 잡담/광고는 제외."
+            placeholder="예: 투자·경제·산업·정책에 직간접 영향이 있으면 보존. 섹터 제한 없음. 순수 잡담·광고만 제외."
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
         </label>
@@ -75,7 +79,7 @@ export function SettingsPage() {
             value={form.importanceCriteria ?? ""}
             onChange={(e) => set({ importanceCriteria: e.target.value })}
             rows={3}
-            placeholder="예: 단순 잡담·인사·개인 일상·반복·광고는 낮음. 매매 판단·시황·실적·뉴스는 높음."
+            placeholder="예: 수요·공급·가격·정책·수급·병목을 바꿀 수 있으면 높음. 정보 없는 잡담·광고만 낮음."
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
         </label>
@@ -91,7 +95,7 @@ export function SettingsPage() {
             value={form.summaryInstructions ?? ""}
             onChange={(e) => set({ summaryInstructions: e.target.value })}
             rows={4}
-            placeholder="예: 무엇을 발표/주장했는지 1~2문장 + 내 논지에 주는 함의 1문장."
+            placeholder="예: 관측 사실 1~2문장 + 가능한 2차 파급(가설) + 확인할 데이터. 기존 논지에 억지로 연결하지 않음."
             className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-sm"
           />
         </label>

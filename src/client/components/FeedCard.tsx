@@ -122,27 +122,34 @@ export function FeedCard({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          {item.impact && (
+          {item.needsSourceReview && (
+            <span className="rounded bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-700">
+              원문 확인
+            </span>
+          )}
+          {item.impact && !item.needsSourceReview && (
             <span className={"rounded px-2 py-0.5 text-xs font-medium " + IMPACT_STYLE[item.impact]}>
               {IMPACT_LABEL[item.impact]}
             </span>
           )}
-          <button
-            onClick={() => save.mutate()}
-            disabled={save.isPending}
-            title={item.saved ? "저장 해제" : "나중에 보기 저장"}
-            className={"text-base disabled:opacity-50 " + (item.saved ? "text-amber-500" : "text-slate-300 hover:text-amber-500")}
-          >
-            {item.saved ? "★" : "☆"}
-          </button>
+          {!item.needsSourceReview && (
+            <button
+              onClick={() => save.mutate()}
+              disabled={save.isPending}
+              title={item.saved ? "저장 해제" : "나중에 보기 저장"}
+              className={"text-base disabled:opacity-50 " + (item.saved ? "text-amber-500" : "text-slate-300 hover:text-amber-500")}
+            >
+              {item.saved ? "★" : "☆"}
+            </button>
+          )}
           {review && (
             <button
               onClick={() => promote.mutate()}
               disabled={promote.isPending}
-              title="피드로 남기기"
+              title={item.needsSourceReview ? "원문 확인 후 피드로 남기기" : "피드로 남기기"}
               className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white disabled:opacity-50"
             >
-              남기기
+              {item.needsSourceReview ? "확인 후 남기기" : "남기기"}
             </button>
           )}
           <button

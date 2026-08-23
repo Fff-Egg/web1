@@ -159,6 +159,9 @@ export const analyses = mysqlTable(
     relevant: boolean("relevant").notNull().default(false),
     /** Low-importance / personal — sorted into a separate review bucket, off the main feed. */
     lowPriority: boolean("low_priority").notNull().default(false),
+    /** Body/title could not be collected well enough to judge. Kept in a
+     * persistent manual-review bucket and excluded from the digest. */
+    needsSourceReview: boolean("needs_source_review").notNull().default(false),
     /** Saved "read later" — appears in the saved bucket and always feeds the digest. */
     saved: boolean("saved").notNull().default(false),
     summary: text("summary"),
@@ -174,6 +177,7 @@ export const analyses = mysqlTable(
   (t) => ({
     articleIdx: uniqueIndex("analyses_article_unq").on(t.articleId),
     relevantIdx: index("analyses_relevant_idx").on(t.relevant),
+    sourceReviewIdx: index("analyses_source_review_idx").on(t.needsSourceReview),
   }),
 );
 

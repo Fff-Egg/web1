@@ -25,14 +25,15 @@ export function FeedPage() {
     queryKey: ["feedCounts"],
     queryFn: () => api.feedCounts(),
   });
-  const bc = bucketCounts.data ?? { important: 0, low: 0, saved: 0, telegram: 0 };
+  const bc = bucketCounts.data ?? { important: 0, low: 0, sourceReview: 0, saved: 0, telegram: 0 };
 
   const counts = useMemo(() => tallyByProvider(feed.data ?? [], SOURCE_ORDER), [feed.data]);
   const items = provider
     ? (feed.data ?? []).filter((i) => i.provider === provider)
     : feed.data ?? [];
 
-  const review = filter.priority === "low";
+  const sourceReview = filter.priority === "source-review";
+  const review = filter.priority === "low" || sourceReview;
 
   const clearSel = () => setSelected(new Set());
   // Counts are a cheap aggregate; refresh them (and clear selection) after a bulk op.
@@ -65,15 +66,16 @@ export function FeedPage() {
 
   return (
     <div className="space-y-4">
-      {/* 중요 / 검토 대상(낮은 중요도) 전환 */}
+      {/* 중요 / 검토 대상 / 원문 확인 전환 */}
       <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-1">
           {([
             ["important", "중요"],
             ["low", "검토 대상"],
+            ["source-review", "원문 확인"],
           ] as const).map(([key, label]) => {
             const on = (filter.priority ?? "important") === key;
-            const n = key === "important" ? bc.important : bc.low;
+            const n = key === "important" ? bc.important : key === "low" ? bc.low : bc.sourceReview;
             return (
               <button
                 key={key}
@@ -91,10 +93,17 @@ export function FeedPage() {
         <p className="text-xs text-slate-400">⭐저장 · 지난 텔레그램은 “보관함” 탭</p>
       </div>
 
-      {review && (
+      {filter.priority === "low" && (
         <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
           낮은 중요도/개인적이라고 판별된 글입니다. 훑어보고 <strong>남기기</strong>(피드로) 또는{" "}
           <strong>삭제</strong>하세요. 여긴 다이제스트에 포함되지 않습니다.
+        </p>
+      )}
+      {sourceReview && (
+        <p className="rounded border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800">
+          X Article·첨부 글의 본문을 가져오지 못했거나 종목명/제목만 수집된 항목입니다. 자동으로 버리지 않고
+          계속 보관합니다. <strong>원문 보기</strong>로 읽은 뒤 <strong>확인 후 남기기</strong> 또는 삭제하세요.
+          확인 전에는 다이제스트에 들어가지 않습니다.
         </p>
       )}
 
@@ -175,7 +184,7 @@ export function FeedPage() {
                   disabled={promoteMany.isPending}
                   className="rounded bg-blue-600 px-2 py-1 text-xs font-medium text-white disabled:opacity-50"
                 >
-                  선택 남기기
+                  {sourceReview ? "선택 확인 후 남기기" : "선택 남기기"}
                 </button>
               )}
               <button onClick={clearSel} className="text-xs text-slate-400 underline">

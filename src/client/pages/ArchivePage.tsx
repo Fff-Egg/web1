@@ -39,7 +39,7 @@ export function ArchivePage() {
     queryFn: () => api.feedCounts(),
     enabled: focusId == null,
   });
-  const bc = counts.data ?? { important: 0, low: 0, saved: 0, telegram: 0 };
+  const bc = counts.data ?? { important: 0, low: 0, sourceReview: 0, saved: 0, telegram: 0 };
   const list = useQuery({
     queryKey: ["feed", { priority: bucket }],
     queryFn: () => api.listFeed({ priority: bucket }),

@@ -13,6 +13,7 @@ import {
   ANALYSIS_MODEL,
 } from "./anthropic.js";
 import { ANALYSIS_OUTPUT_CONTRACT } from "../../shared/analysis.js";
+import { needsSourceReview, sourceReviewSummary } from "../../shared/sourceReview.js";
 
 // Cap body length sent to the model (cuts token cost). Tune via env.
 const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
@@ -51,6 +52,8 @@ export interface Classification {
   relevant: boolean;
   /** Important enough for the main feed; low → sorted into the review bucket. */
   important: boolean;
+  /** The source supplied only a shell/title/ticker, so the user must open it. */
+  needsSourceReview: boolean;
   /** Short summary of the article (shown in the Feed). Empty if not relevant. */
   summary: string;
   /** 논지 지도(Thesis Map) signals this article reads against the user's threads. */
@@ -69,7 +72,9 @@ function threadsBlock(threads: ThreadBrief[]): string {
     .join("\n");
   return (
     `\n[논지 지도 — 내가 추적 중인 투자 논지(스레드)]\n${list}\n` +
-    `이 글이 위 논지 중 하나라도 강화/약화/반증하면 signals에 적는다(관련 없으면 빈 배열). ` +
+    `이 목록은 관련성·중요도 필터가 아니라 관련 글을 읽은 뒤 붙이는 사후 태그다. ` +
+    `위 목록에 맞지 않는다는 이유로 relevant나 important를 false로 만들지 마라. ` +
+    `먼저 전체 투자 유니버스 기준으로 관련성·중요도를 판단한 뒤, 이 글이 위 논지 중 하나라도 강화/약화/반증하면 signals에 적는다(관련 없으면 빈 배열). ` +
     `관련이 분명한 스레드만 최소한으로 적고, note는 30자 이내 한 줄로 짧게(요약 먼저, 신호는 간결히). ` +
     `어느 스레드에도 안 맞지만 새 논지로 추적할 가치가 있으면 newThread로 제안한다(아니면 null).\n` +
     `- verdict: 강화 | 약화 | 반증 | 중립 중 하나.\n` +
@@ -121,8 +126,9 @@ function parseThesis(parsed: Record<string, unknown> | null): ExtractedThesis | 
 function salvageClassification(text: string): Record<string, unknown> | null {
   const rel = /"relevant"\s*:\s*(true|false)/.exec(text);
   const imp = /"important"\s*:\s*(true|false)/.exec(text);
+  const review = /"needsSourceReview"\s*:\s*(true|false)/.exec(text);
   const sum = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
-  if (!rel && !imp && !sum) return null;
+  if (!rel && !imp && !review && !sum) return null;
   let summary: string | undefined;
   if (sum) {
     try {
@@ -134,6 +140,7 @@ function salvageClassification(text: string): Record<string, unknown> | null {
   return {
     ...(rel ? { relevant: rel[1] === "true" } : {}),
     ...(imp ? { important: imp[1] === "true" } : {}),
+    ...(review ? { needsSourceReview: review[1] === "true" } : {}),
     ...(summary !== undefined ? { summary } : {}),
   };
 }
@@ -163,6 +170,16 @@ export async function filterRelevant(
   guidance?: string,
   threads: ThreadBrief[] = [],
 ): Promise<Classification> {
+  // Never let an LLM throw away a source shell it had no chance to read. This
+  // bucket is persistent, excluded from the digest, and resolved by the user.
+  if (needsSourceReview(article)) {
+    return {
+      relevant: true,
+      important: false,
+      needsSourceReview: true,
+      summary: sourceReviewSummary(article),
+    };
+  }
   const criteria = cfg.relevanceCriteria?.trim() || cfg.instructions;
   const summaryGuide = cfg.summaryInstructions?.trim() || "핵심 내용을 한국어 2~3문장으로 요약한다.";
   const importanceGuide =
@@ -173,18 +190,22 @@ export async function filterRelevant(
     `★ 출력 언어(최우선 규칙): 모든 출력은 반드시 한국어로 작성한다. summary는 한국어 문장으로만 쓰며 ` +
     `중국어·일본어를 절대 사용하지 않는다. (영어 고유명사·종목 티커만 예외)\n\n` +
     `[관련성 판단 기준]\n${criteria}\n\n` +
+    `[본문 수집 예외 — 최우선] 본문이 비었거나, 제목·종목명·티커만 보이거나, 링크된 아티클 본문을 읽지 못해 ` +
+    `판단 근거가 부족하면 제외하지 말고 relevant=true, important=false, needsSourceReview=true로 둔다. ` +
+    `summary에는 '[원문 확인 필요]'와 보이는 정보만 적는다.\n\n` +
     `[중요도 판단 기준]\n${importanceGuide}\n` +
     guidanceBlock(guidance) +
     threadsBlock(threads) +
     `\n[요약 지침]\n${summaryGuide}\n\n` +
     `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
-    `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
-    `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"` +
+    `(3) 원문을 직접 확인해야 하는지 needsSourceReview, (4) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
+    `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, ` +
+    `"needsSourceReview": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"` +
     (threads.length > 0 ? THESIS_OUTPUT : "") +
     `}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
   const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
-  const user = `제목: ${article.title ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
+  const user = `제목: ${article.title ?? ""}\n원문 URL: ${article.url ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
   const text = await complete({
     model: cfg.filterModel || FILTER_MODEL(),
     system,
@@ -201,12 +222,14 @@ export async function filterRelevant(
     }
   }
   let summary = typeof parsed?.summary === "string" ? (parsed.summary as string) : "";
+  const sourceReview = parsed?.needsSourceReview === true;
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
-  const relevant = forceAll || !parsed || parsed.relevant !== false;
+  const relevant = sourceReview || forceAll || !parsed || parsed.relevant !== false;
   // Important unless explicitly false (so nothing is hidden by accident).
-  const important = parsed?.important !== false;
+  const important = sourceReview ? false : parsed?.important !== false;
+  if (sourceReview && !summary.trim()) summary = sourceReviewSummary(article);
   // Thesis Map signals only when threads were injected AND the article is relevant.
-  const thesis = relevant && threads.length > 0 ? parseThesis(parsed) : undefined;
+  const thesis = relevant && !sourceReview && threads.length > 0 ? parseThesis(parsed) : undefined;
   if (!parsed) {
     console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
   }
@@ -224,7 +247,7 @@ export async function filterRelevant(
       /* keep the original summary */
     }
   }
-  return { relevant, important, summary, thesis };
+  return { relevant, important, needsSourceReview: sourceReview, summary, thesis };
 }
 
 export interface DeepAnalysis {
@@ -313,7 +336,13 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
   const processOne = async (article: Article): Promise<void> => {
     if (rateLimited) return;
     try {
-      const { relevant: isRelevant, important, summary, thesis } = await filterRelevant(article, cfg, guidance, threadList);
+      const {
+        relevant: isRelevant,
+        important,
+        needsSourceReview: sourceReview,
+        summary,
+        thesis,
+      } = await filterRelevant(article, cfg, guidance, threadList);
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
@@ -324,11 +353,12 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         return;
       }
       // 1st-pass pick (with its summary). Deep analysis only when enabled.
-      const deep = deepPerArticle ? await deepAnalyze(article, cfg) : null;
+      const deep = deepPerArticle && !sourceReview ? await deepAnalyze(article, cfg) : null;
       await db.insert(analyses).values({
         articleId: article.id,
         relevant: true,
         lowPriority: !important,
+        needsSourceReview: sourceReview,
         summary: deep?.summary ?? summary,
         implications: deep?.implications,
         fullText: deep?.fullText,

@@ -470,6 +470,7 @@ async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
     .where(
       and(
         eq(analyses.relevant, true),
+        eq(analyses.needsSourceReview, false),
         isNull(articles.deletedAt),
         // window-bounded by feed-entry time, then important OR saved
         gte(analyses.createdAt, start),
@@ -618,7 +619,8 @@ async function synthesizeFromDigests(
  * and is read via the digest's ?article deep link → feed.get (needs a non-deleted
  * row), so sweeping it would break past digests' "피드에서 원문 보기". But
  * **low-priority** telegram (검토 only — a digest never cites it, since digests
- * pull important OR saved) is swept like any other 검토 글.
+ * pull important OR saved) is swept like any other 검토 글. Source shells that
+ * need a direct click are kept until the user resolves the 원문 확인 bucket.
  */
 async function trashWindowFeed(start: Date, end: Date): Promise<number> {
   const rows = await db
@@ -630,6 +632,7 @@ async function trashWindowFeed(start: Date, end: Date): Promise<number> {
       and(
         eq(analyses.relevant, true),
         eq(analyses.saved, false),
+        eq(analyses.needsSourceReview, false),
         // keep alive only important telegram; trash everything else in window
         or(ne(sources.provider, "telegram"), eq(analyses.lowPriority, true))!,
         isNull(articles.deletedAt),
