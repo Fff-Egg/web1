@@ -316,6 +316,33 @@ export function DigestPage() {
   const olderDate = digestDates.find((d) => d < viewDate);
   const newerDate = [...digestDates].reverse().find((d) => d > viewDate);
 
+  /**
+   * 날짜 탭 하나가 덮는 실제 구간 — 자동 두 슬롯의 합.
+   * 아침분(D) = [(D-1) M시, D H시), 낮분(D) = [D H시, D M시)  →  [(D-1) M시, D M시).
+   * (M<H인 설정에서는 경계가 반대로 놓이므로 그 경우는 H 기준으로 표기한다.)
+   */
+  const tabSpan = (iso: string) => {
+    const M = schedule.data?.middayHour ?? 17;
+    const H = schedule.data?.eveningHour ?? 7;
+    const [a, b] = M >= H ? [`${mdy(prevDay(iso))} ${midH}`, `${mdy(iso)} ${midH}`] : [`${mdy(prevDay(iso))} ${evH}`, `${mdy(iso)} ${evH}`];
+    return `${a} ~ ${b}`;
+  };
+
+  /** 칩 하나가 실제로 종합한 구간(짧게). 자동은 슬롯 창, 수동은 고른 날짜 창. */
+  const chipSpan = (d: DigestSummary) => {
+    const M = schedule.data?.middayHour ?? 17;
+    const H = schedule.data?.eveningHour ?? 7;
+    const end = d.periodEnd ?? d.periodStart;
+    if (!end) return "";
+    if (isAuto(d)) {
+      return isMidday(d)
+        ? `${mdy(M >= H ? end : prevDay(end))} ${evH}~${midH}` //  낮분: [D H시, D M시)
+        : `${mdy(prevDay(end))} ${midH}~${mdy(end)} ${evH}`; //   아침분: [(D-1) M시, D H시)
+    }
+    const st = d.periodStart ?? end;
+    return `${mdy(prevDay(st))} ${evH}~${mdy(end)} ${evH}`;
+  };
+
   const chipLabel = (d: DigestSummary) => {
     if (isAuto(d)) return isMidday(d) ? `☀️ 낮분 ${midH}` : `🌅 아침분 ${evH}`;
     const range =
@@ -591,6 +618,14 @@ export function DigestPage() {
           </div>
           <span className="ml-auto text-xs text-slate-400">총 {list.data?.length ?? 0}건</span>
         </div>
+        {/* 날짜 하나가 덮는 실제 구간 — "23일"만 봐서는 어느 구간인지 알 수 없다.
+            자동 두 슬롯(아침분+낮분)이 [(D-1) M시, D M시)를 빈틈없이 덮는다. */}
+        {viewDate && (
+          <p className="mt-1 text-[11px] tabular-nums text-slate-400">
+            이 날짜가 덮는 구간: <strong className="font-medium text-slate-500">{tabSpan(viewDate)}</strong>
+            <span className="ml-1 opacity-80">(아침분 {evH} 마감 + 낮분 {midH} 마감)</span>
+          </p>
+        )}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
           {digestsOn.length === 0 && (
             <span className="text-sm text-slate-400">
@@ -612,6 +647,7 @@ export function DigestPage() {
               }
             >
               {chipLabel(d)}
+              <span className="ml-1 text-[10px] font-normal tabular-nums opacity-70">{chipSpan(d)}</span>
             </button>
           ))}
           {selectedId !== undefined && (
