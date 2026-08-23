@@ -114,9 +114,36 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
     throw new Error(`LLM API ${res.status}: ${text.slice(0, 300)}`);
   }
   const data = (await res.json()) as {
-    choices?: { message?: { content?: string } }[];
+    choices?: {
+      message?: { content?: string; reasoning_content?: string };
+      finish_reason?: string;
+    }[];
+    usage?: { prompt_tokens?: number; completion_tokens?: number };
   };
-  return (data.choices?.[0]?.message?.content ?? "").trim();
+  const choice = data.choices?.[0];
+  const text = (choice?.message?.content ?? "").trim();
+  if (text) return text;
+
+  // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
+  // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
+  // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
+  // 이제는 던져서 ① completeRetry가 재시도하고 ② 실패 시 원인이 화면·로그에 드러나게 한다.
+  const reason = choice?.finish_reason ?? "?";
+  const reasoning = (choice?.message?.reasoning_content ?? "").length;
+  const u = data.usage;
+  const detail =
+    `finish_reason=${reason}` +
+    (reasoning > 0 ? ` reasoning_len=${reasoning}` : "") +
+    (u ? ` tokens(prompt=${u.prompt_tokens ?? "?"}, completion=${u.completion_tokens ?? "?"})` : "") +
+    ` max_tokens=${opts.maxTokens ?? 1024}`;
+  console.error(`[llm] 빈 응답 (model=${opts.model}) ${detail}`);
+  const hint =
+    reason === "length"
+      ? " — 출력 토큰이 부족합니다(추론형 모델이면 사고 토큰이 예산을 다 씁니다). DIGEST_MAP_TOKENS·DIGEST_MAX_TOKENS를 올리세요."
+      : reason === "content_filter"
+        ? " — 제공자 필터에 걸렸습니다."
+        : "";
+  throw new Error(`LLM 빈 응답 (${detail})${hint}`);
 }
 
 /** Strip ```json fences / prose and parse the first JSON object. Returns null on failure. */

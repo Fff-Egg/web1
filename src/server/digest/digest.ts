@@ -389,13 +389,21 @@ export function packChunks(rows: Pick<DigestItem, "title" | "body" | "summary">[
   }
 }
 
-/** complete() with one retry — a single flaky map call shouldn't kill the digest. */
+/** complete() with one retry — a single flaky map call shouldn't kill the digest.
+ *  빈 응답도 이제 complete()가 던지므로 여기서 재시도된다. 원인이 **출력 토큰 부족**
+ *  (`finish_reason=length` — 추론형 모델이 사고 토큰으로 예산을 다 쓰는 경우 포함)이면
+ *  예산을 2배로 늘려 재시도한다. 그냥 같은 요청을 반복하면 똑같이 빌 뿐이다. */
 async function completeRetry(opts: Parameters<typeof complete>[0]): Promise<string> {
   try {
     return await complete(opts);
   } catch (err) {
-    console.warn("[digest] LLM call failed, retrying once:", err instanceof Error ? err.message : err);
-    return complete(opts);
+    const msg = err instanceof Error ? err.message : String(err);
+    const starved = /finish_reason=length/.test(msg);
+    const next = starved ? { ...opts, maxTokens: (opts.maxTokens ?? 1024) * 2 } : opts;
+    console.warn(
+      `[digest] LLM 호출 실패, 1회 재시도${starved ? ` (출력 토큰 ${opts.maxTokens ?? 1024}→${next.maxTokens})` : ""}: ${msg}`,
+    );
+    return complete(next);
   }
 }
 
@@ -409,20 +417,35 @@ const MAP_SYSTEM =
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
 async function mapStage(rows: DigestItem[], chunks: number[][], model: string): Promise<string[]> {
   const partials = new Array<string>(chunks.length);
+  const failed: number[] = [];
   const runOne = async (ci: number) => {
     const body = chunks[ci].map((i) => renderItem(rows[i], i + 1)).join("\n\n---\n\n");
-    partials[ci] = await completeRetry({
-      model,
-      system: MAP_SYSTEM,
-      user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
-      maxTokens: MAP_MAX_TOKENS(),
-    });
+    try {
+      partials[ci] = await completeRetry({
+        model,
+        system: MAP_SYSTEM,
+        user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
+        maxTokens: MAP_MAX_TOKENS(),
+      });
+    } catch (err) {
+      // 청크 하나가 죽어도 나머지는 살린다. 단 **구멍을 숨기지 않는다** — 2단계 종합에
+      // 실패 사실을 명시해, LLM이 없는 내용을 지어내거나 "입력이 비었다"고만 답하지 않게 한다.
+      failed.push(ci + 1);
+      const nums = chunks[ci].map((i) => i + 1);
+      console.error(`[digest] 묶음 ${ci + 1} 요약 실패([${nums[0]}]~[${nums[nums.length - 1]}]):`, err);
+      partials[ci] = `(이 묶음 ${chunks[ci].length}건은 1단계 요약에 실패해 내용이 없습니다. 번호 [${nums.join("], [")}] — 이 번호들은 인용하지 마세요.)`;
+    }
   };
   for (let i = 0; i < chunks.length; i += MAP_CONCURRENCY) {
     await Promise.all(
       chunks.slice(i, i + MAP_CONCURRENCY).map((_, j) => runOne(i + j)),
     );
   }
+  if (failed.length === chunks.length) {
+    // 전부 실패면 종합할 재료가 없다 — 쓸모없는 리포트를 저장하느니 명확히 실패시킨다.
+    throw new Error(`다이제스트 1단계 요약이 전부 실패했습니다(${chunks.length}개 묶음). 위 [digest]·[llm] 로그에서 원인을 확인하세요.`);
+  }
+  if (failed.length > 0) console.warn(`[digest] 묶음 ${failed.join(", ")} 실패 — 나머지로 종합 진행`);
   return partials;
 }
 
