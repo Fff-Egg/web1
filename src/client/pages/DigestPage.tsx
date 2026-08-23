@@ -688,13 +688,74 @@ export function DigestPage() {
  * meta.models는 2026-08 이후 생성분에만 있다 — 옛 다이제스트는 meta.model만 표시.
  */
 function ModelBadge({ meta }: { meta: unknown }) {
+  type StageTrace = {
+    configured?: string;
+    planned?: string;
+    used?: string[];
+    attempts?: number;
+    retries?: number;
+    fallbacks?: number;
+    failures?: number;
+  };
   const m = meta as
-    | { model?: string; models?: { primary?: string; used?: string[]; fallbacks?: number; failures?: number } }
+    | {
+        model?: string;
+        models?: {
+          version?: number;
+          primary?: string;
+          used?: string[];
+          fallbacks?: number;
+          failures?: number;
+          stages?: { map?: StageTrace; final?: StageTrace };
+        };
+      }
     | null
     | undefined;
   const t = m?.models;
   const primary = t?.primary ?? m?.model;
   if (!primary) return null;
+
+  // v2: intentional Flash map → Pro final is not a fallback. Report each stage
+  // separately, and warn only when the FINAL Pro stage actually fell back.
+  if (t?.version === 2 && t.stages?.final) {
+    const map = t.stages.map;
+    const final = t.stages.final;
+    const mapRan = (map?.attempts ?? 0) > 0;
+    const mapUsed = mapRan ? map?.used?.join(" + ") || map?.planned || "알 수 없음" : "원문 직접 전달";
+    const finalUsed = final.used?.join(" + ") || final.planned || primary;
+    const finalFallback = (final.fallbacks ?? 0) > 0;
+    const failed = (map?.failures ?? 0) + (final.failures ?? 0);
+    return (
+      <div
+        className={
+          "mb-2 rounded px-2.5 py-2 text-[11px] leading-relaxed " +
+          (finalFallback || failed > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800")
+        }
+      >
+        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
+          <span>{finalFallback ? "⚠️" : "✓"}</span>
+          <span>자료 정리</span>
+          <span className="rounded bg-white/80 px-1.5 py-0.5 font-mono font-medium">{mapUsed}</span>
+          <span aria-hidden="true">→</span>
+          <span>최종 연결·작성</span>
+          <span className="rounded bg-white/80 px-1.5 py-0.5 font-mono font-semibold">{finalUsed}</span>
+        </div>
+        {!mapRan && map?.planned && (
+          <p className="mt-1 opacity-75">글이 적어 묶음 압축 없이 원문을 최종 모델에 직접 전달했습니다.</p>
+        )}
+        {(final.retries ?? 0) > 0 && !finalFallback && (
+          <p className="mt-1">최종 모델 첫 시도 실패 후 같은 모델 재시도로 성공했습니다.</p>
+        )}
+        {finalFallback && (
+          <p className="mt-1">
+            설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>이(가) 두 번 실패해 최후 수단으로
+            자료 정리 모델이 최종 작성했습니다.
+          </p>
+        )}
+        {failed > 0 && <p className="mt-1">끝내 실패한 자료 묶음 <strong>{failed}개</strong>는 내용이 빠졌습니다.</p>}
+      </div>
+    );
+  }
 
   // 구버전(추적 정보 없음) — 설정 모델만 표시.
   if (!t || !Array.isArray(t.used) || t.used.length === 0) {

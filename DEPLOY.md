@@ -31,12 +31,17 @@
 | `APP_PASSWORD` | **필수 권장:** 길고 고유한 사이트 접속 암호 |
 | `ANTHROPIC_API_KEY` | Claude 사용 시 `sk-ant-...` |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | DeepSeek 등 OpenAI 호환 API 사용 시 세 변수를 함께 설정 |
+| `FILTER_MODEL` | 글 선별·다이제스트 자료 정리 모델 (예: `deepseek-v4-flash`) |
+| `ANALYSIS_MODEL` | 최종 연결·심층 모델 (예: `deepseek-v4-pro`) |
+| `DIGEST_FINAL_RETRY_TOKENS` | Pro가 사고 토큰을 소진했을 때 같은 Pro 재시도 예산 (예: `16384`) |
 | `DIGEST_HOUR` | `7` (선택, 하루 경계 다이제스트·피드 정리 시각 KST) |
 | `DIGEST_MIDDAY_HOUR` | `17` (선택, 두 번째 다이제스트 시각 KST) |
 | `COLLECT_INTERVAL_MIN` | `30` (선택, 수집 주기 분) |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (선택, 빌드 빨라짐 — 서버는 브라우저 불필요) |
 
-> `FILTER_MODEL` / `ANALYSIS_MODEL`은 기본값이 있어 생략 가능합니다.
+> 웹 **설정 → 고급**에 모델을 직접 쓰면 Railway의 `FILTER_MODEL` / `ANALYSIS_MODEL`보다 우선합니다.
+> OpenAI 호환 API에서 `FILTER_MODEL=claude-*` 같은 옛 값을 두면 실제로는 `LLM_MODEL`로 치환되므로,
+> 혼동을 피하려면 실제 모델 id(예: `deepseek-v4-flash`)로 바꾸세요.
 > `APP_PASSWORD`를 설정하지 않으면 서버 로그에 공개 접근 경고가 출력됩니다.
 
 ## 4. 배포

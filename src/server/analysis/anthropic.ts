@@ -7,6 +7,15 @@ function usingOpenAI(): boolean {
   return Boolean(process.env.LLM_BASE_URL && process.env.LLM_API_KEY);
 }
 
+export type LlmProvider = "openai-compatible" | "anthropic" | "unconfigured";
+
+/** Non-secret runtime provider label for the Settings diagnostics card. */
+export function llmProvider(): LlmProvider {
+  if (usingOpenAI()) return "openai-compatible";
+  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
+  return "unconfigured";
+}
+
 /** Whether analysis can run — either Anthropic OR an OpenAI-compatible endpoint. */
 export function hasLLM(): boolean {
   return Boolean(process.env.ANTHROPIC_API_KEY) || usingOpenAI();
@@ -30,10 +39,27 @@ export function getAnthropic(): Anthropic {
 // endpoint, set LLM_MODEL (or FILTER_MODEL / ANALYSIS_MODEL) to that host's id
 // (e.g. "llama-3.3-70b-versatile", "qwen-2.5-32b").
 const OPENAI_DEFAULT_MODEL = () => process.env.LLM_MODEL ?? "llama-3.3-70b-versatile";
+
+/**
+ * Return the model id that will actually be sent to the active provider.
+ *
+ * Old Settings/Railway values may still contain a `claude-*` id after the app
+ * was moved to an OpenAI-compatible endpoint. `complete()` has always replaced
+ * that stale id with LLM_MODEL, but callers used to log the pre-replacement id.
+ * Keeping resolution public and pure-at-call-time lets the digest trace show the
+ * real model (for example deepseek-v4-flash rather than Claude Haiku).
+ */
+export function resolveModel(model: string): string {
+  const id = model.trim();
+  return usingOpenAI() && id.startsWith("claude") ? OPENAI_DEFAULT_MODEL() : id;
+}
+
 export const FILTER_MODEL = () =>
-  process.env.FILTER_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-haiku-4-5-20251001");
+  resolveModel(
+    process.env.FILTER_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-haiku-4-5-20251001"),
+  );
 export const ANALYSIS_MODEL = () =>
-  process.env.ANALYSIS_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-opus-4-8");
+  resolveModel(process.env.ANALYSIS_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-opus-4-8"));
 
 
 /**
@@ -89,7 +115,7 @@ export async function complete(opts: CompleteOpts): Promise<string> {
   if (usingOpenAI()) {
     // Saved Settings may still carry Claude model ids (the old defaults); those
     // 404 on an OpenAI-compatible host, so fall back to the configured open model.
-    const model = opts.model.startsWith("claude") ? OPENAI_DEFAULT_MODEL() : opts.model;
+    const model = resolveModel(opts.model);
     return completeOpenAI({ ...opts, model });
   }
   return completeAnthropic(opts);

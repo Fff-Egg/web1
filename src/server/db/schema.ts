@@ -341,6 +341,8 @@ export interface AnalysisConfig {
   instructions: string;
   /** Optional model overrides (else FILTER_MODEL / ANALYSIS_MODEL env). */
   filterModel?: string;
+  /** Optional digest map/compression model. Defaults to filterModel/FILTER_MODEL. */
+  digestMapModel?: string;
   analysisModel?: string;
 }
 

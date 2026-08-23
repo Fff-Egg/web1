@@ -83,7 +83,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 
 **Settings** (`SettingsPage.tsx`)
 - 지침 4종 편집: `relevanceCriteria`(1차 필터) · `importanceCriteria`(중요/검토 분리) · `summaryInstructions`(요약) · `digestInstructions`(2차 다이제스트).
-- 고급(접힘): DEEP_ANALYSIS 지침 · 1차 필터 모델/2차 모델 오버라이드.
+- 고급(접힘): DEEP_ANALYSIS 지침 · 1차 글 선별 / 다이제스트 자료 정리 / 최종 연결 모델을 독립 설정. 현재 서버의 실제 모델 흐름과 Settings·Railway 우선순위 표시.
 - **학습 메모(자동)**: 피드백으로 매일 distill되는 중요도 메모 보기·편집·비우기(`settings.filterGuidance`, `importanceCriteria`와 별개).
 
 **리포트** (`ResearchPage.tsx`) — 증권사 리포트 애그리게이터
@@ -156,7 +156,7 @@ MEGA 배지  = VIX ≥ 40
 1. **수집** (`workers/collect.ts` collectAll): 소스별 어댑터로 fetch → `articles` upsert. 같은 (source,url) 글은 삭제됐어도 재생성 안 함(불안정 GUID 부활 차단). X=쿠키 직접수집, 텔레그램=MTProto 배치(커서 lastMessageId).
 2. **1차 분석** (`analysis/analyze.ts` filterRelevant): LLM 1콜로 관련성·중요도·요약 + 논지 신호 동시 산출. 한국어 강제·fail-open. 배치(50)×동시성(3), 429 감지 시 사이클 중단 후 재개. 활성 스레드 있으면 같은 프롬프트에 주입해 추가 콜 없이 논지 신호.
 3. **피드백 학습** (`feedback.ts` refreshGuidance): 사용자 액션(휴지통=중요↓/남기기·복원=중요↑)만 `filter_feedback`에 기록. 경계 루틴에서 새 피드백만 distill해 '학습 메모'에 누적 통합 → 1차 필터 중요도에만 재주입(관련성 게이트 불변).
-4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+하루 sweep+피드백 distill) · 17시(낮분). 창 글 30건 초과면 크기 균형 청크(그리디 LPT) 맵리듀스, 전역 각주 [N] 유지. [N] 인용을 각주 링크로(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
+4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+하루 sweep+피드백 distill) · 17시(낮분). 창 글 30건 초과면 **Flash(기본=필터 모델)**로 크기 균형 청크를 사실 위주 압축한 뒤 **Pro(분석 모델)**가 최종 연결·작성한다. 최종 Pro 실패 시 같은 Pro를 증액 예산으로 한 번 더 시도하고, 두 번 모두 실패할 때만 Flash로 폴백한다. 전역 각주 [N] 유지. [N] 인용을 각주 링크로(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
 
 ---
 

@@ -100,6 +100,21 @@ export interface UpdateInput {
   config?: SourceConfig;
 }
 
+export interface EffectiveModelStep {
+  configured: string;
+  effective: string;
+  source: "web" | "railway" | "default" | "filter";
+}
+
+export interface ModelPlan {
+  provider: "openai-compatible" | "anthropic" | "unconfigured";
+  filter: EffectiveModelStep;
+  map: EffectiveModelStep;
+  final: EffectiveModelStep;
+  finalTokens: number;
+  finalRetryTokens: number;
+}
+
 export interface DataApi {
   mode: "trpc" | "static";
   health(): Promise<{ ok: boolean; ts: number }>;
@@ -113,6 +128,7 @@ export interface DataApi {
     id: number,
   ): Promise<{ ok: boolean; inserted: number; error: string | null; suggestedFeedUrl?: string | null }>;
   getAnalysisConfig(): Promise<AnalysisConfig>;
+  getModelPlan(): Promise<ModelPlan>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
   setFilterGuidance(text: string): Promise<void>;
@@ -269,6 +285,7 @@ function makeTrpcApi(): DataApi {
     collectSourceNow: (id) =>
       client.sources.collectNow.mutate({ id }) as ReturnType<DataApi["collectSourceNow"]>,
     getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
+    getModelPlan: () => client.settings.getModelPlan.query() as Promise<ModelPlan>,
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
@@ -416,6 +433,24 @@ function makeStaticApi(): DataApi {
         }
       }
       return { ...DEFAULT_ANALYSIS_CONFIG };
+    },
+    async getModelPlan() {
+      const cfg = await this.getAnalysisConfig();
+      const filter = cfg.filterModel || "deepseek-v4-flash";
+      const map = cfg.digestMapModel || filter;
+      const final = cfg.analysisModel || "deepseek-v4-pro";
+      return {
+        provider: "openai-compatible",
+        filter: { configured: filter, effective: filter, source: cfg.filterModel ? "web" : "default" },
+        map: {
+          configured: map,
+          effective: map,
+          source: cfg.digestMapModel ? "web" : "filter",
+        },
+        final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
+        finalTokens: 8192,
+        finalRetryTokens: 16384,
+      };
     },
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
