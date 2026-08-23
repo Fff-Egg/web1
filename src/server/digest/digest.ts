@@ -3,7 +3,7 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
-import { complete, hasLLM, ANALYSIS_MODEL } from "../analysis/anthropic.js";
+import { complete, hasLLM, ANALYSIS_MODEL, FILTER_MODEL } from "../analysis/anthropic.js";
 
 /** Today's date (YYYY-MM-DD) in KST. */
 export function kstToday(): string {
@@ -406,7 +406,20 @@ async function completeRetry(opts: Parameters<typeof complete>[0]): Promise<stri
     console.warn(
       `[digest] LLM 호출 실패, 1회 재시도${starved ? ` (출력 토큰 ${opts.maxTokens ?? 1024}→${next.maxTokens})` : ""}: ${msg}`,
     );
-    return complete(next);
+    try {
+      return await complete(next);
+    } catch (err2) {
+      // ── 모델 폴백 ──────────────────────────────────────────────────────────
+      // 같은 모델로 두 번 실패했으면 그 모델이 이 작업에 안 맞는 것이다. 실측 사례:
+      // ANALYSIS_MODEL=deepseek-v4-pro(추론형)가 max_tokens를 사고에 다 쓰고 빈 응답을
+      // 돌려주는 동안, FILTER_MODEL=deepseek-v4-flash는 같은 프롬프트를 멀쩡히 처리했다.
+      // 사용자가 env를 고칠 때까지 다이제스트가 계속 반쪽으로 나오는 것보다, 검증된
+      // 필터 모델로 넘겨 완성하는 편이 낫다. 호출은 청크당 최대 3회로 여전히 유한하다.
+      const fb = FILTER_MODEL();
+      if (!fb || fb === opts.model) throw err2;
+      console.warn(`[digest] ${opts.model} 2회 실패 — 검증된 ${fb}로 폴백해 재시도합니다.`);
+      return complete({ ...next, model: fb });
+    }
   }
 }
 
