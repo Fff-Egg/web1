@@ -392,34 +392,63 @@ export function packChunks(rows: Pick<DigestItem, "title" | "body" | "summary">[
   }
 }
 
-/** complete() with one retry — a single flaky map call shouldn't kill the digest.
- *  빈 응답도 이제 complete()가 던지므로 여기서 재시도된다. 원인이 **출력 토큰 부족**
- *  (`finish_reason=length` — 추론형 모델이 사고 토큰으로 예산을 다 쓰는 경우 포함)이면
- *  예산을 2배로 늘려 재시도한다. 그냥 같은 요청을 반복하면 똑같이 빌 뿐이다. */
-async function completeRetry(opts: Parameters<typeof complete>[0]): Promise<string> {
+/**
+ * 이번 다이제스트를 **실제로 어느 모델이 만들었는지** 추적한다.
+ * 폴백이 돌면 결과물의 성격이 달라지므로(추론형 pro vs 경량 flash) 화면에 드러내야 한다.
+ */
+export interface ModelTrace {
+  /** 설정상 쓰기로 한 모델(ANALYSIS_MODEL 또는 Settings의 analysisModel). */
+  primary: string;
+  /** 실제 성공한 호출들의 모델(중복 제거, 호출 순서). */
+  used: string[];
+  /** 폴백 모델로 성공한 호출 수. 0이면 전부 primary로 만든 것. */
+  fallbacks: number;
+  /** 끝내 실패해 내용이 빠진 호출 수(묶음). */
+  failures: number;
+}
+
+export function newTrace(primary: string): ModelTrace {
+  return { primary, used: [], fallbacks: 0, failures: 0 };
+}
+
+function noteModel(trace: ModelTrace | undefined, model: string, viaFallback: boolean): void {
+  if (!trace) return;
+  if (!trace.used.includes(model)) trace.used.push(model);
+  if (viaFallback) trace.fallbacks++;
+}
+
+/**
+ * complete() + **1회 실패 시 즉시 모델 폴백**.
+ *
+ * 실측 근거: ANALYSIS_MODEL=deepseek-v4-pro(추론형)가 max_tokens를 사고에 다 쓰고 빈
+ * 응답을 돌려주는 동안 FILTER_MODEL=deepseek-v4-flash는 같은 프롬프트를 멀쩡히 처리했다.
+ * 같은 모델로 한 번 더 시도해봐야 같은 이유로 또 비는 경우가 대부분이라(사용자 요청으로
+ * 2회→1회로 조정) 실패 즉시 검증된 모델로 넘긴다. 청크당 호출은 **최대 2회**로 유한하다.
+ * 출력 토큰 부족(`finish_reason=length`)이었으면 예산을 2배로 올려 넘긴다.
+ * 폴백 모델이 없거나 primary와 같으면 종전대로 같은 모델로 1회 재시도한다.
+ */
+async function completeRetry(opts: Parameters<typeof complete>[0], trace?: ModelTrace): Promise<string> {
   try {
-    return await complete(opts);
+    const text = await complete(opts);
+    noteModel(trace, opts.model, false);
+    return text;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     const starved = /finish_reason=length/.test(msg);
     const next = starved ? { ...opts, maxTokens: (opts.maxTokens ?? 1024) * 2 } : opts;
+    const fb = FILTER_MODEL();
+    if (fb && fb !== opts.model) {
+      console.warn(`[digest] ${opts.model} 실패 — 즉시 ${fb}로 폴백: ${msg}`);
+      const text = await complete({ ...next, model: fb });
+      noteModel(trace, fb, true);
+      return text;
+    }
     console.warn(
       `[digest] LLM 호출 실패, 1회 재시도${starved ? ` (출력 토큰 ${opts.maxTokens ?? 1024}→${next.maxTokens})` : ""}: ${msg}`,
     );
-    try {
-      return await complete(next);
-    } catch (err2) {
-      // ── 모델 폴백 ──────────────────────────────────────────────────────────
-      // 같은 모델로 두 번 실패했으면 그 모델이 이 작업에 안 맞는 것이다. 실측 사례:
-      // ANALYSIS_MODEL=deepseek-v4-pro(추론형)가 max_tokens를 사고에 다 쓰고 빈 응답을
-      // 돌려주는 동안, FILTER_MODEL=deepseek-v4-flash는 같은 프롬프트를 멀쩡히 처리했다.
-      // 사용자가 env를 고칠 때까지 다이제스트가 계속 반쪽으로 나오는 것보다, 검증된
-      // 필터 모델로 넘겨 완성하는 편이 낫다. 호출은 청크당 최대 3회로 여전히 유한하다.
-      const fb = FILTER_MODEL();
-      if (!fb || fb === opts.model) throw err2;
-      console.warn(`[digest] ${opts.model} 2회 실패 — 검증된 ${fb}로 폴백해 재시도합니다.`);
-      return complete({ ...next, model: fb });
-    }
+    const text = await complete(next);
+    noteModel(trace, opts.model, false);
+    return text;
   }
 }
 
@@ -431,22 +460,26 @@ const MAP_SYSTEM =
   "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
 
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
-async function mapStage(rows: DigestItem[], chunks: number[][], model: string): Promise<string[]> {
+async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace?: ModelTrace): Promise<string[]> {
   const partials = new Array<string>(chunks.length);
   const failed: number[] = [];
   const runOne = async (ci: number) => {
     const body = chunks[ci].map((i) => renderItem(rows[i], i + 1)).join("\n\n---\n\n");
     try {
-      partials[ci] = await completeRetry({
-        model,
-        system: MAP_SYSTEM,
-        user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
-        maxTokens: MAP_MAX_TOKENS(),
-      });
+      partials[ci] = await completeRetry(
+        {
+          model,
+          system: MAP_SYSTEM,
+          user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
+          maxTokens: MAP_MAX_TOKENS(),
+        },
+        trace,
+      );
     } catch (err) {
       // 청크 하나가 죽어도 나머지는 살린다. 단 **구멍을 숨기지 않는다** — 2단계 종합에
       // 실패 사실을 명시해, LLM이 없는 내용을 지어내거나 "입력이 비었다"고만 답하지 않게 한다.
       failed.push(ci + 1);
+      if (trace) trace.failures++;
       const nums = chunks[ci].map((i) => i + 1);
       console.error(`[digest] 묶음 ${ci + 1} 요약 실패([${nums[0]}]~[${nums[nums.length - 1]}]):`, err);
       partials[ci] = `(이 묶음 ${chunks[ci].length}건은 1단계 요약에 실패해 내용이 없습니다. 번호 [${nums.join("], [")}] — 이 번호들은 인용하지 마세요.)`;
@@ -549,6 +582,7 @@ async function synthesizeFromFeed(
   title: string,
   cfg: AnalysisConfig,
   model: string,
+  trace?: ModelTrace,
 ): Promise<string> {
   if (!hasLLM()) return buildFallbackMarkdown(title, rows);
   const citeRules =
@@ -568,17 +602,17 @@ async function synthesizeFromFeed(
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows.map((it, i) => renderItem(it, i + 1)).join("\n\n---\n\n");
-    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() }, trace);
   } else {
     const chunks = packChunks(rows);
     console.log(`[digest] map-reduce: ${rows.length}건 → ${chunks.length}청크 (≤${MAP_MAX_ITEMS()}건/청크)`);
-    const partials = await mapStage(rows, chunks, model);
+    const partials = await mapStage(rows, chunks, model, trace);
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n` +
       `1차로 선별된 글 ${rows.length}건을 1단계에서 글별로 압축 정리했다(글마다 전역 번호 [N]). ` +
       `아래 정리 목록을 원문 대신 읽고 종합하라. 인용 번호는 입력의 [N]을 그대로 사용한다:\n\n` +
       partials.map((p, i) => `### 묶음 ${i + 1}\n${p.trim()}`).join("\n\n");
-    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() });
+    report = await completeRetry({ model, system, user, maxTokens: DIGEST_MAX_TOKENS() }, trace);
   }
   return `${linkifyRefs(report.trim(), rows)}\n${sourceLinks(rows)}`;
 }
@@ -688,6 +722,8 @@ export async function generateDigest(
   const { start, end } = opts.slot ? slotBounds(startDate, opts.slot) : kstRangeBounds(startDate, endDate);
   const cfg = await settingsRepo.getAnalysisConfig();
   const model = cfg.analysisModel || ANALYSIS_MODEL();
+  // 어느 모델이 실제로 만들었는지 기록해 meta에 남긴다(폴백이 돌면 화면에 표시).
+  const trace = newTrace(model);
 
   const rows = opts.fromDigests ? [] : await fetchFeedRows(start, end);
   // Past dates: the window's feed was swept to trash, so fall back to saved
@@ -716,8 +752,20 @@ export async function generateDigest(
       console.log(`[digest] ${title}: no relevant picks, skipping.`);
       return null;
     }
-    markdown = await synthesizeFromFeed(rows, startDate, endDate, title, cfg, model);
-    meta = { itemCount: rows.length, model, source: "feed", auto: !!opts.auto, ...(opts.slot ? { slot: opts.slot } : {}) };
+    markdown = await synthesizeFromFeed(rows, startDate, endDate, title, cfg, model, trace);
+    meta = {
+      itemCount: rows.length,
+      model,
+      source: "feed",
+      auto: !!opts.auto,
+      models: { ...trace },
+      ...(opts.slot ? { slot: opts.slot } : {}),
+    };
+    console.log(
+      `[digest] ${title}: 모델 ${trace.used.join(" + ") || model}` +
+        (trace.fallbacks > 0 ? ` (폴백 ${trace.fallbacks}콜)` : "") +
+        (trace.failures > 0 ? ` · 실패 묶음 ${trace.failures}개` : ""),
+    );
   }
 
   const [res] = await db

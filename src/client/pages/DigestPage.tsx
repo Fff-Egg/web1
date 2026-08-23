@@ -633,6 +633,7 @@ export function DigestPage() {
       {digest.isLoading && <p className="text-slate-500">로딩…</p>}
       {digest.error && <p className="text-red-600">{(digest.error as Error).message}</p>}
 
+      {digest.data && <ModelBadge meta={digest.data.meta} />}
       {digest.data && (
         <article
           ref={articleRef}
@@ -641,6 +642,53 @@ export function DigestPage() {
           dangerouslySetInnerHTML={{ __html: html as string }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * 이 리포트를 **실제로 어느 모델이 만들었는지** 한 줄로 보여준다.
+ * 설정 모델이 실패해 폴백이 돌면 결과물의 성격이 달라지므로(추론형 vs 경량) 숨기지 않는다.
+ * meta.models는 2026-08 이후 생성분에만 있다 — 옛 다이제스트는 meta.model만 표시.
+ */
+function ModelBadge({ meta }: { meta: unknown }) {
+  const m = meta as
+    | { model?: string; models?: { primary?: string; used?: string[]; fallbacks?: number; failures?: number } }
+    | null
+    | undefined;
+  const t = m?.models;
+  const primary = t?.primary ?? m?.model;
+  if (!primary) return null;
+
+  // 구버전(추적 정보 없음) — 설정 모델만 표시.
+  if (!t || !Array.isArray(t.used) || t.used.length === 0) {
+    return (
+      <p className="mb-2 text-[11px] text-slate-400">
+        모델 <span className="font-mono">{primary}</span>
+      </p>
+    );
+  }
+
+  const fellBack = (t.fallbacks ?? 0) > 0;
+  const failed = t.failures ?? 0;
+  return (
+    <div
+      className={
+        "mb-2 rounded px-2.5 py-1.5 text-[11px] " +
+        (fellBack || failed > 0 ? "bg-amber-50 text-amber-800" : "bg-slate-50 text-slate-500")
+      }
+    >
+      {fellBack ? "⚠️ " : "✓ "}
+      모델 <span className="font-mono font-medium">{t.used.join(" + ")}</span>
+      {fellBack && (
+        <>
+          {" "}
+          — 설정 모델 <span className="font-mono">{primary}</span>이(가) 실패해 <strong>{t.fallbacks}개 호출을 폴백 모델로</strong>{" "}
+          대체했습니다.
+        </>
+      )}
+      {failed > 0 && <> · 끝내 실패한 묶음 <strong>{failed}개</strong>는 내용이 빠졌습니다.</>}
+      {!fellBack && failed === 0 && " — 설정 모델로 전부 생성"}
     </div>
   );
 }
