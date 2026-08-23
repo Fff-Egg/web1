@@ -13,7 +13,9 @@ import {
   slotBounds,
 } from "./digest/digest.js";
 import { feedbackRepo } from "./repo/feedback.js";
-import { hasDb } from "./db/client.js";
+import { eq } from "drizzle-orm";
+import { db, hasDb } from "./db/client.js";
+import { settings } from "./db/schema.js";
 import { hasLLM } from "./analysis/anthropic.js";
 import { getStoredSnapshot, refreshMarketSnapshot } from "./market/index.js";
 import { collectResearch, researchLastCollectedAt } from "./research/index.js";
@@ -55,18 +57,67 @@ async function runEveningRoutine(): Promise<void> {
  *  The two checks are independent (midday and boundary can fall on different
  *  calendar days when the boundary is early, e.g. 07시). Slot guards in digest.ts
  *  make these double-run safe. */
+
+/**
+ * 부팅 시 catch-up 재시도 가드 (settings KV, 마이그레이션 불필요).
+ *
+ * ⚠️ 왜 필요한가 — 2026-08 실제로 돈이 샌 경로:
+ * catch-up은 "오늘 자동 다이제스트가 저장돼 있나"로 실행 여부를 정한다. 그런데
+ * **생성이 실패하면 아무것도 저장되지 않으므로** 다음 부팅 때 또 "없다"고 판단한다.
+ * push = 자동 재배포 = 부팅이라, 문제를 고치려고 배포할 때마다 실패한 다이제스트를
+ * 통째로 다시 만들었다(하루 11회, 입력의 83%가 동일 프롬프트 재전송, 출력 91.7만 토큰).
+ * 진짜로 놓친 크론은 살려야 하니 끄지는 않고, **날짜별 시도 횟수에 상한**을 둔다.
+ */
+const CATCHUP_KEY = "digestCatchUp";
+const CATCHUP_MAX = 2; // 하루 슬롯당 최대 시도 횟수
+
+interface CatchUpState {
+  date: string;
+  evening: number;
+  midday: number;
+}
+
+async function catchUpState(): Promise<CatchUpState> {
+  const today = kstToday();
+  if (!hasDb) return { date: today, evening: 0, midday: 0 };
+  const rows = await db.select().from(settings).where(eq(settings.key, CATCHUP_KEY)).limit(1);
+  const v = rows[0]?.value as unknown as CatchUpState | undefined;
+  return v && v.date === today ? v : { date: today, evening: 0, midday: 0 };
+}
+
+async function bumpCatchUp(slot: "evening" | "midday"): Promise<void> {
+  if (!hasDb) return;
+  const st = await catchUpState();
+  const value = { ...st, [slot]: st[slot] + 1 } as unknown as Record<string, unknown>;
+  await db.insert(settings).values({ key: CATCHUP_KEY, value }).onDuplicateKeyUpdate({ set: { value } });
+}
+
 async function catchUpRoutines(digestHour: number): Promise<void> {
   try {
+    const st = await catchUpState();
     // Boundary (HH:00) run for the window that closed this morning.
     if (kstHour() >= digestHour && !(await hasAutoDigestFor(kstToday(), "evening"))) {
-      console.log(`[scheduler] catch-up: ${digestHour}:00 boundary run was missed — running now.`);
-      await runEveningRoutine(); // backfills the midday분 too
+      if (st.evening >= CATCHUP_MAX) {
+        console.warn(
+          `[scheduler] catch-up: ${digestHour}:00 boundary run은 오늘 이미 ${st.evening}회 시도해 건너뜁니다 ` +
+            `— 계속 실패 중이라는 뜻이니 로그를 확인하고 수동 버튼으로 실행하세요.`,
+        );
+      } else {
+        console.log(`[scheduler] catch-up: ${digestHour}:00 boundary run was missed — running now (시도 ${st.evening + 1}/${CATCHUP_MAX}).`);
+        await bumpCatchUp("evening"); // 실행 **전에** 기록 — 실패해도 카운트가 올라가야 루프가 멈춘다
+        await runEveningRoutine(); // backfills the midday분 too
+      }
     }
     // 낮분 for the CURRENT window (label = its generation day), if its M시 has passed.
     const md = middayLabelDate();
     if (Date.now() >= slotBounds(md, "midday").end.getTime() && !(await hasMiddayFor(md))) {
-      console.log(`[scheduler] catch-up: midday run was missed — running now.`);
-      await runMiddayRoutine();
+      if (st.midday >= CATCHUP_MAX) {
+        console.warn(`[scheduler] catch-up: midday run은 오늘 이미 ${st.midday}회 시도해 건너뜁니다.`);
+      } else {
+        console.log(`[scheduler] catch-up: midday run was missed — running now (시도 ${st.midday + 1}/${CATCHUP_MAX}).`);
+        await bumpCatchUp("midday");
+        await runMiddayRoutine();
+      }
     }
   } catch (err) {
     console.error("[scheduler] catch-up failed:", err);
