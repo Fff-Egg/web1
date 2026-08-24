@@ -154,9 +154,11 @@ Output               917,097   ← 콜당 ~7,000 = max_tokens 한도 꽉 참, �
 2. **빈 응답 = 에러** (`completeOpenAI`) — `content`가 비면 `finish_reason`·`reasoning_content` 길이·
    `usage`·`max_tokens`를 담아 **throw**. 조용한 통과가 C의 본질이었다. `finish_reason=length`인데
    내용이 온 경우에도 경고를 남긴다(반쪽 결과 방지).
-3. **`LLM_EXTRA_BODY`** env — 요청 본문에 병합할 JSON. 추론(thinking)을 끄는 파라미터 이름이
-   제공자·모델마다 달라 **코드에 못 박지 않고 env로 뺐다**. 잘못된 JSON은 경고만 남기고 무시.
-   예: `LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}`
+3. **DeepSeek V4 thinking 기본 OFF + `LLM_EXTRA_BODY` override** — V4 API는 thinking이 기본 ON이라
+   기사별 1차 분석까지 매번 사고 토큰을 쓰면 Flash 비용이 폭증한다. 앱은 `deepseek-v4-flash/pro`에
+   `{"thinking":{"type":"disabled"}}`를 안전 기본값으로 자동 전송한다. 정말 필요한 경우에만
+   `LLM_EXTRA_BODY={"thinking":{"type":"enabled"}}`로 명시적으로 다시 켠다. 잘못된 JSON은 경고만
+   남기고 무시한다.
 4. **2단 모델 파이프라인** (`digest/modelPipeline.ts`) — 초기 수습 때 `digest.ts completeRetry`에
    넣었던 단순 폴백을 이후 세션이 전용 모듈로 승격시켰다. 현재 구조:
    - **맵(자료 정리) = Flash**, **최종(연결·작성) = Pro**. 값싼 모델로 대량 압축하고 비싼 모델은

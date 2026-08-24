@@ -85,9 +85,12 @@ export function stripLoneSurrogates(s: string): string {
  * 왜 필요한가: **추론형(thinking) 모델은 `max_tokens` 예산을 사고 과정에 먼저 쓴다.**
  * 예산이 모자라면 사고만 하다 잘려서 `content`가 빈 채로 200이 온다(2026-08 실장애:
  * deepseek-v4-pro가 요청당 출력 ~7,000토큰을 쓰고도 다이제스트 내용은 빈 문자열).
- * 사고를 끄는 파라미터 이름은 제공자·모델마다 달라서 코드에 못 박지 않고 env로 뺀다.
- *   예) LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}
- *       LLM_EXTRA_BODY={"reasoning_effort":"none"}
+ * 일반 OpenAI 호환 제공자의 전용 파라미터는 이름이 제각각이므로 이 env로
+ * 넘긴다. 다만 현재 주 제공자인 DeepSeek V4는 thinking이 기본 ON이라는
+ * 공식 규격이 확정돼 있어, 기사마다 수천 개의 사고 토큰을 쓰지 않도록 앱이
+ * 비추론 모드를 안전 기본값으로 넣는다. 정말 필요할 때만 아래처럼 명시적으로
+ * 다시 켠다.
+ *   예) LLM_EXTRA_BODY={"thinking":{"type":"enabled"}}
  * 파싱 실패는 무시하고 경고만 남긴다 — 잘못된 env가 분석 전체를 막으면 안 된다.
  */
 function extraBody(): Record<string, unknown> {
@@ -144,6 +147,16 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
  */
 async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
+  const configuredExtra = extraBody();
+  // DeepSeek V4's API defaults to thinking=enabled. A per-article filter is
+  // called hundreds of times a day and does not benefit enough from private
+  // chain-of-thought to justify that token bill. Keep non-thinking as the app's
+  // cost-safe default for both Flash and Pro; an explicit LLM_EXTRA_BODY value
+  // still wins for users who intentionally want thinking mode.
+  const costSafeExtra =
+    /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model) && configuredExtra.thinking === undefined
+      ? { thinking: { type: "disabled" } }
+      : {};
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
     headers: {
@@ -158,7 +171,8 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         { role: "system", content: stripLoneSurrogates(opts.system) },
         { role: "user", content: stripLoneSurrogates(opts.user) },
       ],
-      ...extraBody(),
+      ...costSafeExtra,
+      ...configuredExtra,
     }),
   });
   if (!res.ok) {

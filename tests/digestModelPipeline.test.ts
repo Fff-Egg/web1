@@ -11,7 +11,7 @@ import {
   type CompleteFn,
 } from "../src/server/digest/modelPipeline.js";
 
-const KEYS = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "FILTER_MODEL"] as const;
+const KEYS = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "FILTER_MODEL", "LLM_EXTRA_BODY"] as const;
 const before = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 
@@ -35,6 +35,40 @@ test("OpenAI 호환 환경의 오래된 Claude FILTER_MODEL은 실제 LLM_MODEL�
   process.env.FILTER_MODEL = "claude-haiku-4-5-20251001";
   assert.equal(resolveModel(process.env.FILTER_MODEL), "deepseek-v4-flash");
   assert.equal(FILTER_MODEL(), "deepseek-v4-flash");
+});
+
+test("DeepSeek V4는 반복 분석 비용을 막기 위해 thinking을 기본으로 끈다", async () => {
+  useDeepSeekEndpoint();
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({
+        choices: [{ message: { content: "완료" }, finish_reason: "stop" }],
+        usage: { prompt_tokens: 10, completion_tokens: 2 },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  await complete({ model: "deepseek-v4-flash", system: "s", user: "u", maxTokens: 100 });
+  assert.deepEqual(requestBody?.thinking, { type: "disabled" });
+});
+
+test("명시한 LLM_EXTRA_BODY는 DeepSeek thinking 기본값을 덮어쓸 수 있다", async () => {
+  useDeepSeekEndpoint();
+  process.env.LLM_EXTRA_BODY = JSON.stringify({ thinking: { type: "enabled" } });
+  let requestBody: Record<string, unknown> | undefined;
+  globalThis.fetch = async (_input, init) => {
+    requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "완료" }, finish_reason: "stop" }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  await complete({ model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 });
+  assert.deepEqual(requestBody?.thinking, { type: "enabled" });
 });
 
 test("본문이 있어도 finish_reason=length면 잘린 결과를 성공으로 저장하지 않는다", async () => {
