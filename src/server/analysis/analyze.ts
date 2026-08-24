@@ -52,7 +52,7 @@ export interface Classification {
   relevant: boolean;
   /** Important enough for the main feed; low → sorted into the review bucket. */
   important: boolean;
-  /** The source supplied only a shell/title/ticker, so the user must open it. */
+  /** The source supplied no claim (empty/link/emoji/cashtag/reaction shell). */
   needsSourceReview: boolean;
   /** Short summary of the article (shown in the Feed). Empty if not relevant. */
   summary: string;
@@ -120,15 +120,14 @@ function parseThesis(parsed: Record<string, unknown> | null): ExtractedThesis | 
 /**
  * Regex salvage for a truncated/unparseable filter answer. The thesis fields can
  * push the output past the token cap and cut the JSON mid-array — JSON.parse then
- * fails and we'd lose the summary too. Recover the three scalar fields (they're
+ * fails and we'd lose the summary too. Recover the scalar fields (they're
  * emitted first) so a broken signals tail never costs us the summary.
  */
 function salvageClassification(text: string): Record<string, unknown> | null {
   const rel = /"relevant"\s*:\s*(true|false)/.exec(text);
   const imp = /"important"\s*:\s*(true|false)/.exec(text);
-  const review = /"needsSourceReview"\s*:\s*(true|false)/.exec(text);
   const sum = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
-  if (!rel && !imp && !review && !sum) return null;
+  if (!rel && !imp && !sum) return null;
   let summary: string | undefined;
   if (sum) {
     try {
@@ -140,7 +139,6 @@ function salvageClassification(text: string): Record<string, unknown> | null {
   return {
     ...(rel ? { relevant: rel[1] === "true" } : {}),
     ...(imp ? { important: imp[1] === "true" } : {}),
-    ...(review ? { needsSourceReview: review[1] === "true" } : {}),
     ...(summary !== undefined ? { summary } : {}),
   };
 }
@@ -190,17 +188,20 @@ export async function filterRelevant(
     `★ 출력 언어(최우선 규칙): 모든 출력은 반드시 한국어로 작성한다. summary는 한국어 문장으로만 쓰며 ` +
     `중국어·일본어를 절대 사용하지 않는다. (영어 고유명사·종목 티커만 예외)\n\n` +
     `[관련성 판단 기준]\n${criteria}\n\n` +
-    `[본문 수집 예외 — 최우선] 본문이 비었거나, 제목·종목명·티커만 보이거나, 링크된 아티클 본문을 읽지 못해 ` +
-    `판단 근거가 부족하면 제외하지 말고 relevant=true, important=false, needsSourceReview=true로 둔다. ` +
-    `summary에는 '[원문 확인 필요]'와 보이는 정보만 적는다.\n\n` +
+    `[출처 신뢰도와 정보가치 분리 — 최우선]\n` +
+    `미확인 찌라시·루머·개인의견·2차 인용·가설이라는 이유만으로 relevant 또는 important를 false로 만들지 마라. ` +
+    `수집된 본문 자체에 구체적인 주장·관측·수치·사건·인과가 있으면 정상적으로 선별하고 요약한다. ` +
+    `원문/1차 출처를 직접 검증하지 못했다는 사실은 '본문 미수집'이 아니다. 신뢰도가 낮아도 시장 파급력, 새 정보, ` +
+    `연결 가설이 크면 important=true가 될 수 있다. 대신 summary에서 [미확인 찌라시], [개인 해석], [2차 인용]처럼 ` +
+    `근거 성격을 분명히 쓰고 사실로 단정하지 마라.\n\n` +
     `[중요도 판단 기준]\n${importanceGuide}\n` +
     guidanceBlock(guidance) +
     threadsBlock(threads) +
     `\n[요약 지침]\n${summaryGuide}\n\n` +
-    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(낮은 중요도/개인적이면 false), ` +
-    `(3) 원문을 직접 확인해야 하는지 needsSourceReview, (4) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
+    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(단순 반응·잡담이면 false), ` +
+    `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, ` +
-    `"needsSourceReview": true 또는 false, "summary": "한국어 요약 (관련 없으면 빈 문자열)"` +
+    `"summary": "한국어 요약 (관련 없으면 빈 문자열)"` +
     (threads.length > 0 ? THESIS_OUTPUT : "") +
     `}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
@@ -222,14 +223,16 @@ export async function filterRelevant(
     }
   }
   let summary = typeof parsed?.summary === "string" ? (parsed.summary as string) : "";
-  const sourceReview = parsed?.needsSourceReview === true;
+  // Source review is a deterministic collection-completeness decision made
+  // before the LLM call. The model must never divert a substantive rumour or
+  // opinion merely because it cannot verify the linked first source.
+  const sourceReview = false;
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
-  const relevant = sourceReview || forceAll || !parsed || parsed.relevant !== false;
+  const relevant = forceAll || !parsed || parsed.relevant !== false;
   // Important unless explicitly false (so nothing is hidden by accident).
-  const important = sourceReview ? false : parsed?.important !== false;
-  if (sourceReview && !summary.trim()) summary = sourceReviewSummary(article);
+  const important = parsed?.important !== false;
   // Thesis Map signals only when threads were injected AND the article is relevant.
-  const thesis = relevant && !sourceReview && threads.length > 0 ? parseThesis(parsed) : undefined;
+  const thesis = relevant && threads.length > 0 ? parseThesis(parsed) : undefined;
   if (!parsed) {
     console.warn(`[analyze] filter unparseable for article ${article.id} — keeping it.`);
   }

@@ -14,10 +14,6 @@ function tweetTitle(text: string): string {
   return firstLine.length > 90 ? firstLine.slice(0, 90) + "…" : firstLine;
 }
 
-function isXArticleUrl(url: string): boolean {
-  return /^https?:\/\/(?:www\.)?(?:x|twitter)\.com\/(?:i\/)?article\//i.test(url);
-}
-
 /**
  * Direct timeline fetch via the user's X account cookies (X_AUTH_TOKEN/X_CT0) —
  * no browser, no bridge. Dedup relies on the stable tweet id as externalId.
@@ -29,12 +25,11 @@ async function fetchDirect(h: string, maxItems: number): Promise<NormalizedArtic
     for await (const t of scraper.getTweets(h, maxItems)) {
       const text = t.text?.trim() ?? "";
       if (!t.id) continue;
-      // X Articles are sometimes returned as only a title/ticker shell, while
-      // media-only posts can have no text at all. Keep the stable post URL and
-      // route the shell to the persistent manual-review bucket instead of
-      // dropping it at collection time.
-      const articleShell = t.urls.some(isXArticleUrl);
-      const needsReview = !text || articleShell;
+      // Keep completely empty/media-only posts instead of dropping them. An X
+      // Article link by itself is NOT grounds for manual review when the tweet
+      // contains readable text: rumours, personal views and article excerpts
+      // are useful Feed inputs even when the linked first source is unavailable.
+      const needsReview = !text;
       const body = needsReview
         ? `${SOURCE_REVIEW_MARKER}${text ? `\n${text}` : ""}`
         : text;

@@ -101,9 +101,9 @@ export function FeedPage() {
       )}
       {sourceReview && (
         <p className="rounded border border-violet-200 bg-violet-50 px-3 py-2 text-xs text-violet-800">
-          X Article·첨부 글의 본문을 가져오지 못했거나 종목명/제목만 수집된 항목입니다. 자동으로 버리지 않고
-          계속 보관합니다. <strong>원문 보기</strong>로 읽은 뒤 <strong>확인 후 남기기</strong> 또는 삭제하세요.
-          확인 전에는 다이제스트에 들어가지 않습니다.
+          본문을 가져오지 못했거나 링크·이모지·티커·짧은 반응 문구만 수집된 항목입니다. 찌라시·루머·개인의견은
+          여기가 아니라 일반 Feed에서 분석합니다. <strong>원문 보기</strong>로 읽은 뒤 <strong>확인 후 남기기</strong>
+          또는 삭제하세요. 확인 전에는 다이제스트에 들어가지 않습니다.
         </p>
       )}
 
