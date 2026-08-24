@@ -30,6 +30,7 @@ async function summarize(title: string, body: string): Promise<string | null> {
         "리포트의 핵심 논지/근거/실적·전망을 1문장(최대 90자)으로 압축한다. 숫자·종목명은 보존하고 군더더기 없이 평서문으로 쓴다.",
       user: `제목: ${title}\n\n페이지 내용:\n${body}`,
       maxTokens: 200,
+      thinking: "disabled",
     });
     const s = out.replace(/\s+/g, " ").trim();
     return s ? s.slice(0, 200) : null;

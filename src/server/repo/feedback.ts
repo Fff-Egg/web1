@@ -108,7 +108,7 @@ export const feedbackRepo = {
 
     let text = prev.text ?? "";
     try {
-      const out = await complete({ model, system, user, maxTokens: 700 });
+      const out = await complete({ model, system, user, maxTokens: 700, thinking: "disabled" });
       if (out.trim()) text = out.trim();
     } catch (err) {
       // Don't advance the cursor on failure — retry these rows next time.

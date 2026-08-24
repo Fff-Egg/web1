@@ -6,6 +6,30 @@ import {
 
 export type DigestModelStage = "map" | "final";
 
+/**
+ * Stage-specific DeepSeek policy:
+ * - article filter / map compression / Flash fallback: thinking OFF (cost control)
+ * - final Pro synthesis: thinking ON (cross-article reasoning quality)
+ *
+ * `DIGEST_PRO_THINKING=0` is the emergency kill switch. Other providers are
+ * left untouched because their thinking controls are not API-compatible.
+ */
+export function digestThinkingMode(
+  model: string,
+  stage: DigestModelStage,
+): CompleteOpts["thinking"] {
+  const resolved = resolveModel(model);
+  if (!/^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(resolved)) return undefined;
+  if (
+    stage === "final" &&
+    /^deepseek-v4-pro(?:$|-)/i.test(resolved) &&
+    process.env.DIGEST_PRO_THINKING !== "0"
+  ) {
+    return "enabled";
+  }
+  return "disabled";
+}
+
 export interface StageModelTrace {
   /** Value selected by Settings/env before provider compatibility remapping. */
   configured: string;
@@ -95,6 +119,8 @@ export interface DigestCallPolicy {
   stage: DigestModelStage;
   /** Emergency model used only after the planned model has failed twice. */
   fallbackModel?: string;
+  /** Override thinking for the emergency fallback (normally Flash = disabled). */
+  fallbackThinking?: CompleteOpts["thinking"];
   /** Token budget for a same-model retry after finish_reason=length. */
   retryMaxTokens?: number;
 }
@@ -147,7 +173,11 @@ export async function completeDigestStage(
           `[digest] ${policy.stage} ${primary} 2회 실패 — 최후 수단으로 ${fallback} 폴백: ${message(secondErr)}`,
         );
         try {
-          const text = await invoke({ ...retry, model: fallback });
+          const text = await invoke({
+            ...retry,
+            model: fallback,
+            ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
+          });
           noteSuccess(trace, policy.stage, fallback, true);
           return text;
         } catch (fallbackErr) {

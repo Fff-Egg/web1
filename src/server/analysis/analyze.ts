@@ -12,7 +12,11 @@ import {
   FILTER_MODEL,
   ANALYSIS_MODEL,
 } from "./anthropic.js";
-import { ANALYSIS_OUTPUT_CONTRACT } from "../../shared/analysis.js";
+import {
+  ANALYSIS_OUTPUT_CONTRACT,
+  LOW_PRIORITY_REASONS,
+  shouldTreatAsImportant,
+} from "../../shared/analysis.js";
 import { needsSourceReview, sourceReviewSummary } from "../../shared/sourceReview.js";
 
 // Cap body length sent to the model (cuts token cost). Tune via env.
@@ -127,7 +131,8 @@ function salvageClassification(text: string): Record<string, unknown> | null {
   const rel = /"relevant"\s*:\s*(true|false)/.exec(text);
   const imp = /"important"\s*:\s*(true|false)/.exec(text);
   const sum = /"summary"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
-  if (!rel && !imp && !sum) return null;
+  const low = /"lowReason"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text);
+  if (!rel && !imp && !sum && !low) return null;
   let summary: string | undefined;
   if (sum) {
     try {
@@ -136,10 +141,19 @@ function salvageClassification(text: string): Record<string, unknown> | null {
       summary = sum[1];
     }
   }
+  let lowReason: string | undefined;
+  if (low) {
+    try {
+      lowReason = JSON.parse(`"${low[1]}"`) as string;
+    } catch {
+      lowReason = low[1];
+    }
+  }
   return {
     ...(rel ? { relevant: rel[1] === "true" } : {}),
     ...(imp ? { important: imp[1] === "true" } : {}),
     ...(summary !== undefined ? { summary } : {}),
+    ...(lowReason !== undefined ? { lowReason } : {}),
   };
 }
 
@@ -196,11 +210,19 @@ export async function filterRelevant(
     `근거 성격을 분명히 쓰고 사실로 단정하지 마라.\n\n` +
     `[중요도 판단 기준]\n${importanceGuide}\n` +
     guidanceBlock(guidance) +
+    `\n[중요도 안전선 — 사용자 지침·학습 메모보다 우선하는 고정 규칙]\n` +
+    `검토대상은 신뢰도가 낮은 글이 아니라 정보 증가분이 사실상 없는 잡음만 보내는 곳이다. ` +
+    `기술 아키텍처·설계 선택·성능/비용 트레이드오프·병목·대체재/보완재·원가곡선·현장 실험·` +
+    `컨퍼런스 슬라이드/논쟁·반론처럼 검증 가능한 메커니즘이나 투자 연결고리가 있으면 important=true다. ` +
+    `직접적인 실적·수급 신호가 없거나, 개인 해석·가설·찌라시·미확인 정보라는 이유는 important=false 사유가 아니다. ` +
+    `important=false는 오직 ${LOW_PRIORITY_REASONS.join(" / ")} 중 정확히 하나일 때만 허용한다. ` +
+    `그때만 lowReason에 해당 단어 하나를 쓰고, important=true이면 lowReason은 null로 쓴다. 애매하면 important=true다.\n` +
     threadsBlock(threads) +
     `\n[요약 지침]\n${summaryGuide}\n\n` +
-    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important(단순 반응·잡담이면 false), ` +
+    `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important, ` +
     `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, ` +
+    `"lowReason": null 또는 "${LOW_PRIORITY_REASONS.join("|")}", ` +
     `"summary": "한국어 요약 (관련 없으면 빈 문자열)"` +
     (threads.length > 0 ? THESIS_OUTPUT : "") +
     `}`;
@@ -211,6 +233,7 @@ export async function filterRelevant(
     model: cfg.filterModel || FILTER_MODEL(),
     system,
     user,
+    thinking: "disabled",
     // The thesis fields (signals[] + newThread) can add several hundred tokens on
     // top of the summary — 600 truncated the JSON and silently dropped summaries.
     maxTokens: Number(process.env.FILTER_MAX_TOKENS ?? (threads.length > 0 ? 1400 : 600)),
@@ -229,8 +252,14 @@ export async function filterRelevant(
   const sourceReview = false;
   // Fail open: unreadable answer keeps the article. "전부"/ANALYZE_ALL forces relevant.
   const relevant = forceAll || !parsed || parsed.relevant !== false;
-  // Important unless explicitly false (so nothing is hidden by accident).
-  const important = parsed?.important !== false;
+  // Fail open on importance: only an explicit, fixed no-information reason may
+  // enter 검토. "개인의견", "직접 실적 없음", "미확인" 등은 강제로 중요로 복구한다.
+  const important = shouldTreatAsImportant(parsed);
+  if (parsed?.important === false && important) {
+    console.warn(
+      `[analyze] article ${article.id}: 허용되지 않은 lowReason(${String(parsed.lowReason ?? "없음")}) — 중요로 복구.`,
+    );
+  }
   // Thesis Map signals only when threads were injected AND the article is relevant.
   const thesis = relevant && threads.length > 0 ? parseThesis(parsed) : undefined;
   if (!parsed) {
@@ -244,6 +273,7 @@ export async function filterRelevant(
         system: "너는 한국어 요약가다. 반드시 한국어로만 2~3문장 요약한다. 중국어·일본어는 절대 쓰지 않는다.",
         user: `다음 글을 한국어로만 2~3문장으로 요약:\n${clip(article.body, bodyChars)}`,
         maxTokens: 400,
+        thinking: "disabled",
       });
       if (hasKorean(re)) summary = re.trim();
     } catch {
@@ -276,6 +306,7 @@ export async function deepAnalyze(
     model: cfg.analysisModel || ANALYSIS_MODEL(),
     system,
     user,
+    thinking: "disabled",
     // Large enough for a full multi-section report in `fullAnalysis`.
     maxTokens: Number(process.env.ANALYSIS_MAX_TOKENS ?? 4096),
   });

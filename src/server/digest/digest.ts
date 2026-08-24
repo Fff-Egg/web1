@@ -3,9 +3,14 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
-import { hasLLM, ANALYSIS_MODEL, FILTER_MODEL } from "../analysis/anthropic.js";
+import {
+  hasLLM,
+  ANALYSIS_MODEL,
+  FILTER_MODEL,
+} from "../analysis/anthropic.js";
 import {
   completeDigestStage,
+  digestThinkingMode,
   newModelTrace,
   type ModelTrace,
 } from "./modelPipeline.js";
@@ -317,10 +322,28 @@ export interface GenerateDigestOpts {
 }
 
 const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
-/** Pro final synthesis gets one same-model retry before Flash fallback. When the
- * first response spent its budget on reasoning, use this larger retry budget. */
-const FINAL_RETRY_TOKENS = (): number =>
-  Number(process.env.DIGEST_FINAL_RETRY_TOKENS ?? DIGEST_MAX_TOKENS() * 2);
+const PRO_THINKING_MIN_TOKENS = (): number =>
+  Number(process.env.DIGEST_PRO_THINKING_TOKENS ?? 24_576);
+
+/** Thinking and final prose share max_tokens. Reserve room for both so Pro does
+ * not spend the whole old 8K/12K cap on reasoning and return an empty report. */
+function finalMaxTokens(model: string): number {
+  const configured = DIGEST_MAX_TOKENS();
+  return digestThinkingMode(model, "final") === "enabled"
+    ? Math.max(configured, PRO_THINKING_MIN_TOKENS())
+    : configured;
+}
+
+/** Pro final synthesis gets one same-model retry before Flash fallback. A
+ * thinking retry must actually be larger even when Railway still has the old
+ * 16K/24K override, hence the 2× floor. */
+function finalRetryTokens(model: string): number {
+  const first = finalMaxTokens(model);
+  const configured = Number(process.env.DIGEST_FINAL_RETRY_TOKENS ?? first * 2);
+  return digestThinkingMode(model, "final") === "enabled"
+    ? Math.max(configured, first * 2)
+    : configured;
+}
 
 // ── Map-reduce synthesis (large windows) ────────────────────────────
 // Above DIGEST_MAP_ITEMS picks, the window is split into size-balanced chunks
@@ -329,9 +352,8 @@ const FINAL_RETRY_TOKENS = (): number =>
 // call small: no context overflow, no "lost in the middle" skipping.
 const MAP_MAX_ITEMS = (): number => Math.max(5, Number(process.env.DIGEST_MAP_ITEMS ?? 30));
 const MAP_MAX_CHARS = (): number => Math.max(10_000, Number(process.env.DIGEST_MAP_CHARS ?? 45_000));
-// ⚠️ 추론형 모델은 이 예산을 **사고 과정에 먼저** 쓴다 — 3000은 사고만 하다 잘려
-// 빈 응답이 오기에 충분한 값이었다(2026-08 실장애). 여유를 둔다. 출력 토큰은 실제
-// 사용량만큼만 과금되므로 상한을 올려도 성공하는 호출의 비용은 늘지 않는다.
+// 맵은 Thinking OFF지만 글마다 1~3문장을 누락 없이 남겨야 하므로 8K 여유를 둔다.
+// 상한은 실제 사용량 과금이라 성공 호출이 일찍 멈추면 그대로 절약된다.
 const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 8000);
 const MAP_RETRY_TOKENS = (): number =>
   Number(process.env.DIGEST_MAP_RETRY_TOKENS ?? MAP_MAX_TOKENS() * 2);
@@ -423,6 +445,7 @@ async function mapStage(rows: DigestItem[], chunks: number[][], model: string, t
           system: MAP_SYSTEM,
           user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
           maxTokens: MAP_MAX_TOKENS(),
+          thinking: digestThinkingMode(model, "map"),
         },
         { stage: "map", retryMaxTokens: MAP_RETRY_TOKENS() },
         trace,
@@ -556,8 +579,19 @@ async function synthesizeFromFeed(
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows.map((it, i) => renderItem(it, i + 1)).join("\n\n---\n\n");
     report = await completeDigestStage(
-      { model: finalModel, system, user, maxTokens: DIGEST_MAX_TOKENS() },
-      { stage: "final", fallbackModel: mapModel, retryMaxTokens: FINAL_RETRY_TOKENS() },
+      {
+        model: finalModel,
+        system,
+        user,
+        maxTokens: finalMaxTokens(finalModel),
+        thinking: digestThinkingMode(finalModel, "final"),
+      },
+      {
+        stage: "final",
+        fallbackModel: mapModel,
+        fallbackThinking: digestThinkingMode(mapModel, "map"),
+        retryMaxTokens: finalRetryTokens(finalModel),
+      },
       trace,
     );
   } else {
@@ -570,8 +604,19 @@ async function synthesizeFromFeed(
       `아래 정리 목록을 원문 대신 읽고 종합하라. 인용 번호는 입력의 [N]을 그대로 사용한다:\n\n` +
       partials.map((p, i) => `### 묶음 ${i + 1}\n${p.trim()}`).join("\n\n");
     report = await completeDigestStage(
-      { model: finalModel, system, user, maxTokens: DIGEST_MAX_TOKENS() },
-      { stage: "final", fallbackModel: mapModel, retryMaxTokens: FINAL_RETRY_TOKENS() },
+      {
+        model: finalModel,
+        system,
+        user,
+        maxTokens: finalMaxTokens(finalModel),
+        thinking: digestThinkingMode(finalModel, "final"),
+      },
+      {
+        stage: "final",
+        fallbackModel: mapModel,
+        fallbackThinking: digestThinkingMode(mapModel, "map"),
+        retryMaxTokens: finalRetryTokens(finalModel),
+      },
       trace,
     );
   }
@@ -606,8 +651,19 @@ async function synthesizeFromDigests(
     "원본 글 링크나 [N] 번호 인용은 쓰지 마라(소스가 다이제스트라 번호 매핑이 없다).";
   const user = `종합 기간: ${startDate} ~ ${endDate}\n\n이미 생성된 다이제스트 ${src.length}건:\n\n${body}`;
   const report = await completeDigestStage(
-    { model: finalModel, system, user, maxTokens: DIGEST_MAX_TOKENS() },
-    { stage: "final", fallbackModel: mapModel, retryMaxTokens: FINAL_RETRY_TOKENS() },
+    {
+      model: finalModel,
+      system,
+      user,
+      maxTokens: finalMaxTokens(finalModel),
+      thinking: digestThinkingMode(finalModel, "final"),
+    },
+    {
+      stage: "final",
+      fallbackModel: mapModel,
+      fallbackThinking: digestThinkingMode(mapModel, "map"),
+      retryMaxTokens: finalRetryTokens(finalModel),
+    },
     trace,
   );
   return report.trim();

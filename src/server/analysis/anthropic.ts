@@ -88,9 +88,9 @@ export function stripLoneSurrogates(s: string): string {
  * 일반 OpenAI 호환 제공자의 전용 파라미터는 이름이 제각각이므로 이 env로
  * 넘긴다. 다만 현재 주 제공자인 DeepSeek V4는 thinking이 기본 ON이라는
  * 공식 규격이 확정돼 있어, 기사마다 수천 개의 사고 토큰을 쓰지 않도록 앱이
- * 비추론 모드를 안전 기본값으로 넣는다. 정말 필요할 때만 아래처럼 명시적으로
- * 다시 켠다.
- *   예) LLM_EXTRA_BODY={"thinking":{"type":"enabled"}}
+ * 비추론 모드를 안전 기본값으로 넣는다. 다이제스트 파이프라인은 이 전역값과
+ * 별개로 호출별 `thinking`을 넘겨 **최종 Pro 종합만 ON**, 필터·맵·Flash 폴백은
+ * OFF로 고정한다. `LLM_EXTRA_BODY`는 그 밖의 호출에 적용할 전역 기본값이다.
  * 파싱 실패는 무시하고 경고만 남긴다 — 잘못된 env가 분석 전체를 막으면 안 된다.
  */
 function extraBody(): Record<string, unknown> {
@@ -111,6 +111,8 @@ export interface CompleteOpts {
   system: string;
   user: string;
   maxTokens?: number;
+  /** DeepSeek V4 per-call thinking switch. Ignored by providers/models that do not support it. */
+  thinking?: "enabled" | "disabled";
 }
 
 /** Single-turn helper: system prompt + user content -> assistant text. */
@@ -148,14 +150,20 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
 async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
   const configuredExtra = extraBody();
+  const isDeepSeekV4 = /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model);
   // DeepSeek V4's API defaults to thinking=enabled. A per-article filter is
   // called hundreds of times a day and does not benefit enough from private
   // chain-of-thought to justify that token bill. Keep non-thinking as the app's
-  // cost-safe default for both Flash and Pro; an explicit LLM_EXTRA_BODY value
-  // still wins for users who intentionally want thinking mode.
+  // cost-safe default for both Flash and Pro. A stage-specific per-call value
+  // is applied LAST so final Pro can think without accidentally enabling it for
+  // hundreds of Flash filter/map calls, even when a stale global env exists.
   const costSafeExtra =
-    /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model) && configuredExtra.thinking === undefined
+    isDeepSeekV4 && configuredExtra.thinking === undefined
       ? { thinking: { type: "disabled" } }
+      : {};
+  const callExtra =
+    isDeepSeekV4 && opts.thinking
+      ? { thinking: { type: opts.thinking } }
       : {};
   const res = await fetch(`${base}/chat/completions`, {
     method: "POST",
@@ -173,6 +181,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       ],
       ...costSafeExtra,
       ...configuredExtra,
+      ...callExtra,
     }),
   });
   if (!res.ok) {

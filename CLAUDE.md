@@ -74,8 +74,8 @@ deletedAt·tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText)
   - X: `X_AUTH_TOKEN`+`X_CT0`(끝 **숫자 0**, 내 계정 쿠키로 직접 수집, 권장·브라우저 불필요) > 소스별 `config.rssUrl` > `X_RSS_BRIDGE`(브리지 템플릿). 쿠키 만료/로그아웃 시 갱신 필요
   - DB 커넥션은 **UTC 고정**(`db/client.ts`: `timezone:"Z"` + 세션 `SET time_zone='+00:00'`) — 경계 창(`createdAt`) 비교가 시간대로 어긋나지 않게 (이전에 이것 때문에 sweep 0건 버그 있었음)
   - `DIGEST_HOUR`(기본 **7**, KST 경계·sweep·메모), `DIGEST_MIDDAY_HOUR`(기본 **17** — 낮분 다이제스트, sweep 없음; 경계 앞이든 뒤든 가능), `COLLECT_INTERVAL_MIN`(기본 30, 현재 10), `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`
-  - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`(기본 8192), `DIGEST_FINAL_RETRY_TOKENS`(최종 Pro 동일모델 재시도 예산, 기본 2배), `DIGEST_MAP_ITEMS/CHARS/TOKENS`(맵리듀스 청크, 기본 30/45000/8000), `DIGEST_ITEM_CHARS`(다이제스트 글당 본문 상한, 기본 2500), `ANALYZE_ALL`, `FILTER_FEEDBACK_PER_TYPE`(하루 distill에 넣을 액션 타입별 새 피드백 수, 기본 15)
-  - **다이제스트 품질/비용 튜닝(중요 글이 많을 때)**: 병목은 입력이 아니라 **출구**(`DIGEST_MAX_TOKENS`)다 — 중요 글 300건/일이면 최종 8192로는 "나머지 한 줄" 목록이 잘림. 권장 상향: `DIGEST_MAX_TOKENS=12288`, `DIGEST_MAP_TOKENS=5000`, `DIGEST_MAP_ITEMS=40`, `DIGEST_MAP_CHARS=90000`(전부 env, 재배포 불필요). 근본 해법은 논지지도 changelog(예정).
+  - 선택: `DEEP_ANALYSIS=1`(글별 개별 심층분석 on), `FILTER_BODY_CHARS`, `DIGEST_MAX_TOKENS`(비추론 최종 기본 8192), `DIGEST_PRO_THINKING`(최종 Pro 사고모드, 기본 ON), `DIGEST_PRO_THINKING_TOKENS`(사고+본문 첫 호출 최소 24576), `DIGEST_FINAL_RETRY_TOKENS`(최종 Pro 동일모델 재시도, 사고모드에서는 첫 호출의 최소 2배), `DIGEST_MAP_ITEMS/CHARS/TOKENS`(맵리듀스 청크, 기본 30/45000/8000), `DIGEST_ITEM_CHARS`(다이제스트 글당 본문 상한, 기본 2500), `ANALYZE_ALL`, `FILTER_FEEDBACK_PER_TYPE`(하루 distill에 넣을 액션 타입별 새 피드백 수, 기본 15)
+  - **다이제스트 품질/비용 튜닝(중요 글이 많을 때)**: 병목은 입력이 아니라 **출구**다. 최종 Pro는 Thinking ON이라 앱이 `max_tokens`를 자동으로 최소 24576(재시도 49152)까지 확보한다. 맵 Flash는 Thinking OFF이며 `DIGEST_MAP_TOKENS=8000` 기본. `DIGEST_MAP_ITEMS=40`, `DIGEST_MAP_CHARS=90000`은 대량 피드에서 호출 수를 줄이는 선택값이다.
 
 ## 파이프라인
 1. **수집**(`workers/collect.ts`): 소스별 어댑터 fetch → articles 저장. 같은 (source,url) 글이 있으면 재생성 안 함(삭제 부활 방지). **영구삭제(purge)도 행 자체는 안 지우고 묘비(tombstone: analysis·body 제거, url만 유지)로 남겨** 재수집 시 부활 차단.
@@ -154,15 +154,16 @@ Output               917,097   ← 콜당 ~7,000 = max_tokens 한도 꽉 참, �
 2. **빈 응답 = 에러** (`completeOpenAI`) — `content`가 비면 `finish_reason`·`reasoning_content` 길이·
    `usage`·`max_tokens`를 담아 **throw**. 조용한 통과가 C의 본질이었다. `finish_reason=length`인데
    내용이 온 경우에도 경고를 남긴다(반쪽 결과 방지).
-3. **DeepSeek V4 thinking 기본 OFF + `LLM_EXTRA_BODY` override** — V4 API는 thinking이 기본 ON이라
-   기사별 1차 분석까지 매번 사고 토큰을 쓰면 Flash 비용이 폭증한다. 앱은 `deepseek-v4-flash/pro`에
-   `{"thinking":{"type":"disabled"}}`를 안전 기본값으로 자동 전송한다. 정말 필요한 경우에만
-   `LLM_EXTRA_BODY={"thinking":{"type":"enabled"}}`로 명시적으로 다시 켠다. 잘못된 JSON은 경고만
-   남기고 무시한다.
+3. **DeepSeek V4 호출별 thinking 정책** — V4 API는 thinking이 기본 ON이라 기사별 1차 분석까지
+   매번 사고 토큰을 쓰면 Flash 비용이 폭증한다. 앱은 일반 호출에
+   `{"thinking":{"type":"disabled"}}`를 안전 기본값으로 자동 전송하고, 다이제스트는 호출별 값을
+   마지막에 덮어쓴다: **필터·맵·Flash 폴백 OFF / 최종 Pro만 ON**. 전역 `LLM_EXTRA_BODY`에 오래된
+   thinking 값이 있어도 단계 정책이 우선한다. 비상 시 `DIGEST_PRO_THINKING=0`으로 최종 Pro도 끈다.
 4. **2단 모델 파이프라인** (`digest/modelPipeline.ts`) — 초기 수습 때 `digest.ts completeRetry`에
    넣었던 단순 폴백을 이후 세션이 전용 모듈로 승격시켰다. 현재 구조:
    - **맵(자료 정리) = Flash**, **최종(연결·작성) = Pro**. 값싼 모델로 대량 압축하고 비싼 모델은
-     종합 1회에만 쓴다 — C가 드러낸 "추론형 모델에 대량 맵을 시키면 예산이 사고에 다 나간다"의 해법.
+     종합 1회에만 쓴다. Flash 맵은 Thinking OFF, 최종 Pro는 Thinking ON(기본 high)이며 사고와 본문이
+     같은 `max_tokens`를 쓰므로 첫 호출 최소 24576·length 재시도 최소 49152를 확보한다.
    - `completeDigestStage` 시도 순서: ① 원래 예산 → ② `finish_reason=length`면 예산 올려 **같은
      모델 재시도** → ③ 그래도 실패면 **비상 폴백 모델**(설정된 경우에만).
    - **맵 호출은 보통 `fallbackModel`을 안 넘긴다** — Flash가 Flash로 재시도하고, 깨진 청크는
@@ -286,7 +287,9 @@ LLM엔 5000자만 씀 · 휴지통 자동 만료 없음 · `marketSnapshot` KV�
 
 **다이제스트 효율 지침(병행, Settings 적용 권장)**:
 - 1차 필터: 넓게(투자·경제·산업·기술과 조금이라도 관련=관련, 광고/스팸만 제외).
-- 중요도: 순수 쓰레기(광고·인사·무의미 잡담)만 '낮음', 나머지 '높음'.
+- 중요도: 순수 쓰레기(광고·인사·개인일상·무정보반응·완전중복)만 '낮음'. 모델 JSON의
+  `lowReason`이 이 5개와 정확히 맞을 때만 검토로 보내며, 기술 구조·병목·대체재·비용곡선·개인 해석·
+  미확인 찌라시는 직접 실적 신호가 없어도 '높음'으로 fail-open.
 - 요약: 숫자·가격·종목명 보존.
 - 2차(편집장 스타일): "오늘의 핵심 3~5 / 신호 연결 / 원문 정독 추천(최대 3~5, [N]만) / 나머지 한 줄(누락금지) / 볼 것 없으면 '없음'".
 - 남은 것: 다이제스트 **텔레그램 전송**.

@@ -7,11 +7,19 @@ import {
 } from "../src/server/analysis/anthropic.js";
 import {
   completeDigestStage,
+  digestThinkingMode,
   newModelTrace,
   type CompleteFn,
 } from "../src/server/digest/modelPipeline.js";
 
-const KEYS = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "FILTER_MODEL", "LLM_EXTRA_BODY"] as const;
+const KEYS = [
+  "LLM_BASE_URL",
+  "LLM_API_KEY",
+  "LLM_MODEL",
+  "FILTER_MODEL",
+  "LLM_EXTRA_BODY",
+  "DIGEST_PRO_THINKING",
+] as const;
 const before = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
 const originalFetch = globalThis.fetch;
 
@@ -69,6 +77,49 @@ test("명시한 LLM_EXTRA_BODY는 DeepSeek thinking 기본값을 덮어쓸 수 �
 
   await complete({ model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 });
   assert.deepEqual(requestBody?.thinking, { type: "enabled" });
+});
+
+test("호출별 다이제스트 정책은 전역 env보다 우선한다", async () => {
+  useDeepSeekEndpoint();
+  process.env.LLM_EXTRA_BODY = JSON.stringify({ thinking: { type: "enabled" } });
+  const bodies: Record<string, unknown>[] = [];
+  globalThis.fetch = async (_input, init) => {
+    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(
+      JSON.stringify({ choices: [{ message: { content: "완료" }, finish_reason: "stop" }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  };
+
+  await complete({
+    model: "deepseek-v4-flash",
+    system: "s",
+    user: "u",
+    maxTokens: 100,
+    thinking: "disabled",
+  });
+  await complete({
+    model: "deepseek-v4-pro",
+    system: "s",
+    user: "u",
+    maxTokens: 100,
+    thinking: "enabled",
+  });
+
+  assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
+  assert.deepEqual(bodies[1]?.thinking, { type: "enabled" });
+});
+
+test("다이제스트는 최종 Pro만 thinking을 켜고 Flash·맵은 끈다", () => {
+  useDeepSeekEndpoint();
+  assert.equal(digestThinkingMode("deepseek-v4-flash", "map"), "disabled");
+  assert.equal(digestThinkingMode("deepseek-v4-pro", "map"), "disabled");
+  assert.equal(digestThinkingMode("deepseek-v4-flash", "final"), "disabled");
+  assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "enabled");
+  assert.equal(digestThinkingMode("qwen-2.5-32b", "final"), undefined);
+
+  process.env.DIGEST_PRO_THINKING = "0";
+  assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "disabled");
 });
 
 test("본문이 있어도 finish_reason=length면 잘린 결과를 성공으로 저장하지 않는다", async () => {
@@ -151,22 +202,37 @@ test("최종 Pro가 토큰 부족이면 예산을 늘려 같은 Pro로 먼저 �
 
 test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한다", async () => {
   useDeepSeekEndpoint();
-  const calls: string[] = [];
+  const calls: Array<{ model: string; thinking?: "enabled" | "disabled" }> = [];
   const invoke: CompleteFn = async (opts) => {
-    calls.push(opts.model);
+    calls.push({ model: opts.model, thinking: opts.thinking });
     if (opts.model === "deepseek-v4-pro") throw new Error("temporary pro failure");
     return "flash emergency result";
   };
   const trace = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
   const result = await completeDigestStage(
-    { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 12_288 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 24_576 },
+    {
+      model: "deepseek-v4-pro",
+      system: "s",
+      user: "u",
+      maxTokens: 12_288,
+      thinking: "enabled",
+    },
+    {
+      stage: "final",
+      fallbackModel: "deepseek-v4-flash",
+      fallbackThinking: "disabled",
+      retryMaxTokens: 24_576,
+    },
     trace,
     invoke,
   );
 
   assert.equal(result, "flash emergency result");
-  assert.deepEqual(calls, ["deepseek-v4-pro", "deepseek-v4-pro", "deepseek-v4-flash"]);
+  assert.deepEqual(calls, [
+    { model: "deepseek-v4-pro", thinking: "enabled" },
+    { model: "deepseek-v4-pro", thinking: "enabled" },
+    { model: "deepseek-v4-flash", thinking: "disabled" },
+  ]);
   assert.deepEqual(trace.stages.final.used, ["deepseek-v4-flash"]);
   assert.equal(trace.stages.final.fallbacks, 1);
   assert.equal(trace.fallbacks, 1);
