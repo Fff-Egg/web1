@@ -200,6 +200,38 @@ test("최종 Pro가 토큰 부족이면 예산을 늘려 같은 Pro로 먼저 �
   assert.equal(trace.stages.final.fallbacks, 0);
 });
 
+test("최종 Pro가 thinking만 남기고 빈 답변을 반환해도 2배 예산으로 재시도한다", async () => {
+  useDeepSeekEndpoint();
+  const calls: Array<{ model: string; maxTokens?: number }> = [];
+  const invoke: CompleteFn = async (opts) => {
+    calls.push({ model: opts.model, maxTokens: opts.maxTokens });
+    if (calls.length === 1) {
+      throw new Error(
+        "LLM 빈 응답 (finish_reason=stop reasoning_len=26859 " +
+          "tokens(prompt=15958, completion=17439) max_tokens=24576)",
+      );
+    }
+    return "두 번째 Pro 완성본";
+  };
+  const trace = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+
+  const result = await completeDigestStage(
+    { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 24_576 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 49_152 },
+    trace,
+    invoke,
+  );
+
+  assert.equal(result, "두 번째 Pro 완성본");
+  assert.deepEqual(calls, [
+    { model: "deepseek-v4-pro", maxTokens: 24_576 },
+    { model: "deepseek-v4-pro", maxTokens: 49_152 },
+  ]);
+  assert.deepEqual(trace.stages.final.used, ["deepseek-v4-pro"]);
+  assert.equal(trace.stages.final.retries, 1);
+  assert.equal(trace.stages.final.fallbacks, 0);
+});
+
 test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한다", async () => {
   useDeepSeekEndpoint();
   const calls: Array<{ model: string; thinking?: "enabled" | "disabled" }> = [];

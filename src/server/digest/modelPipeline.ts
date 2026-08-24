@@ -110,7 +110,12 @@ function message(err: unknown): string {
 }
 
 function starved(err: unknown): boolean {
-  return /finish_reason=length/.test(message(err));
+  const detail = message(err);
+  const reasoningLength = Number(detail.match(/reasoning_len=(\d+)/)?.[1] ?? 0);
+  return (
+    /finish_reason=length/.test(detail) ||
+    (/LLM 빈 응답/.test(detail) && reasoningLength > 0)
+  );
 }
 
 export type CompleteFn = (opts: CompleteOpts) => Promise<string>;
@@ -121,14 +126,14 @@ export interface DigestCallPolicy {
   fallbackModel?: string;
   /** Override thinking for the emergency fallback (normally Flash = disabled). */
   fallbackThinking?: CompleteOpts["thinking"];
-  /** Token budget for a same-model retry after finish_reason=length. */
+  /** Token budget for a same-model retry after output exhaustion. */
   retryMaxTokens?: number;
 }
 
 /**
  * Digest call policy:
  *   1. planned model
- *   2. the SAME model once more (larger budget when it ran out of tokens)
+ *   2. the SAME model once more (larger budget after length, or thinking-only empty output)
  *   3. only then the emergency fallback, if configured
  *
  * Map calls normally omit fallbackModel, so Flash retries as Flash and a broken

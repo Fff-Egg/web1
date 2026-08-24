@@ -164,8 +164,9 @@ Output               917,097   ← 콜당 ~7,000 = max_tokens 한도 꽉 참, �
    - **맵(자료 정리) = Flash**, **최종(연결·작성) = Pro**. 값싼 모델로 대량 압축하고 비싼 모델은
      종합 1회에만 쓴다. Flash 맵은 Thinking OFF, 최종 Pro는 Thinking ON(기본 high)이며 사고와 본문이
      같은 `max_tokens`를 쓰므로 첫 호출 최소 24576·length 재시도 최소 49152를 확보한다.
-   - `completeDigestStage` 시도 순서: ① 원래 예산 → ② `finish_reason=length`면 예산 올려 **같은
-     모델 재시도** → ③ 그래도 실패면 **비상 폴백 모델**(설정된 경우에만).
+   - `completeDigestStage` 시도 순서: ① 원래 예산 → ② `finish_reason=length`이거나 **Thinking만
+     생성하고 최종 `content`가 빈 응답**이면 예산을 올려 **같은 모델 재시도** → ③ 그래도 실패면
+     **비상 폴백 모델**(설정된 경우에만). 최종 Pro 기본값은 24576 → 49152다.
    - **맵 호출은 보통 `fallbackModel`을 안 넘긴다** — Flash가 Flash로 재시도하고, 깨진 청크는
      자리표시자로 드러난다. **최종 호출만 Flash를 폴백으로 넘겨** Pro를 우선 보존한다.
 5. **`ModelTrace` v2** (`modelPipeline.ts`) — 스테이지별(map/final)로 `configured`/`planned`/`used`/
