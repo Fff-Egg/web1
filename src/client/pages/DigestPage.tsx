@@ -269,12 +269,21 @@ export function DigestPage() {
   const isMidday = (d: DigestSummary) => (d.meta as { slot?: string } | null | undefined)?.slot === "midday";
 
   // ── Date navigator (◀ 날짜 ▶ + that day's slot chips) — replaces the one huge
-  // dropdown, which stopped scaling once 2 autos/day piled up. A digest lives on
-  // its label date (periodEnd); ranged manuals anchor on their end date.
+  // dropdown, which stopped scaling once 2 autos/day piled up.
+  const kstDayOf = (t: string | Date) =>
+    new Date(t).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+  /**
+   * 이 다이제스트가 어느 날짜 탭에 들어가나.
+   *
+   * - **자동본**: 창이 끝나는 날(periodEnd) = 라벨. 아침분·낮분이 그 날짜 탭을 이루고
+   *   `tabSpan`이 설명하는 구간과 일치한다.
+   * - **수동본**: **만든 날(KST)**. 8/23 오후에 [8/23 07시 ~ 8/24 07시] 창을 만들면
+   *   periodEnd는 8/24지만 사용자는 "23일에 만든 것"으로 찾는다 — 라벨 날짜로 묶으면
+   *   오늘 만든 게 내일 탭에 숨는다(실제 혼란 사례). 각 칩에 자기 구간이 병기되므로
+   *   어느 기간을 종합했는지는 칩에서 바로 보인다.
+   */
   const dateOf = (d: DigestSummary): string =>
-    d.periodEnd ??
-    d.periodStart ??
-    new Date(d.createdAt).toLocaleDateString("en-CA", { timeZone: "Asia/Seoul" });
+    isAuto(d) ? (d.periodEnd ?? d.periodStart ?? kstDayOf(d.createdAt)) : kstDayOf(d.createdAt);
   const digestDates = useMemo(
     () => [...new Set((list.data ?? []).map(dateOf))].sort((a, b) => (a < b ? 1 : -1)),
     [list.data],
@@ -622,8 +631,9 @@ export function DigestPage() {
             자동 두 슬롯(아침분+낮분)이 [(D-1) M시, D M시)를 빈틈없이 덮는다. */}
         {viewDate && (
           <p className="mt-1 text-[11px] tabular-nums text-slate-400">
-            이 날짜가 덮는 구간: <strong className="font-medium text-slate-500">{tabSpan(viewDate)}</strong>
+            자동 다이제스트가 덮는 구간: <strong className="font-medium text-slate-500">{tabSpan(viewDate)}</strong>
             <span className="ml-1 opacity-80">(아침분 {evH} 마감 + 낮분 {midH} 마감)</span>
+            <span className="ml-1 opacity-80">· 수동본은 <strong className="font-medium">만든 날</strong>에 묶이며 칩마다 자기 구간 표시</span>
           </p>
         )}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">

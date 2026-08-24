@@ -121,6 +121,139 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
     sessionStorage/hash에 즉시 저장(맵 의존 제거), 또는 digest `useQuery`에
     `refetchOnWindowFocus:false`+`staleTime`. 재현: 디제스트 열고 포커스 아웃→복귀 후 `[N]`→↩.
 
+## 🔥 LLM 파이프라인 장애 대응 (2026-08-23 대규모 디버깅 — **새 세션은 반드시 읽을 것**)
+
+하루 동안 **다이제스트가 아예 안 만들어지고 DeepSeek 토큰만 태우던** 사고를 추적·수리한 기록.
+버그가 하나가 아니라 **줄줄이 겹쳐 있었고**, 하나를 고칠 때마다 뒤에 숨은 다음 게 드러났다.
+아래 "되돌리지 말 것"이 핵심 — 여기 적힌 방어들은 전부 실제로 돈이 샌 뒤에 넣은 것이다.
+
+### 증상 → 원인 사슬 (시간순으로 드러난 순서)
+
+| # | 증상(화면) | 진짜 원인 | 고친 커밋 |
+|---|---|---|---|
+| A | `LLM API 400: unexpected end of hex escape at position 19243` | 프롬프트 절단(`slice`)이 **이모지 한가운데**를 잘라 반쪽(lone surrogate)이 남음. `JSON.stringify`는 `\ud83d`로 내보내고 Node는 통과시키지만 **서버측 엄격 파서(serde_json)는 거부** | `f35110b` |
+| B | 빨간 **`Load failed`** (앱 에러 아님) | `runEvening`이 HTTP 요청 안에서 맵리듀스를 통째로 `await` → 모바일/엣지 타임아웃 | `4c35016` |
+| C | 다이제스트는 생겼는데 **"### 묶음 1, 2 제목만 있고 내용 없음"** | `ANALYSIS_MODEL=deepseek-v4-pro`가 **추론형**이라 `max_tokens`를 사고에 다 쓰고 `content=""`로 200 반환. `complete()`가 `(content ?? "").trim()`으로 **빈 문자열을 조용히 통과** → 재시도도 로그도 없이 쓸모없는 리포트 저장 | `45bd058`·`3f7750f` |
+| D | **하루에 토큰 400만 개** 소모 | `catchUpRoutines`가 "오늘 자동본이 **저장**돼 있나"로만 판단 → C 때문에 저장이 안 되니 **부팅마다 재실행**. push=자동재배포=부팅이라 **고치려고 배포할 때마다 재실행**됨 | `7b87ad1` |
+| E | 07시 루틴을 고쳐도 수동 생성이 빈손 | 폼 기본 날짜가 가리키는 창을 **07시 sweep이 이미 비웠음**. 게다가 열린 창을 직접 골라도 서버가 조용히 되돌려 **오늘 글로는 만들 방법이 아예 없었음** | `f53055f` |
+
+### 실측 증거 (DeepSeek 사용량 2026-08-22, v4-pro)
+```
+Input (Cache hit)  2,614,784   ← 83%가 동일 프롬프트 재전송
+Input (Cache miss)   511,983
+Output               917,097   ← 콜당 ~7,000 = max_tokens 한도 꽉 참, 그런데 내용은 0자
+```
+글 323건이면 1회 실행에 12콜(11청크+종합) → **하루 10~15회 통째로 재실행**, 전부 빈손.
+하루 비용 ~$4.4(한 달 $9.70의 절반). **정보량이 아니라 반복이 원인**이었다.
+
+### 지금 들어가 있는 방어 (⚠️ 되돌리지 말 것)
+
+1. **`stripLoneSurrogates()`** (`analysis/anthropic.ts`) — 모든 LLM 요청의 system·user에 적용.
+   우리 절단부뿐 아니라 **소스 피드가 깨진 문자를 줘도** 막는 마지막 관문. 정상 이모지는 보존.
+   추가로 `digest.ts`·`analyze.ts`의 `clip()`이 절단 위치가 상위 서로게이트면 한 칸 당겨 자른다.
+2. **빈 응답 = 에러** (`completeOpenAI`) — `content`가 비면 `finish_reason`·`reasoning_content` 길이·
+   `usage`·`max_tokens`를 담아 **throw**. 조용한 통과가 C의 본질이었다. `finish_reason=length`인데
+   내용이 온 경우에도 경고를 남긴다(반쪽 결과 방지).
+3. **`LLM_EXTRA_BODY`** env — 요청 본문에 병합할 JSON. 추론(thinking)을 끄는 파라미터 이름이
+   제공자·모델마다 달라 **코드에 못 박지 않고 env로 뺐다**. 잘못된 JSON은 경고만 남기고 무시.
+   예: `LLM_EXTRA_BODY={"thinking":{"type":"disabled"}}`
+4. **2단 모델 파이프라인** (`digest/modelPipeline.ts`) — 초기 수습 때 `digest.ts completeRetry`에
+   넣었던 단순 폴백을 이후 세션이 전용 모듈로 승격시켰다. 현재 구조:
+   - **맵(자료 정리) = Flash**, **최종(연결·작성) = Pro**. 값싼 모델로 대량 압축하고 비싼 모델은
+     종합 1회에만 쓴다 — C가 드러낸 "추론형 모델에 대량 맵을 시키면 예산이 사고에 다 나간다"의 해법.
+   - `completeDigestStage` 시도 순서: ① 원래 예산 → ② `finish_reason=length`면 예산 올려 **같은
+     모델 재시도** → ③ 그래도 실패면 **비상 폴백 모델**(설정된 경우에만).
+   - **맵 호출은 보통 `fallbackModel`을 안 넘긴다** — Flash가 Flash로 재시도하고, 깨진 청크는
+     자리표시자로 드러난다. **최종 호출만 Flash를 폴백으로 넘겨** Pro를 우선 보존한다.
+5. **`ModelTrace` v2** (`modelPipeline.ts`) — 스테이지별(map/final)로 `configured`/`planned`/`used`/
+   `attempts`/`retries`/`fallbacks`/`failures`를 `digests.meta.models`에 기록(마이그레이션 불필요).
+   클라 배지가 리포트 위에 `자료 정리 <flash> → 최종 연결·작성 <pro>` 형태로 표시하고,
+   폴백이 돌았으면 그 사실을 드러낸다. 서버 로그에도 같은 정보가 남는다.
+6. **맵 청크 부분실패 내성** (`mapStage`) — 청크별 try/catch. 실패한 묶음은
+   "요약 실패, 이 번호들은 인용하지 마세요" 자리표시자로 남겨 **구멍을 숨기지 않고** 나머지로 종합.
+   전부 실패면 throw해 **쓸모없는 리포트가 저장되지 않게** 한다.
+7. **catch-up 일일 상한** (`scheduler.ts`) — settings KV `digestCatchUp`에 날짜별 슬롯 시도 횟수를
+   기록하고 **하루 2회**로 제한. **실행 전에 카운트를 올려** 실패해도 루프가 멈춘다. D의 증폭기 차단.
+8. **경계·낮분 수동 실행 백그라운드화** — 빠른 부분(진단 쿼리·`tooEarly`)만 동기, 무거운 부분은
+   `void`로 띄우고 즉시 `{started:true}` 반환. 클라는 `generate`가 쓰던 폴링(`genState`)을 재사용.
+
+### 진단하는 법 (Railway 로그 태그)
+```
+[llm] 빈 응답 (model=…) finish_reason=length reasoning_len=… tokens(…) max_tokens=…
+[llm] 응답이 max_tokens(N)에서 잘림 …
+[digest] <제목>: 모델 A + B (폴백 N콜) · 실패 묶음 M개
+[digest] 묶음 N 요약 실패([a]~[b]): …
+[digest] 경계 루틴 완료/실패: …
+[scheduler] catch-up: … 오늘 이미 N회 시도해 건너뜁니다
+[kofia:credit|forcedLiq] 자릿수 마스킹(#) N개 복원 후 파싱 성공
+```
+
+### 하지 말 것
+- `complete()`가 빈 문자열을 그대로 반환하게 되돌리기(사고 C의 원인)
+- 맵 단계를 다시 추론형(Pro)에 맡기기 — 사고 C가 정확히 그 구성이었다
+- catch-up 상한 제거(사고 D의 증폭기)
+- `generateDigest`에 "사용자가 고른 날짜를 서버가 되돌리는" 로직 재도입(사고 E)
+- 절단(`clip`/`slice`)에서 서로게이트 경계 검사 제거(사고 A)
+- 실패해도 리포트를 저장하게 만들기(빈 리포트가 목록을 오염시킨다)
+
+---
+
+## 다이제스트 날짜 규칙 (사고 E 이후 확정 — 헷갈리기 쉬움)
+
+**날짜 = 창이 "끝나는 날"**이다. `D` 선택 → `[(D-1) 07시, D 07시)`.
+
+⚠️ **07시 경계 루틴은 종합을 마친 창을 곧바로 휴지통으로 sweep한다**(`trashWindowFeed`가 `deletedAt`을
+찍고 `fetchFeedRows`는 `isNull(deletedAt)`로 거른다). 따라서 **이미 마감된 날을 고르면 피드가 비어
+저장 다이제스트로 대체 종합**된다. **오늘 모인 글로 만들려면 아직 열려 있는 창**(`currentWindowDate`,
+07시 이후엔 내일 날짜)을 골라야 한다.
+
+- 폼에 **빠른 선택 버튼 2개**: `[오늘 모인 글 (진행 중)]` / `[어제분 (마감됨)]`.
+- **날짜 칸 바로 아래에 그 날짜가 뜻하는 실제 구간**을 표시(`spanOf`). "23일"만으로는 22~23인지
+  23~24인지 알 수 없던 게 혼란의 뿌리였다.
+- **저장된 다이제스트 목록**도 동일: 네비게이터 아래에 그 날짜 탭이 덮는 구간(`tabSpan`), 각 칩에
+  자기 구간(`chipSpan`)을 병기.
+- 서버는 **사용자가 명시한 날짜를 그대로 존중**한다(옛 `looksLikeStaleDefault` 재작성 제거).
+  날짜를 안 보내면 종전대로 만든 날(`kstToday()`)로 파일링.
+- **저장 목록 그룹핑(`dateOf`)은 자동/수동이 다르다**:
+  - 자동본 → **창 끝 날짜**(`periodEnd`). 아침분·낮분이 그 날짜 탭을 이루고 `tabSpan`과 일치.
+  - 수동본 → **만든 날(KST `createdAt`)**. 8/23 오후에 `[8/23 07시, 8/24 07시)` 창을 만들면
+    `periodEnd`는 8/24지만 사용자는 "23일에 만든 것"으로 찾는다 — 라벨로 묶으면 **오늘 만든 게
+    내일 탭에 숨는다**(실제 혼란 사례). 어느 기간을 종합했는지는 칩의 `chipSpan`이 보여준다.
+
+**자동 두 슬롯은 검증됨**(`DIGEST_HOUR=7`·`DIGEST_MIDDAY_HOUR=16` 실계산):
+```
+아침분(D) = [(D-1) 16:00, D 07:00)     낮분(D) = [D 07:00, D 16:00)
+경계가 정확히 맞물려 구멍·겹침 0. 07시 sweep 창 [(D-1) 07:00, D 07:00)도
+낮분(D-1) + 아침분(D)이 빈틈없이 덮는다 → 종합 안 된 글이 지워지는 일은 없다.
+```
+자동 실행은 `{auto:true, slot, start}`를 넘기므로 위 서버측 날짜 로직 변경과 **무관**하다.
+
+---
+
+## Railway 비용 구조 (2026-08 실측 — $33/월의 정체)
+
+프로젝트가 **3개**였다(하나만 보고 오해하기 쉬움):
+
+| 프로젝트 | 서비스 | 메모리 | 월 추정 |
+|---|---|---|---|
+| `motivated-flow` | web1 (앱) | ~230 MB | ~$2 |
+| `spirited-courtesy` | MySQL | ~630 MB | ~$6 |
+| `illustrious-recreation` | **RSSHub(chromium-bundled)** + Redis | **~2.5 GB** | **~$26** |
+
+**RSSHub가 범인**이었다 — X 수집의 옛 폴백(`X_RSS_BRIDGE`)인데, 쿠키 직접수집이 1순위로 동작하는
+지금은 **코드가 아예 타지 않는다**(`x.ts`: `if (hasXSession()) return fetchDirect(...)`). 소스 24개를
+전수 확인한 결과 rsshub 주소를 쓰는 소스는 0개. 브라우저를 통째로 담은 이미지라 상시 2.5GB를 잡는다.
+→ 삭제 시 월 ~$26 절감.
+
+**DeepSeek은 Railway와 별개 청구**다(LLM 호출 비용). Railway엔 egress 바이트만 잡힌다.
+
+⚠️ **코드에 남은 구조적 비용 요인**(당장 급하진 않으나 계속 커진다):
+`articles` 행을 **물리 삭제하는 코드가 0건**(영구삭제도 묘비만 남김) · `articles.url` 인덱스 없어
+수집 시 아이템마다 O(N) 스캔 · `analyze.ts`의 `id NOT IN (SELECT …)` 정상상태 전수 스캔 ·
+`analyses.created_at`/`articles.deleted_at` 인덱스 없음 · `content:encoded` 전문을 그대로 저장하는데
+LLM엔 5000자만 씀 · 휴지통 자동 만료 없음 · `marketSnapshot` KV가 37KB→~642KB(시리즈 6→22,
+`HISTORY_DAYS` 370→1825)인데 **응답 압축 미들웨어 없음**.
+
 ## 탭 구성 (`src/client/App.tsx`)
 순서(10개): **시황분석 / Daily Digest / Feed / 보관함 / 분석(수동) / Sources / 휴지통 / Settings / 리포트 / 논지 지도**.
 - **시황분석**(tab 1, `src/client/pages/MarketPage.tsx`): 시장 지표 대시보드 **✅ 구현 완료**. 하루 1회 배치 수집(기본 07시 KST `MARKET_HOUR`) → `settings` KV(`key="marketSnapshot"`, 마이그레이션 불필요)에 JSON 스냅샷 저장. tRPC `market.latest`(저장본)·`market.refresh`('지금 갱신' 버튼=즉시 재수집). 서버 수집기 = **`src/server/market/`**: `cnn.ts`/`tradingview.ts`/`adr.ts`/`index.ts`(병렬·소스별 tolerant — 한 곳 실패해도 나머지 진행, 실패는 `errors[]` 한국어 메모). 스케줄러(`scheduler.ts`)에 일일 크론 + **부팅 시 스냅샷 없거나 20h↑ 오래되면 즉시 수집**.
