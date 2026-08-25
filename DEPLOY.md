@@ -36,7 +36,9 @@
 | `DIGEST_FINAL_RETRY_TOKENS` | Pro가 사고 토큰을 소진했을 때 같은 Pro 재시도 예산 (예: `16384`) |
 | `DIGEST_HOUR` | `7` (선택, 하루 경계 다이제스트·피드 정리 시각 KST) |
 | `DIGEST_MIDDAY_HOUR` | `17` (선택, 두 번째 다이제스트 시각 KST) |
-| `COLLECT_INTERVAL_MIN` | `30` (선택, 수집 주기 분) |
+| `COLLECT_INTERVAL_MIN` | `15` (선택, 수집 주기 분) |
+| `ANALYSIS_AVOID_PEAK` | `1` (선택, KST 10~13시·15~19시 자동 LLM 분석 대기) |
+| `ANALYSIS_DRAIN_MAX_ROUNDS` | `20` (선택, 13시·19시 적체 처리 최대 배치 수) |
 | `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD` | `1` (선택, 빌드 빨라짐 — 서버는 브라우저 불필요) |
 
 > 웹 **설정 → 고급**에 모델을 직접 쓰면 Railway의 `FILTER_MODEL` / `ANALYSIS_MODEL`보다 우선합니다.

@@ -1,4 +1,4 @@
-import { sql, desc, and, isNull } from "drizzle-orm";
+import { sql, asc, desc, and, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { articles, analyses } from "../db/schema.js";
 import type { Article, AnalysisConfig, Impact } from "../db/schema.js";
@@ -26,6 +26,10 @@ const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
 // faster; lower if the provider rate-limits. Throughput/hr ≈ BATCH × (60/COLLECT_INTERVAL_MIN).
 const BATCH = Number(process.env.ANALYZE_BATCH ?? 50);
 const CONCURRENCY = Math.max(1, Number(process.env.ANALYZE_CONCURRENCY ?? 3));
+
+export function analysisBatchSize(): number {
+  return BATCH;
+}
 
 /** Rate-limit / quota errors (e.g. Groq free-tier daily token cap). */
 function isRateLimit(msg: string): boolean {
@@ -328,7 +332,9 @@ export async function deepAnalyze(
  * Process articles that have no analysis yet. For each: 1st-pass filter; if
  * relevant, 2nd-pass deep analysis. Writes one row to `analyses` per article.
  */
-export async function runAnalysis(): Promise<{ analyzed: number; relevant: number; errors: number }> {
+export async function runAnalysis(
+  opts: { oldestFirst?: boolean } = {},
+): Promise<{ analyzed: number; relevant: number; errors: number }> {
   if (!hasDb) {
     console.warn("[analyze] no DATABASE_URL — skipping.");
     return { analyzed: 0, relevant: 0, errors: 0 };
@@ -355,7 +361,7 @@ export async function runAnalysis(): Promise<{ analyzed: number; relevant: numbe
         isNull(articles.deletedAt),
       ),
     )
-    .orderBy(desc(articles.id))
+    .orderBy(opts.oldestFirst ? asc(articles.id) : desc(articles.id))
     .limit(BATCH);
 
   let analyzed = 0;

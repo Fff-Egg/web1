@@ -1,6 +1,10 @@
 import cron from "node-cron";
 import { collectAll } from "./workers/collect.js";
-import { runAnalysis } from "./analysis/analyze.js";
+import { analysisBatchSize, runAnalysis } from "./analysis/analyze.js";
+import {
+  isAutomaticAnalysisPeakAvoidanceEnabled,
+  shouldDeferAutomaticAnalysis,
+} from "./analysis/schedule.js";
 import {
   kstToday,
   kstHour,
@@ -19,6 +23,50 @@ import { settings } from "./db/schema.js";
 import { hasLLM } from "./analysis/anthropic.js";
 import { getStoredSnapshot, refreshMarketSnapshot } from "./market/index.js";
 import { collectResearch, researchLastCollectedAt } from "./research/index.js";
+
+let analysisTask: Promise<void> | null = null;
+
+async function runScheduledAnalysis(opts: { drain?: boolean; reason: string }): Promise<void> {
+  if (analysisTask) {
+    if (!opts.drain) {
+      console.log(`[scheduler] analyze ${opts.reason}: 이전 분석이 아직 실행 중이라 이번 호출은 건너뜁니다.`);
+      return;
+    }
+    console.log(`[scheduler] analyze ${opts.reason}: 실행 중인 배치를 기다린 뒤 적체 처리를 시작합니다.`);
+    await analysisTask;
+  }
+  const task = (async () => {
+    const maxRounds = opts.drain
+      ? Math.max(1, Number(process.env.ANALYSIS_DRAIN_MAX_ROUNDS ?? 20))
+      : 1;
+    let analyzed = 0;
+    let relevant = 0;
+    let errors = 0;
+    let roundsRun = 0;
+    for (let round = 0; round < maxRounds; round++) {
+      // A very large backlog must not let a 13시 drain run into the 15시 peak.
+      if (shouldDeferAutomaticAnalysis()) break;
+      const r = await runAnalysis({ oldestFirst: !!opts.drain });
+      roundsRun++;
+      analyzed += r.analyzed;
+      relevant += r.relevant;
+      errors += r.errors;
+      if (r.errors > 0 || r.analyzed < analysisBatchSize()) break;
+    }
+    console.log(
+      `[scheduler] analyze ${opts.reason}: analyzed=${analyzed} relevant=${relevant} errors=${errors}` +
+        (opts.drain ? ` rounds=${roundsRun}` : ""),
+    );
+  })();
+  analysisTask = task;
+  try {
+    await task;
+  } catch (err) {
+    console.error(`[scheduler] analyze ${opts.reason} failed:`, err);
+  } finally {
+    if (analysisTask === task) analysisTask = null;
+  }
+}
 
 /** 14시 routine: midday digest (어제21시~오늘14시) ONLY — no sweep, no memo. */
 async function runMiddayRoutine(): Promise<void> {
@@ -159,7 +207,7 @@ export function startSchedulers(): void {
     console.warn("[scheduler] no DATABASE_URL — collection disabled (in-memory dev mode).");
     return;
   }
-  const intervalMin = Number(process.env.COLLECT_INTERVAL_MIN ?? 30);
+  const intervalMin = Math.max(1, Number(process.env.COLLECT_INTERVAL_MIN ?? 15) || 15);
   console.log(`[scheduler] collection every ${intervalMin}m`);
 
   const tick = async () => {
@@ -170,11 +218,10 @@ export function startSchedulers(): void {
       console.error("[scheduler] collect failed:", err);
     }
     if (hasLLM()) {
-      try {
-        const a = await runAnalysis();
-        console.log(`[scheduler] analyze: analyzed=${a.analyzed} relevant=${a.relevant} errors=${a.errors}`);
-      } catch (err) {
-        console.error("[scheduler] analyze failed:", err);
+      if (shouldDeferAutomaticAnalysis()) {
+        console.log("[scheduler] analyze deferred — DeepSeek 피크 시간(KST 10~13시·15~19시), 수집은 계속됩니다.");
+      } else {
+        await runScheduledAnalysis({ reason: "interval" });
       }
     } else {
       console.warn("[scheduler] no LLM configured — auto-analysis disabled (manual mode still works).");
@@ -191,8 +238,28 @@ export function startSchedulers(): void {
   cron.schedule(`0 ${midHour} * * *`, () => void runMiddayRoutine(), { timezone: "Asia/Seoul" });
   cron.schedule(`0 ${digestHour} * * *`, () => void runEveningRoutine(), { timezone: "Asia/Seoul" });
   console.log(`[scheduler] digest crons at ${midHour}:00 (낮) and ${digestHour}:00 (저녁+정리) KST`);
-  // Self-heal a run missed by a restart (e.g. today's deploy landed across the cron hour).
-  void catchUpRoutines(digestHour);
+  // At the end of each peak window, drain oldest pending articles first. This
+  // gives the 14시 digest a full off-peak hour after the 13시 drain and prevents
+  // old items from being starved by newer arrivals.
+  if (isAutomaticAnalysisPeakAvoidanceEnabled()) {
+    const runOffPeakCatchUp = async () => {
+      if (hasLLM()) await runScheduledAnalysis({ drain: true, reason: "off-peak drain" });
+      await catchUpRoutines(digestHour);
+    };
+    cron.schedule("0 13,19 * * *", () => void runOffPeakCatchUp(), { timezone: "Asia/Seoul" });
+    console.log("[scheduler] automatic LLM analysis pauses at 10~13 and 15~19 KST; backlog drains at 13:00/19:00");
+
+    // Self-heal a missed digest on boot, but never create an expensive automatic
+    // digest during peak. The 13시/19시 off-peak catch-up will retry it instead.
+    if (shouldDeferAutomaticAnalysis()) {
+      console.log("[scheduler] digest boot catch-up deferred until the next off-peak drain.");
+    } else {
+      void catchUpRoutines(digestHour);
+    }
+  } else {
+    console.log("[scheduler] automatic peak-price avoidance disabled (ANALYSIS_AVOID_PEAK=0).");
+    void catchUpRoutines(digestHour);
+  }
 
   // 시황분석 daily batch (KST). One run/day; refresh on boot if the stored
   // snapshot is missing or older than ~20h (covers a restart that skipped the cron).
