@@ -6,6 +6,7 @@ import {
   resolveModel,
 } from "../src/server/analysis/anthropic.js";
 import {
+  classifyDigestFailure,
   completeDigestStage,
   digestThinkingMode,
   newModelTrace,
@@ -230,6 +231,9 @@ test("최종 Pro가 thinking만 남기고 빈 답변을 반환해도 2배 예산
   assert.deepEqual(trace.stages.final.used, ["deepseek-v4-pro"]);
   assert.equal(trace.stages.final.retries, 1);
   assert.equal(trace.stages.final.fallbacks, 0);
+  assert.equal(trace.stages.final.errors.length, 1);
+  assert.equal(trace.stages.final.errors[0]?.kind, "thinking_only_empty");
+  assert.equal(trace.stages.final.errors[0]?.maxTokens, 24_576);
 });
 
 test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한다", async () => {
@@ -268,6 +272,48 @@ test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한
   assert.deepEqual(trace.stages.final.used, ["deepseek-v4-flash"]);
   assert.equal(trace.stages.final.fallbacks, 1);
   assert.equal(trace.fallbacks, 1);
+  assert.deepEqual(
+    trace.stages.final.errors.map((e) => ({ phase: e.phase, model: e.model, kind: e.kind })),
+    [
+      { phase: "initial", model: "deepseek-v4-pro", kind: "unknown" },
+      { phase: "retry", model: "deepseek-v4-pro", kind: "unknown" },
+    ],
+  );
+});
+
+test("다이제스트 실패 사유를 화면용 범주로 분류한다", () => {
+  assert.equal(
+    classifyDigestFailure(
+      new Error("LLM 빈 응답 (finish_reason=stop reasoning_len=26859 tokens(prompt=1, completion=2))"),
+    ),
+    "thinking_only_empty",
+  );
+  assert.equal(classifyDigestFailure(new Error("LLM 응답 잘림 (finish_reason=length)")), "token_limit");
+  assert.equal(classifyDigestFailure(new Error("LLM API 429: rate limit exceeded")), "rate_limit");
+  assert.equal(classifyDigestFailure(new Error("LLM API 500: upstream unavailable")), "provider_5xx");
+  assert.equal(classifyDigestFailure(new Error("fetch failed: ECONNRESET")), "network");
+});
+
+test("저장되는 실패 상세에서 API 키를 제거한다", async () => {
+  useDeepSeekEndpoint();
+  const trace = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+  const invoke: CompleteFn = async (opts) => {
+    if (opts.model === "deepseek-v4-pro") {
+      throw new Error("LLM API 401: Bearer sk-secret123456789 token=private-value");
+    }
+    return "fallback";
+  };
+
+  await completeDigestStage(
+    { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 200 },
+    trace,
+    invoke,
+  );
+
+  const details = trace.stages.final.errors.map((e) => e.detail).join(" ");
+  assert.doesNotMatch(details, /sk-secret|private-value/);
+  assert.match(details, /<redacted>/);
 });
 
 test("자료 정리 단계는 Flash만 재시도하고 Pro로 역폴백하지 않는다", async () => {

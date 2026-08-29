@@ -698,6 +698,16 @@ export function DigestPage() {
  * meta.models는 2026-08 이후 생성분에만 있다 — 옛 다이제스트는 meta.model만 표시.
  */
 function ModelBadge({ meta }: { meta: unknown }) {
+  type AttemptError = {
+    attempt?: number;
+    phase?: "initial" | "retry" | "fallback";
+    model?: string;
+    maxTokens?: number;
+    thinking?: "enabled" | "disabled";
+    kind?: string;
+    detail?: string;
+    at?: string;
+  };
   type StageTrace = {
     configured?: string;
     planned?: string;
@@ -706,6 +716,7 @@ function ModelBadge({ meta }: { meta: unknown }) {
     retries?: number;
     fallbacks?: number;
     failures?: number;
+    errors?: AttemptError[];
   };
   const m = meta as
     | {
@@ -716,6 +727,8 @@ function ModelBadge({ meta }: { meta: unknown }) {
           used?: string[];
           fallbacks?: number;
           failures?: number;
+          runId?: string;
+          startedAt?: string;
           stages?: { map?: StageTrace; final?: StageTrace };
         };
       }
@@ -735,11 +748,35 @@ function ModelBadge({ meta }: { meta: unknown }) {
     const finalUsed = final.used?.join(" + ") || final.planned || primary;
     const finalFallback = (final.fallbacks ?? 0) > 0;
     const failed = (map?.failures ?? 0) + (final.failures ?? 0);
+    const diagnostics: Array<AttemptError & { stageLabel: string }> = [
+      ...(map?.errors ?? []).map((e) => ({ ...e, stageLabel: "자료 정리" })),
+      ...(final.errors ?? []).map((e) => ({ ...e, stageLabel: "최종 작성" })),
+    ];
+    const failureLabel = (kind?: string) => {
+      const labels: Record<string, string> = {
+        thinking_only_empty: "사고 과정만 생성하고 최종 본문이 비어 있음",
+        token_limit: "출력 토큰 한도 도달 또는 응답 잘림",
+        rate_limit: "API 사용량·속도 제한",
+        authentication: "API 인증 실패",
+        timeout: "요청 시간 초과",
+        network: "네트워크 연결 실패",
+        content_filter: "제공자 콘텐츠 필터",
+        provider_5xx: "DeepSeek 서버 오류",
+        bad_request: "요청 형식·파라미터 오류",
+        empty_response: "본문이 없는 빈 응답",
+        unknown: "분류되지 않은 오류",
+      };
+      return labels[kind ?? "unknown"] ?? labels.unknown;
+    };
+    const phaseLabel = (phase?: AttemptError["phase"]) =>
+      phase === "retry" ? "같은 모델 재시도" : phase === "fallback" ? "폴백" : "첫 시도";
     return (
       <div
         className={
           "mb-2 rounded px-2.5 py-2 text-[11px] leading-relaxed " +
-          (finalFallback || failed > 0 ? "bg-amber-50 text-amber-800" : "bg-emerald-50 text-emerald-800")
+          (finalFallback || failed > 0 || diagnostics.length > 0
+            ? "bg-amber-50 text-amber-800"
+            : "bg-emerald-50 text-emerald-800")
         }
       >
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1">
@@ -760,6 +797,33 @@ function ModelBadge({ meta }: { meta: unknown }) {
           <p className="mt-1">
             설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>이(가) 두 번 실패해 최후 수단으로
             자료 정리 모델이 최종 작성했습니다.
+          </p>
+        )}
+        {diagnostics.length > 0 && (
+          <details className="mt-1.5 rounded border border-amber-200/80 bg-white/60 px-2 py-1">
+            <summary className="cursor-pointer font-medium">
+              실패 원인 {diagnostics.length}건 보기
+              {t.runId ? <span className="ml-1 font-mono font-normal opacity-60">({t.runId})</span> : null}
+            </summary>
+            <ol className="mt-1.5 space-y-1.5 pl-4">
+              {diagnostics.map((e, i) => (
+                <li key={`${e.stageLabel}-${e.at ?? i}-${e.attempt ?? i}`}>
+                  <p>
+                    <strong>{e.stageLabel} · {phaseLabel(e.phase)}</strong>
+                    {e.model ? <span className="font-mono"> · {e.model}</span> : null}
+                    {e.maxTokens ? ` · 최대 ${e.maxTokens.toLocaleString()}토큰` : ""}
+                    {e.thinking ? ` · Thinking ${e.thinking === "enabled" ? "ON" : "OFF"}` : ""}
+                    {` — ${failureLabel(e.kind)}`}
+                  </p>
+                  {e.detail && <code className="mt-0.5 block break-all text-[10px] opacity-70">{e.detail}</code>}
+                </li>
+              ))}
+            </ol>
+          </details>
+        )}
+        {finalFallback && diagnostics.length === 0 && (
+          <p className="mt-1 opacity-75">
+            이 다이제스트는 실패 상세 저장 기능 적용 전에 생성되어 정확한 사유가 남아 있지 않습니다.
           </p>
         )}
         {failed > 0 && <p className="mt-1">끝내 실패한 자료 묶음 <strong>{failed}개</strong>는 내용이 빠졌습니다.</p>}

@@ -797,7 +797,7 @@ export async function generateDigest(
   const map = trace.stages.map;
   const final = trace.stages.final;
   console.log(
-    `[digest] ${title}: 자료 정리 ${map.used.join(" + ") || (map.attempts ? map.planned : "원문 직접")}` +
+    `[digest:${trace.runId}] ${title}: 자료 정리 ${map.used.join(" + ") || (map.attempts ? map.planned : "원문 직접")}` +
       ` → 최종 종합 ${final.used.join(" + ") || final.planned}` +
       (final.retries > 0 ? ` (최종 재시도 ${final.retries}회)` : "") +
       (trace.fallbacks > 0 ? ` · 폴백 ${trace.fallbacks}콜` : "") +
@@ -814,7 +814,7 @@ export async function generateDigest(
     trashed = await trashWindowFeed(start, end);
   }
   console.log(
-    `[digest] "${title}": saved (source=${String(meta.source)}, items=${Number(meta.itemCount)}` +
+    `[digest:${trace.runId}] "${title}": saved (source=${String(meta.source)}, items=${Number(meta.itemCount)}` +
       `${trashed ? `, trashed=${trashed}` : ""}).`,
   );
   return { id: Number(res.id), title, itemCount: Number(meta.itemCount), trashed };

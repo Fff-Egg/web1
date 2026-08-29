@@ -5,6 +5,31 @@ import {
 } from "../analysis/anthropic.js";
 
 export type DigestModelStage = "map" | "final";
+export type DigestFailureKind =
+  | "thinking_only_empty"
+  | "token_limit"
+  | "rate_limit"
+  | "authentication"
+  | "timeout"
+  | "network"
+  | "content_filter"
+  | "provider_5xx"
+  | "bad_request"
+  | "empty_response"
+  | "unknown";
+
+export interface ModelAttemptFailure {
+  /** Attempt number within this stage, including a fallback attempt. */
+  attempt: number;
+  phase: "initial" | "retry" | "fallback";
+  model: string;
+  maxTokens?: number;
+  thinking?: CompleteOpts["thinking"];
+  kind: DigestFailureKind;
+  /** Sanitized and truncated provider detail. Never contains prompts or API keys. */
+  detail: string;
+  at: string;
+}
 
 /**
  * Stage-specific DeepSeek policy:
@@ -45,11 +70,16 @@ export interface StageModelTrace {
   fallbacks: number;
   /** Units that exhausted every attempt (a map chunk, or the final report). */
   failures: number;
+  /** Per-attempt diagnostics retained in digest metadata for UI inspection. */
+  errors: ModelAttemptFailure[];
 }
 
 /** Stored in digests.meta.models. Top-level legacy fields remain for old UI/code. */
 export interface ModelTrace {
   version: 2;
+  /** Searchable correlation id printed in Railway logs and saved with the digest. */
+  runId: string;
+  startedAt: string;
   /** Backward-compatible alias for the effective final synthesis model. */
   primary: string;
   /** Backward-compatible union of models that successfully produced content. */
@@ -73,6 +103,7 @@ function newStage(configured: string): StageModelTrace {
     retries: 0,
     fallbacks: 0,
     failures: 0,
+    errors: [],
   };
 }
 
@@ -81,6 +112,8 @@ export function newModelTrace(mapModel: string, finalModel: string): ModelTrace 
   const final = newStage(finalModel);
   return {
     version: 2,
+    runId: `dg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    startedAt: new Date().toISOString(),
     primary: final.planned,
     used: [],
     fallbacks: 0,
@@ -107,6 +140,52 @@ function noteSuccess(trace: ModelTrace, stage: DigestModelStage, model: string, 
 
 function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function safeFailureDetail(err: unknown): string {
+  return message(err)
+    .replace(/Bearer\s+[^\s"']+/gi, "Bearer <redacted>")
+    .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-<redacted>")
+    .replace(/([?&](?:api[_-]?key|key|token)=)[^&\s]+/gi, "$1<redacted>")
+    .replace(/((?:api[_-]?key|token)\s*[=:]\s*)[^\s,}]+/gi, "$1<redacted>")
+    .slice(0, 900);
+}
+
+export function classifyDigestFailure(err: unknown): DigestFailureKind {
+  const detail = message(err);
+  if (/LLM 빈 응답/i.test(detail) && /reasoning_len=[1-9]\d*/i.test(detail) && !/finish_reason=length/i.test(detail)) {
+    return "thinking_only_empty";
+  }
+  if (/finish_reason=length|응답 잘림|maximum context|max(?:imum)?[_ ]tokens/i.test(detail)) return "token_limit";
+  if (/429|rate[ _-]?limit|quota|TPD|tokens per day/i.test(detail)) return "rate_limit";
+  if (/\b(?:401|403)\b|unauthorized|forbidden|authentication|invalid api key/i.test(detail)) return "authentication";
+  if (/content_filter|content filter/i.test(detail)) return "content_filter";
+  if (/timeout|timed out|aborterror|aborted/i.test(detail)) return "timeout";
+  if (/fetch failed|econnreset|enotfound|eai_again|network/i.test(detail)) return "network";
+  if (/LLM API 5\d\d/i.test(detail)) return "provider_5xx";
+  if (/LLM API 4\d\d/i.test(detail)) return "bad_request";
+  if (/LLM 빈 응답|empty response/i.test(detail)) return "empty_response";
+  return "unknown";
+}
+
+function noteFailure(
+  trace: ModelTrace,
+  stage: DigestModelStage,
+  phase: ModelAttemptFailure["phase"],
+  opts: CompleteOpts,
+  err: unknown,
+): void {
+  const step = trace.stages[stage];
+  step.errors.push({
+    attempt: step.attempts,
+    phase,
+    model: resolveModel(opts.model),
+    ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
+    ...(opts.thinking ? { thinking: opts.thinking } : {}),
+    kind: classifyDigestFailure(err),
+    detail: safeFailureDetail(err),
+    at: new Date().toISOString(),
+  });
 }
 
 function starved(err: unknown): boolean {
@@ -155,6 +234,7 @@ export async function completeDigestStage(
     noteSuccess(trace, policy.stage, primary, false);
     return text;
   } catch (firstErr) {
+    noteFailure(trace, policy.stage, "initial", initial, firstErr);
     const retryTokens = starved(firstErr)
       ? Math.max(opts.maxTokens ?? 1024, policy.retryMaxTokens ?? (opts.maxTokens ?? 1024) * 2)
       : opts.maxTokens;
@@ -162,30 +242,33 @@ export async function completeDigestStage(
     step.retries++;
     step.attempts++;
     console.warn(
-      `[digest] ${policy.stage} ${primary} 실패 — 같은 모델로 1회 재시도` +
+      `[digest:${trace.runId}] ${policy.stage} ${primary} 실패 — 같은 모델로 1회 재시도` +
         (retryTokens !== opts.maxTokens ? ` (출력 토큰 ${opts.maxTokens ?? 1024}→${retryTokens})` : "") +
-        `: ${message(firstErr)}`,
+        `: ${safeFailureDetail(firstErr)}`,
     );
     try {
       const text = await invoke(retry);
       noteSuccess(trace, policy.stage, primary, false);
       return text;
     } catch (secondErr) {
+      noteFailure(trace, policy.stage, "retry", retry, secondErr);
       const fallback = policy.fallbackModel ? resolveModel(policy.fallbackModel) : "";
       if (fallback && fallback !== primary) {
         step.attempts++;
         console.warn(
-          `[digest] ${policy.stage} ${primary} 2회 실패 — 최후 수단으로 ${fallback} 폴백: ${message(secondErr)}`,
+          `[digest:${trace.runId}] ${policy.stage} ${primary} 2회 실패 — 최후 수단으로 ${fallback} 폴백: ${safeFailureDetail(secondErr)}`,
         );
+        const fallbackOpts = {
+          ...retry,
+          model: fallback,
+          ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
+        };
         try {
-          const text = await invoke({
-            ...retry,
-            model: fallback,
-            ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
-          });
+          const text = await invoke(fallbackOpts);
           noteSuccess(trace, policy.stage, fallback, true);
           return text;
         } catch (fallbackErr) {
+          noteFailure(trace, policy.stage, "fallback", fallbackOpts, fallbackErr);
           step.failures++;
           syncTotals(trace);
           throw fallbackErr;
