@@ -334,17 +334,6 @@ function finalMaxTokens(model: string): number {
     : configured;
 }
 
-/** Pro final synthesis gets one same-model retry before Flash fallback. A
- * thinking retry must actually be larger even when Railway still has the old
- * 16K/24K override, hence the 2× floor. */
-function finalRetryTokens(model: string): number {
-  const first = finalMaxTokens(model);
-  const configured = Number(process.env.DIGEST_FINAL_RETRY_TOKENS ?? first * 2);
-  return digestThinkingMode(model, "final") === "enabled"
-    ? Math.max(configured, first * 2)
-    : configured;
-}
-
 // ── Map-reduce synthesis (large windows) ────────────────────────────
 // Above DIGEST_MAP_ITEMS picks, the window is split into size-balanced chunks
 // (each ≤ ITEMS and ≤ CHARS of content) that are partial-summarized in parallel,
@@ -590,7 +579,8 @@ async function synthesizeFromFeed(
         stage: "final",
         fallbackModel: mapModel,
         fallbackThinking: digestThinkingMode(mapModel, "map"),
-        retryMaxTokens: finalRetryTokens(finalModel),
+        fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+        retryPrimary: false,
       },
       trace,
     );
@@ -615,7 +605,8 @@ async function synthesizeFromFeed(
         stage: "final",
         fallbackModel: mapModel,
         fallbackThinking: digestThinkingMode(mapModel, "map"),
-        retryMaxTokens: finalRetryTokens(finalModel),
+        fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+        retryPrimary: false,
       },
       trace,
     );
@@ -662,7 +653,8 @@ async function synthesizeFromDigests(
       stage: "final",
       fallbackModel: mapModel,
       fallbackThinking: digestThinkingMode(mapModel, "map"),
-      retryMaxTokens: finalRetryTokens(finalModel),
+      fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+      retryPrimary: false,
     },
     trace,
   );

@@ -113,7 +113,8 @@ export interface ModelPlan {
   map: EffectiveModelStep;
   final: EffectiveModelStep;
   finalTokens: number;
-  finalRetryTokens: number;
+  finalAttempts: number;
+  finalFallbackTokens: number;
 }
 
 export interface DataApi {
@@ -455,8 +456,9 @@ function makeStaticApi(): DataApi {
           source: cfg.digestMapModel ? "web" : "filter",
         },
         final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
-        finalTokens: 8192,
-        finalRetryTokens: 16384,
+        finalTokens: 24_576,
+        finalAttempts: 1,
+        finalFallbackTokens: 8192,
       };
     },
     async updateAnalysisConfig(cfg) {

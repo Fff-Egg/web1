@@ -235,9 +235,9 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
         ))}
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-indigo-800">
-        최종 모델은 {plan.finalTokens.toLocaleString()}토큰으로 먼저 실행하고, 실패하면 같은 모델을 최대
-        {plan.finalRetryTokens.toLocaleString()}토큰으로 한 번 더 시도합니다. 두 번 모두 실패할 때만 자료 정리 모델로
-        폴백합니다.
+        최종 모델은 최대 {plan.finalTokens.toLocaleString()}토큰으로 <strong>{plan.finalAttempts}번만</strong> 실행합니다. 실패하면
+        같은 모델을 재시도하지 않고 원인을 기록한 뒤, 자료 정리 모델을 최대
+        {plan.finalFallbackTokens.toLocaleString()}토큰으로 즉시 실행합니다.
       </p>
       {remapped.map(({ label, step }) => (
         <p key={label} className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">

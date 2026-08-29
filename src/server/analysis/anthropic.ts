@@ -209,8 +209,8 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   // `finish_reason=length` means the answer is incomplete even when content is
   // non-empty. Returning that partial text used to save reports cut off halfway
   // through a sentence (the deterministic bibliography still made them look
-  // superficially complete). Throw so the digest policy retries the SAME Pro
-  // with a larger budget, then falls back only if both Pro attempts fail.
+  // superficially complete). Throw so the digest policy can record the reason
+  // and retry or fall back according to the stage policy.
   if (reason === "length") {
     console.warn(
       `[llm] 불완전 응답 폐기 (model=${opts.model}) ${detail}` +
@@ -226,7 +226,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
   // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
   // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
-  // 이제는 던져서 ① completeRetry가 재시도하고 ② 실패 시 원인이 화면·로그에 드러나게 한다.
+  // 이제는 던져서 단계 정책이 재시도/폴백하고, 원인이 화면·로그에 드러나게 한다.
   console.error(`[llm] 빈 응답 (model=${opts.model}) ${detail}`);
   const hint =
     reason === "length"

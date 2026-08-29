@@ -795,7 +795,8 @@ function ModelBadge({ meta }: { meta: unknown }) {
         )}
         {finalFallback && (
           <p className="mt-1">
-            설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>이(가) 두 번 실패해 최후 수단으로
+            설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>이(가){" "}
+            {(final.retries ?? 0) > 0 ? "재시도까지 실패해" : "한 번 실패해 같은 모델 재시도 없이"}{" "}
             자료 정리 모델이 최종 작성했습니다.
           </p>
         )}

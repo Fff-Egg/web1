@@ -216,10 +216,14 @@ export type CompleteFn = (opts: CompleteOpts) => Promise<string>;
 
 export interface DigestCallPolicy {
   stage: DigestModelStage;
-  /** Emergency model used only after the planned model has failed twice. */
+  /** Emergency model used after the planned model has exhausted its allowed attempts. */
   fallbackModel?: string;
   /** Override thinking for the emergency fallback (normally Flash = disabled). */
   fallbackThinking?: CompleteOpts["thinking"];
+  /** Token budget for the fallback model (normally the non-thinking final budget). */
+  fallbackMaxTokens?: number;
+  /** False = one primary attempt, then immediate fallback. Defaults to true for map resilience. */
+  retryPrimary?: boolean;
   /** Token budget for a same-model retry after output exhaustion. */
   retryMaxTokens?: number;
 }
@@ -227,12 +231,11 @@ export interface DigestCallPolicy {
 /**
  * Digest call policy:
  *   1. planned model
- *   2. the SAME model once more (larger budget after length, or thinking-only empty output)
- *   3. only then the emergency fallback, if configured
+ *   2. either immediate emergency fallback, or one same-model retry when enabled
  *
- * Map calls normally omit fallbackModel, so Flash retries as Flash and a broken
- * chunk is surfaced. Final calls pass Flash as fallback, preserving Pro as the
- * writer whenever either Pro attempt succeeds.
+ * Map calls keep one Flash retry so a transient chunk failure does not create a
+ * hole. Final Pro calls set retryPrimary=false: one expensive Thinking attempt,
+ * then Flash immediately, with the Pro failure retained in trace.errors.
  */
 export async function completeDigestStage(
   opts: CompleteOpts,
@@ -243,6 +246,43 @@ export async function completeDigestStage(
   const step = trace.stages[policy.stage];
   const primary = resolveModel(opts.model);
   const initial = { ...opts, model: primary };
+  const invokeFallback = async (
+    failure: unknown,
+    baseOpts: CompleteOpts,
+    failedPrimaryAttempts: number,
+  ): Promise<string> => {
+    const fallback = policy.fallbackModel ? resolveModel(policy.fallbackModel) : "";
+    if (!fallback || fallback === primary) {
+      step.failures++;
+      syncTotals(trace);
+      throw failure;
+    }
+    step.attempts++;
+    console.warn(
+      `[digest:${trace.runId}] ${policy.stage} ${primary} ` +
+        (failedPrimaryAttempts === 1
+          ? `실패 — 같은 모델 재시도 없이 ${fallback} 폴백`
+          : `${failedPrimaryAttempts}회 실패 — 최후 수단으로 ${fallback} 폴백`) +
+        `: ${safeFailureDetail(failure)}`,
+    );
+    const fallbackOpts: CompleteOpts = {
+      ...baseOpts,
+      model: fallback,
+      ...(policy.fallbackMaxTokens !== undefined ? { maxTokens: policy.fallbackMaxTokens } : {}),
+      ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
+    };
+    try {
+      const text = await invoke(fallbackOpts);
+      noteSuccess(trace, policy.stage, fallback, true);
+      return text;
+    } catch (fallbackErr) {
+      noteFailure(trace, policy.stage, "fallback", fallbackOpts, fallbackErr);
+      step.failures++;
+      syncTotals(trace);
+      throw fallbackErr;
+    }
+  };
+
   step.attempts++;
   try {
     const text = await invoke(initial);
@@ -250,6 +290,9 @@ export async function completeDigestStage(
     return text;
   } catch (firstErr) {
     noteFailure(trace, policy.stage, "initial", initial, firstErr);
+    if (policy.retryPrimary === false) {
+      return invokeFallback(firstErr, initial, 1);
+    }
     const retryTokens = starved(firstErr)
       ? Math.max(opts.maxTokens ?? 1024, policy.retryMaxTokens ?? (opts.maxTokens ?? 1024) * 2)
       : opts.maxTokens;
@@ -267,31 +310,7 @@ export async function completeDigestStage(
       return text;
     } catch (secondErr) {
       noteFailure(trace, policy.stage, "retry", retry, secondErr);
-      const fallback = policy.fallbackModel ? resolveModel(policy.fallbackModel) : "";
-      if (fallback && fallback !== primary) {
-        step.attempts++;
-        console.warn(
-          `[digest:${trace.runId}] ${policy.stage} ${primary} 2회 실패 — 최후 수단으로 ${fallback} 폴백: ${safeFailureDetail(secondErr)}`,
-        );
-        const fallbackOpts = {
-          ...retry,
-          model: fallback,
-          ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
-        };
-        try {
-          const text = await invoke(fallbackOpts);
-          noteSuccess(trace, policy.stage, fallback, true);
-          return text;
-        } catch (fallbackErr) {
-          noteFailure(trace, policy.stage, "fallback", fallbackOpts, fallbackErr);
-          step.failures++;
-          syncTotals(trace);
-          throw fallbackErr;
-        }
-      }
-      step.failures++;
-      syncTotals(trace);
-      throw secondErr;
+      return invokeFallback(secondErr, retry, 2);
     }
   }
 }

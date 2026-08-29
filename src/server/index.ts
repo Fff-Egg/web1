@@ -30,7 +30,7 @@ app.get("/api/health", (_req, res) =>
   res.json({
     ok: true,
     revision: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
-    features: ["source-review", "deepseek-nonthinking-default", "pro-final-thinking", "importance-noise-guard", "offpeak-analysis-queue", "digest-failure-details"],
+    features: ["source-review", "deepseek-nonthinking-default", "pro-final-thinking", "importance-noise-guard", "offpeak-analysis-queue", "digest-failure-details", "pro-single-attempt"],
   }),
 );
 

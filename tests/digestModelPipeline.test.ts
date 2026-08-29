@@ -140,7 +140,7 @@ test("본문이 있어도 finish_reason=length면 잘린 결과를 성공으로 
   );
 });
 
-test("실제 length 응답은 증액된 같은 Pro 재시도로 완성본을 받는다", async () => {
+test("재시도를 허용한 정책은 실제 length 응답의 예산을 늘릴 수 있다", async () => {
   useDeepSeekEndpoint();
   const requestedTokens: number[] = [];
   globalThis.fetch = async (_input, init) => {
@@ -164,7 +164,7 @@ test("실제 length 응답은 증액된 같은 Pro 재시도로 완성본을 받
 
   const result = await completeDigestStage(
     { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 12_288 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 24_576 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryPrimary: true, retryMaxTokens: 24_576 },
     trace,
   );
 
@@ -175,7 +175,7 @@ test("실제 length 응답은 증액된 같은 Pro 재시도로 완성본을 받
   assert.equal(trace.stages.final.fallbacks, 0);
 });
 
-test("최종 Pro가 토큰 부족이면 예산을 늘려 같은 Pro로 먼저 재시도한다", async () => {
+test("재시도를 허용한 정책은 토큰 부족 시 같은 모델을 증액해 재시도한다", async () => {
   useDeepSeekEndpoint();
   const calls: Array<{ model: string; maxTokens?: number }> = [];
   const invoke: CompleteFn = async (opts) => {
@@ -186,7 +186,7 @@ test("최종 Pro가 토큰 부족이면 예산을 늘려 같은 Pro로 먼저 �
   const trace = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
   const result = await completeDigestStage(
     { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 12_288 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 24_576 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryPrimary: true, retryMaxTokens: 24_576 },
     trace,
     invoke,
   );
@@ -201,7 +201,7 @@ test("최종 Pro가 토큰 부족이면 예산을 늘려 같은 Pro로 먼저 �
   assert.equal(trace.stages.final.fallbacks, 0);
 });
 
-test("최종 Pro가 thinking만 남기고 빈 답변을 반환해도 2배 예산으로 재시도한다", async () => {
+test("재시도를 허용한 정책은 thinking만 남은 빈 답변도 증액해 재시도한다", async () => {
   useDeepSeekEndpoint();
   const calls: Array<{ model: string; maxTokens?: number }> = [];
   const invoke: CompleteFn = async (opts) => {
@@ -218,7 +218,7 @@ test("최종 Pro가 thinking만 남기고 빈 답변을 반환해도 2배 예산
 
   const result = await completeDigestStage(
     { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 24_576 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 49_152 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryPrimary: true, retryMaxTokens: 49_152 },
     trace,
     invoke,
   );
@@ -236,11 +236,11 @@ test("최종 Pro가 thinking만 남기고 빈 답변을 반환해도 2배 예산
   assert.equal(trace.stages.final.errors[0]?.maxTokens, 24_576);
 });
 
-test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한다", async () => {
+test("최종 Pro는 한 번만 시도하고 실패 이유를 남긴 뒤 즉시 Flash가 최종 작성한다", async () => {
   useDeepSeekEndpoint();
-  const calls: Array<{ model: string; thinking?: "enabled" | "disabled" }> = [];
+  const calls: Array<{ model: string; thinking?: "enabled" | "disabled"; maxTokens?: number }> = [];
   const invoke: CompleteFn = async (opts) => {
-    calls.push({ model: opts.model, thinking: opts.thinking });
+    calls.push({ model: opts.model, thinking: opts.thinking, maxTokens: opts.maxTokens });
     if (opts.model === "deepseek-v4-pro") throw new Error("temporary pro failure");
     return "flash emergency result";
   };
@@ -257,7 +257,8 @@ test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한
       stage: "final",
       fallbackModel: "deepseek-v4-flash",
       fallbackThinking: "disabled",
-      retryMaxTokens: 24_576,
+      fallbackMaxTokens: 8192,
+      retryPrimary: false,
     },
     trace,
     invoke,
@@ -265,18 +266,17 @@ test("최종 Pro가 두 번 모두 실패한 뒤에만 Flash가 최종 작성한
 
   assert.equal(result, "flash emergency result");
   assert.deepEqual(calls, [
-    { model: "deepseek-v4-pro", thinking: "enabled" },
-    { model: "deepseek-v4-pro", thinking: "enabled" },
-    { model: "deepseek-v4-flash", thinking: "disabled" },
+    { model: "deepseek-v4-pro", thinking: "enabled", maxTokens: 12_288 },
+    { model: "deepseek-v4-flash", thinking: "disabled", maxTokens: 8192 },
   ]);
   assert.deepEqual(trace.stages.final.used, ["deepseek-v4-flash"]);
+  assert.equal(trace.stages.final.retries, 0);
   assert.equal(trace.stages.final.fallbacks, 1);
   assert.equal(trace.fallbacks, 1);
   assert.deepEqual(
     trace.stages.final.errors.map((e) => ({ phase: e.phase, model: e.model, kind: e.kind })),
     [
       { phase: "initial", model: "deepseek-v4-pro", kind: "unknown" },
-      { phase: "retry", model: "deepseek-v4-pro", kind: "unknown" },
     ],
   );
 });
@@ -307,7 +307,7 @@ test("저장되는 실패 상세에서 API 키를 제거한다", async () => {
 
   await completeDigestStage(
     { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 200 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", fallbackMaxTokens: 100, retryPrimary: false },
     trace,
     invoke,
   );
@@ -331,7 +331,7 @@ test("Node fetch의 terminated 원인 코드를 실패 상세에 보존한다", 
 
   await completeDigestStage(
     { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 },
-    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 200 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", fallbackMaxTokens: 100, retryPrimary: false },
     trace,
     invoke,
   );
