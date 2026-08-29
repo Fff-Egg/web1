@@ -142,8 +142,21 @@ function message(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+function errorDetail(err: unknown): string {
+  const primary = message(err);
+  if (!(err instanceof Error) || !err.cause) return primary;
+  const cause = err.cause;
+  const causeMessage = cause instanceof Error ? cause.message : String(cause);
+  const causeCode =
+    cause && typeof cause === "object" && "code" in cause && typeof cause.code === "string"
+      ? cause.code
+      : "";
+  const suffix = [causeCode, causeMessage].filter(Boolean).join(": ");
+  return suffix && suffix !== primary ? `${primary}; cause=${suffix}` : primary;
+}
+
 function safeFailureDetail(err: unknown): string {
-  return message(err)
+  return errorDetail(err)
     .replace(/Bearer\s+[^\s"']+/gi, "Bearer <redacted>")
     .replace(/\bsk-[A-Za-z0-9_-]{8,}\b/g, "sk-<redacted>")
     .replace(/([?&](?:api[_-]?key|key|token)=)[^&\s]+/gi, "$1<redacted>")
@@ -152,7 +165,7 @@ function safeFailureDetail(err: unknown): string {
 }
 
 export function classifyDigestFailure(err: unknown): DigestFailureKind {
-  const detail = message(err);
+  const detail = errorDetail(err);
   if (/LLM 빈 응답/i.test(detail) && /reasoning_len=[1-9]\d*/i.test(detail) && !/finish_reason=length/i.test(detail)) {
     return "thinking_only_empty";
   }
@@ -161,7 +174,9 @@ export function classifyDigestFailure(err: unknown): DigestFailureKind {
   if (/\b(?:401|403)\b|unauthorized|forbidden|authentication|invalid api key/i.test(detail)) return "authentication";
   if (/content_filter|content filter/i.test(detail)) return "content_filter";
   if (/timeout|timed out|aborterror|aborted/i.test(detail)) return "timeout";
-  if (/fetch failed|econnreset|enotfound|eai_again|network/i.test(detail)) return "network";
+  if (/fetch failed|terminated|und_err_socket|socket (?:closed|hang up)|other side closed|econnreset|enotfound|eai_again|network/i.test(detail)) {
+    return "network";
+  }
   if (/LLM API 5\d\d/i.test(detail)) return "provider_5xx";
   if (/LLM API 4\d\d/i.test(detail)) return "bad_request";
   if (/LLM 빈 응답|empty response/i.test(detail)) return "empty_response";

@@ -292,6 +292,7 @@ test("다이제스트 실패 사유를 화면용 범주로 분류한다", () => 
   assert.equal(classifyDigestFailure(new Error("LLM API 429: rate limit exceeded")), "rate_limit");
   assert.equal(classifyDigestFailure(new Error("LLM API 500: upstream unavailable")), "provider_5xx");
   assert.equal(classifyDigestFailure(new Error("fetch failed: ECONNRESET")), "network");
+  assert.equal(classifyDigestFailure(new Error("terminated")), "network");
 });
 
 test("저장되는 실패 상세에서 API 키를 제거한다", async () => {
@@ -314,6 +315,29 @@ test("저장되는 실패 상세에서 API 키를 제거한다", async () => {
   const details = trace.stages.final.errors.map((e) => e.detail).join(" ");
   assert.doesNotMatch(details, /sk-secret|private-value/);
   assert.match(details, /<redacted>/);
+});
+
+test("Node fetch의 terminated 원인 코드를 실패 상세에 보존한다", async () => {
+  useDeepSeekEndpoint();
+  const trace = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+  const invoke: CompleteFn = async (opts) => {
+    if (opts.model === "deepseek-v4-pro") {
+      const err = new TypeError("terminated") as TypeError & { cause?: unknown };
+      err.cause = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
+      throw err;
+    }
+    return "fallback";
+  };
+
+  await completeDigestStage(
+    { model: "deepseek-v4-pro", system: "s", user: "u", maxTokens: 100 },
+    { stage: "final", fallbackModel: "deepseek-v4-flash", retryMaxTokens: 200 },
+    trace,
+    invoke,
+  );
+
+  assert.equal(trace.stages.final.errors[0]?.kind, "network");
+  assert.match(trace.stages.final.errors[0]?.detail ?? "", /UND_ERR_SOCKET: other side closed/);
 });
 
 test("자료 정리 단계는 Flash만 재시도하고 Pro로 역폴백하지 않는다", async () => {
