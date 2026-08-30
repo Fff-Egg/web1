@@ -1,0 +1,892 @@
+import { createTRPCClient, httpBatchLink } from "@trpc/client";
+import superjson from "superjson";
+import type { AppRouter } from "../../server/trpc/routers/index.js";
+import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact, Verdict, Tier } from "../../server/db/schema.js";
+// Type-only imports of the server repo's shapes (erased at build time, same
+// pattern as the schema.js line above) — no duplicated field lists to drift.
+import type { ThreadWithStats as ThreadRow, SignalRow } from "../../server/repo/thesis.js";
+import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
+import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
+import type { ResearchList } from "../../shared/research.js";
+
+export type { AnalysisConfig, Verdict, Tier };
+export type { MarketSnapshot, OHLC, Timeframe };
+export type { ResearchList } from "../../shared/research.js";
+
+export interface CandlesResponse {
+  symbol: string;
+  name: string | null;
+  timeframe: Timeframe;
+  candles: OHLC[];
+}
+
+// ─── 논지 지도(Thesis Map) ──────────────────────────────────────────
+export type { ThreadRow, SignalRow };
+export interface CreateThreadInput {
+  code?: string;
+  name: string;
+  thesis?: string;
+  context?: string;
+}
+export interface UpdateThreadInput {
+  id: number;
+  code?: string | null;
+  name?: string;
+  thesis?: string | null;
+  context?: string | null;
+  sort?: number;
+}
+
+export interface FeedFilter {
+  impact?: Impact;
+  ticker?: string;
+  theme?: string;
+  priority?: "important" | "low" | "source-review" | "saved" | "telegram";
+  date?: string;
+}
+
+export interface FeedItem {
+  id: number;
+  title: string | null;
+  url: string | null;
+  author: string | null;
+  publishedAt: string | Date | null;
+  addedAt?: string | Date | null;
+  sourceLabel: string | null;
+  provider: string;
+  body?: string | null;
+  summary: string | null;
+  implications: string | null;
+  fullText: string | null;
+  tickers: string[] | null;
+  themes: string[] | null;
+  impact: Impact | null;
+  lowPriority?: boolean;
+  needsSourceReview?: boolean;
+  saved?: boolean;
+}
+
+/**
+ * Client data layer. The same dashboard runs in two modes:
+ *  - tRPC mode (default): talks to the Express + tRPC backend.
+ *  - static demo mode (VITE_STATIC_DEMO=true): no backend; data lives in the
+ *    browser's localStorage. Used for the GitHub Pages public demo.
+ */
+
+export interface SourceRow {
+  id: number;
+  provider: Provider;
+  fetchType: FetchType;
+  identifier: string;
+  label: string | null;
+  enabled: boolean;
+  config: SourceConfig | null;
+  sessionStatus: "valid" | "expired" | "missing" | null;
+  lastError: string | null;
+  createdAt: string | Date;
+}
+
+export interface CreateInput {
+  provider: Provider;
+  identifier: string;
+  label?: string;
+  config?: SourceConfig;
+}
+
+export interface UpdateInput {
+  id: number;
+  label?: string;
+  enabled?: boolean;
+  identifier?: string;
+  config?: SourceConfig;
+}
+
+export interface EffectiveModelStep {
+  configured: string;
+  effective: string;
+  source: "web" | "railway" | "default" | "filter";
+}
+
+export interface ModelPlan {
+  provider: "openai-compatible" | "anthropic" | "unconfigured";
+  filter: EffectiveModelStep;
+  map: EffectiveModelStep;
+  final: EffectiveModelStep;
+  finalTokens: number;
+  finalAttempts: number;
+  finalFallbackTokens: number;
+}
+
+export interface DataApi {
+  mode: "trpc" | "static";
+  health(): Promise<{ ok: boolean; ts: number }>;
+  status(): Promise<{ persisted: boolean; xSession?: boolean }>;
+  listSources(): Promise<SourceRow[]>;
+  createSource(input: CreateInput): Promise<{ id: number }>;
+  updateSource(input: UpdateInput): Promise<void>;
+  toggleSource(id: number, enabled: boolean): Promise<void>;
+  removeSource(id: number): Promise<void>;
+  collectSourceNow(
+    id: number,
+  ): Promise<{ ok: boolean; inserted: number; error: string | null; suggestedFeedUrl?: string | null }>;
+  getAnalysisConfig(): Promise<AnalysisConfig>;
+  getModelPlan(): Promise<ModelPlan>;
+  updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
+  getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
+  setFilterGuidance(text: string): Promise<void>;
+  listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
+  getFeedItem(id: number): Promise<FeedItem | null>;
+  feedCounts(): Promise<{ important: number; low: number; sourceReview: number; saved: number; telegram: number }>;
+  trashFeed(): Promise<FeedItem[]>;
+  deleteFeedItem(id: number): Promise<void>;
+  restoreFeedItem(id: number): Promise<void>;
+  purgeFeedItem(id: number): Promise<void>;
+  promoteFeedItem(id: number): Promise<void>;
+  setSavedFeedItem(id: number, saved: boolean): Promise<void>;
+  feedDeleteMany(ids: number[]): Promise<void>;
+  feedRestoreMany(ids: number[]): Promise<void>;
+  feedPurgeMany(ids: number[]): Promise<void>;
+  feedPurgeAll(): Promise<void>;
+  digestRestoreMany(ids: number[]): Promise<void>;
+  digestPurgeMany(ids: number[]): Promise<void>;
+  digestPurgeAll(): Promise<void>;
+  /** Run hours (KST): midday (2nd run) + evening (boundary/sweep), plus the
+   *  currently-open window's date (for the manual-digest form default). */
+  digestSchedule(): Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string; today: string }>;
+  listDigests(): Promise<DigestSummary[]>;
+  trashDigests(): Promise<DigestSummary[]>;
+  getDigest(id?: number): Promise<DigestFull | null>;
+  /** Starts generation in the BACKGROUND (returns immediately); poll the digest
+   *  list for the result. (A full-day map-reduce outlasts the HTTP timeout.) */
+  generateDigest(opts?: GenerateDigestOpts): Promise<{ started: boolean }>;
+  /** 경계 루틴 실행. **무거워서 백그라운드로 돈다** — 즉시 `started`를 반환하고 결과는
+   *  다이제스트 목록 폴링으로 확인한다(동기로 await하면 모바일에서 타임아웃 "Load failed"). */
+  runEveningDigest(): Promise<{
+    date: string;
+    /** True = refused: pressed before the boundary hour (would close the window + sweep early). */
+    tooEarly: boolean;
+    /** True = 백그라운드 실행 시작됨(tooEarly면 false). */
+    started?: boolean;
+    diag: { start: string; end: string; nowUtc: string; rawInWindow: number; latestCreatedAt: string | Date | null };
+  }>;
+  /** 낮분(어제21시~오늘14시) 다이제스트만 생성 — sweep 없음. 14시 전엔 거부(tooEarly). */
+  runMiddayDigest(): Promise<{
+    date: string;
+    tooEarly: boolean;
+    /** 낮분 already existed (nothing generated). */
+    existed: boolean;
+    /** True = 백그라운드 생성 시작됨. 결과는 목록 폴링으로 확인. */
+    started?: boolean;
+  }>;
+  deleteDigest(id: number): Promise<void>;
+  restoreDigest(id: number): Promise<void>;
+  purgeDigest(id: number): Promise<void>;
+  sweepFeedRange(start: string, end: string): Promise<{ swept: number }>;
+  listSessions(): Promise<SessionInfo[]>;
+  listPending(): Promise<PendingArticle[]>;
+  saveManualAnalysis(input: ManualAnalysisInput): Promise<void>;
+  skipPending(articleId: number): Promise<void>;
+  /** 시황분석: last stored daily snapshot (null until first collected). */
+  marketLatest(): Promise<MarketSnapshot | null>;
+  /** Force a fresh collection now (the "지금 갱신" button). */
+  marketRefresh(): Promise<MarketSnapshot>;
+  /** Change the configurable chart slot's TradingView symbol; re-collects it. */
+  setMarketSymbol(symbol: string): Promise<MarketSnapshot>;
+  /** Live OHLC candles for the custom slot at a timeframe. */
+  marketCandles(symbol: string, timeframe: Timeframe): Promise<CandlesResponse>;
+  /** 리포트: broker-research board for a 작성일 (default = latest). */
+  researchList(date?: string): Promise<ResearchList>;
+  /** Force-collect today's reports from 한경 컨센서스, return the fresh board. */
+  researchRefresh(date?: string): Promise<ResearchList>;
+  // 논지 지도(Thesis Map)
+  listThreads(includeArchived?: boolean): Promise<ThreadRow[]>;
+  createThread(input: CreateThreadInput): Promise<{ id: number }>;
+  updateThread(input: UpdateThreadInput): Promise<void>;
+  setThreadArchived(id: number, archived: boolean): Promise<void>;
+  removeThread(id: number): Promise<void>;
+  threadSignals(threadId: number): Promise<SignalRow[]>;
+  thesisInbox(): Promise<SignalRow[]>;
+  assignSignal(signalId: number, threadId: number): Promise<void>;
+  promoteSignal(signalId: number, opts?: { name?: string; thesis?: string }): Promise<{ threadId: number }>;
+  dismissSignal(signalId: number): Promise<void>;
+  seedThreads(): Promise<{ created: number }>;
+}
+
+export interface PendingArticle {
+  id: number;
+  title: string | null;
+  url: string | null;
+  body: string | null;
+  publishedAt: string | Date | null;
+  sourceLabel: string | null;
+  provider: string;
+}
+
+export interface ManualAnalysisInput {
+  articleId: number;
+  summary: string;
+  implications: string;
+  fullText?: string;
+  tickers: string[];
+  themes: string[];
+  impact: Impact;
+}
+
+export interface SessionInfo {
+  id: number;
+  hasSession: boolean;
+}
+
+export interface GenerateDigestOpts {
+  start?: string;
+  end?: string;
+  title?: string;
+  /** Synthesize from saved digests in range instead of the feed (past dates). */
+  fromDigests?: boolean;
+}
+export interface DigestSummary {
+  id: number;
+  title: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  createdAt: string | Date;
+  /** { auto, source: "feed"|"digests", model, ... } — drives grouping/badges. */
+  meta?: Record<string, unknown> | null;
+}
+export interface DigestFull {
+  id: number;
+  title: string | null;
+  periodStart: string | null;
+  periodEnd: string | null;
+  markdown: string;
+  meta?: Record<string, unknown> | null;
+}
+
+const STATIC = import.meta.env.VITE_STATIC_DEMO === "true";
+
+// ─── tRPC-backed implementation ─────────────────────────────────────
+function makeTrpcApi(): DataApi {
+  const client = createTRPCClient<AppRouter>({
+    links: [httpBatchLink({ url: "/trpc", transformer: superjson })],
+  });
+  return {
+    mode: "trpc",
+    health: () => client.health.query(),
+    status: () => client.sources.status.query(),
+    listSources: () => client.sources.list.query() as Promise<SourceRow[]>,
+    createSource: (input) => client.sources.create.mutate(input),
+    updateSource: async (input) => {
+      await client.sources.update.mutate(input);
+    },
+    toggleSource: async (id, enabled) => {
+      await client.sources.toggle.mutate({ id, enabled });
+    },
+    removeSource: async (id) => {
+      await client.sources.remove.mutate({ id });
+    },
+    collectSourceNow: (id) =>
+      client.sources.collectNow.mutate({ id }) as ReturnType<DataApi["collectSourceNow"]>,
+    getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
+    getModelPlan: () => client.settings.getModelPlan.query() as Promise<ModelPlan>,
+    updateAnalysisConfig: async (cfg) => {
+      await client.settings.updateAnalysisConfig.mutate(cfg);
+    },
+    getFilterGuidance: () =>
+      client.settings.getFilterGuidance.query() as Promise<{ text: string; count: number; updatedAt?: string }>,
+    setFilterGuidance: async (text) => {
+      await client.settings.setFilterGuidance.mutate({ text });
+    },
+    listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
+    getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
+    feedCounts: () =>
+      client.feed.counts.query() as Promise<{
+        important: number;
+        low: number;
+        sourceReview: number;
+        saved: number;
+        telegram: number;
+      }>,
+    trashFeed: () => client.feed.trash.query() as Promise<FeedItem[]>,
+    deleteFeedItem: async (id) => { await client.feed.delete.mutate({ id }); },
+    restoreFeedItem: async (id) => { await client.feed.restore.mutate({ id }); },
+    purgeFeedItem: async (id) => { await client.feed.purge.mutate({ id }); },
+    promoteFeedItem: async (id) => { await client.feed.promote.mutate({ id }); },
+    setSavedFeedItem: async (id, saved) => { await client.feed.setSaved.mutate({ id, saved }); },
+    feedDeleteMany: async (ids) => { await client.feed.deleteMany.mutate({ ids }); },
+    feedRestoreMany: async (ids) => { await client.feed.restoreMany.mutate({ ids }); },
+    feedPurgeMany: async (ids) => { await client.feed.purgeMany.mutate({ ids }); },
+    feedPurgeAll: async () => { await client.feed.purgeAll.mutate(); },
+    digestRestoreMany: async (ids) => { await client.digest.restoreMany.mutate({ ids }); },
+    digestPurgeMany: async (ids) => { await client.digest.purgeMany.mutate({ ids }); },
+    digestPurgeAll: async () => { await client.digest.purgeAll.mutate(); },
+    digestSchedule: () =>
+      client.digest.schedule.query() as Promise<{ middayHour: number; eveningHour: number; currentWindowDate: string; today: string }>,
+    listDigests: () => client.digest.list.query() as Promise<DigestSummary[]>,
+    trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
+    getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
+    generateDigest: (opts) =>
+      client.digest.generate.mutate(opts ?? {}) as Promise<{ started: boolean }>,
+    runEveningDigest: () => client.digest.runEvening.mutate() as ReturnType<DataApi["runEveningDigest"]>,
+    runMiddayDigest: () => client.digest.runMidday.mutate() as ReturnType<DataApi["runMiddayDigest"]>,
+    deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
+    restoreDigest: async (id) => { await client.digest.restore.mutate({ id }); },
+    purgeDigest: async (id) => { await client.digest.purge.mutate({ id }); },
+    sweepFeedRange: (start, end) => client.digest.sweepRange.mutate({ start, end }) as Promise<{ swept: number }>,
+    listSessions: () => client.sources.sessions.query() as Promise<SessionInfo[]>,
+    listPending: () => client.manual.pending.query() as Promise<PendingArticle[]>,
+    saveManualAnalysis: async (input) => {
+      await client.manual.save.mutate(input);
+    },
+    skipPending: async (articleId) => {
+      await client.manual.skip.mutate({ articleId });
+    },
+    marketLatest: () => client.market.latest.query() as Promise<MarketSnapshot | null>,
+    marketRefresh: () => client.market.refresh.mutate() as Promise<MarketSnapshot>,
+    setMarketSymbol: (symbol) => client.market.setSymbol.mutate({ symbol }) as Promise<MarketSnapshot>,
+    marketCandles: (symbol, timeframe) =>
+      client.market.candles.query({ symbol, timeframe }) as Promise<CandlesResponse>,
+    researchList: (date) => client.research.list.query({ date }) as Promise<ResearchList>,
+    researchRefresh: (date) => client.research.refresh.mutate({ date }) as Promise<ResearchList>,
+    listThreads: (includeArchived) =>
+      client.thesis.threads.query({ includeArchived: includeArchived ?? false }) as Promise<ThreadRow[]>,
+    createThread: (input) => client.thesis.createThread.mutate(input),
+    updateThread: async (input) => { await client.thesis.updateThread.mutate(input); },
+    setThreadArchived: async (id, archived) => { await client.thesis.setArchived.mutate({ id, archived }); },
+    removeThread: async (id) => { await client.thesis.removeThread.mutate({ id }); },
+    threadSignals: (threadId) => client.thesis.signals.query({ threadId }) as Promise<SignalRow[]>,
+    thesisInbox: () => client.thesis.inbox.query() as Promise<SignalRow[]>,
+    assignSignal: async (signalId, threadId) => { await client.thesis.assignSignal.mutate({ signalId, threadId }); },
+    promoteSignal: (signalId, opts) => client.thesis.promoteSignal.mutate({ signalId, ...opts }),
+    dismissSignal: async (signalId) => { await client.thesis.dismissSignal.mutate({ signalId }); },
+    seedThreads: () => client.thesis.seed.mutate(),
+  };
+}
+
+// ─── localStorage-backed implementation (static demo) ───────────────
+const KEY = "feedwatch.sources.v1";
+
+function makeStaticApi(): DataApi {
+  const load = (): SourceRow[] => {
+    const raw = localStorage.getItem(KEY);
+    if (raw) {
+      try {
+        return JSON.parse(raw) as SourceRow[];
+      } catch {
+        /* fall through to seed */
+      }
+    }
+    const seeded = seedRows();
+    localStorage.setItem(KEY, JSON.stringify(seeded));
+    return seeded;
+  };
+  const save = (rows: SourceRow[]) => localStorage.setItem(KEY, JSON.stringify(rows));
+  const nextId = (rows: SourceRow[]) => rows.reduce((m, r) => Math.max(m, r.id), 0) + 1;
+
+  return {
+    mode: "static",
+    async health() {
+      return { ok: true, ts: Date.now() };
+    },
+    async status() {
+      return { persisted: false };
+    },
+    async listSources() {
+      return load().sort(
+        (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      );
+    },
+    async createSource(input) {
+      const rows = load();
+      const id = nextId(rows);
+      rows.push({
+        id,
+        provider: input.provider,
+        fetchType: presetFetchType(input.provider),
+        identifier: input.identifier,
+        label: input.label ?? null,
+        enabled: true,
+        config: input.config ?? {},
+        sessionStatus: null,
+        lastError: null,
+        createdAt: new Date().toISOString(),
+      });
+      save(rows);
+      return { id };
+    },
+    async updateSource({ id, ...patch }) {
+      const rows = load();
+      const r = rows.find((x) => x.id === id);
+      if (r) Object.assign(r, patch);
+      save(rows);
+    },
+    async toggleSource(id, enabled) {
+      const rows = load();
+      const r = rows.find((x) => x.id === id);
+      if (r) r.enabled = enabled;
+      save(rows);
+    },
+    async removeSource(id) {
+      save(load().filter((x) => x.id !== id));
+    },
+    async collectSourceNow() {
+      return { ok: false, inserted: 0, error: "데모 모드에선 수집할 수 없습니다" };
+    },
+    async getAnalysisConfig() {
+      const raw = localStorage.getItem(CFG_KEY);
+      if (raw) {
+        try {
+          return { ...DEFAULT_ANALYSIS_CONFIG, ...(JSON.parse(raw) as AnalysisConfig) };
+        } catch {
+          /* fall through */
+        }
+      }
+      return { ...DEFAULT_ANALYSIS_CONFIG };
+    },
+    async getModelPlan() {
+      const cfg = await this.getAnalysisConfig();
+      const filter = cfg.filterModel || "deepseek-v4-flash";
+      const map = cfg.digestMapModel || filter;
+      const final = cfg.analysisModel || "deepseek-v4-pro";
+      return {
+        provider: "openai-compatible",
+        filter: { configured: filter, effective: filter, source: cfg.filterModel ? "web" : "default" },
+        map: {
+          configured: map,
+          effective: map,
+          source: cfg.digestMapModel ? "web" : "filter",
+        },
+        final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
+        finalTokens: 49_152,
+        finalAttempts: 1,
+        finalFallbackTokens: 8192,
+      };
+    },
+    async updateAnalysisConfig(cfg) {
+      localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
+    },
+    async getFilterGuidance() {
+      return { text: "", count: 0 };
+    },
+    async setFilterGuidance() {},
+    async listFeed(filter) {
+      // Static demo: manually-saved analyses first, then example cards.
+      const all = [...loadSavedFeed(), ...SAMPLE_FEED];
+      if (filter?.priority === "saved") return all.filter((x) => x.saved);
+      if (filter?.priority === "telegram") return all.filter((x) => x.provider === "telegram");
+      if (filter?.priority === "source-review") return all.filter((x) => x.needsSourceReview);
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram" && !x.needsSourceReview);
+      return transient.filter((x) => !!x.lowPriority === (filter?.priority === "low"));
+    },
+    async getFeedItem(id) {
+      return [...loadSavedFeed(), ...SAMPLE_FEED].find((x) => x.id === id) ?? null;
+    },
+    async feedCounts() {
+      const all = [...loadSavedFeed(), ...SAMPLE_FEED];
+      const transient = all.filter((x) => !x.saved && x.provider !== "telegram" && !x.needsSourceReview);
+      return {
+        important: transient.filter((x) => !x.lowPriority).length,
+        low: transient.filter((x) => !!x.lowPriority).length,
+        sourceReview: all.filter((x) => !!x.needsSourceReview && !x.saved).length,
+        saved: all.filter((x) => x.saved).length,
+        telegram: all.filter((x) => x.provider === "telegram").length,
+      };
+    },
+    async trashFeed() {
+      return [];
+    },
+    async deleteFeedItem() {},
+    async restoreFeedItem() {},
+    async purgeFeedItem() {},
+    async promoteFeedItem() {},
+    async setSavedFeedItem() {},
+    async feedDeleteMany() {},
+    async feedRestoreMany() {},
+    async feedPurgeMany() {},
+    async feedPurgeAll() {},
+    async digestRestoreMany() {},
+    async digestPurgeMany() {},
+    async digestPurgeAll() {},
+    async digestSchedule() {
+      return {
+        middayHour: 17,
+        eveningHour: 7,
+        currentWindowDate: new Date().toLocaleDateString("en-CA"),
+        today: new Date().toLocaleDateString("en-CA"),
+      };
+    },
+    async listDigests() {
+      return [
+        {
+          id: SAMPLE_DIGEST.id,
+          title: SAMPLE_DIGEST.title,
+          periodStart: SAMPLE_DIGEST.periodStart,
+          periodEnd: SAMPLE_DIGEST.periodEnd,
+          createdAt: new Date().toISOString(),
+          meta: { auto: true, source: "feed" },
+        },
+      ];
+    },
+    async trashDigests() {
+      return [];
+    },
+    async getDigest() {
+      return SAMPLE_DIGEST;
+    },
+    async generateDigest() {
+      return { started: true };
+    },
+    async runEveningDigest() {
+      const now = new Date().toISOString();
+      return {
+        date: new Date().toLocaleDateString("en-CA"),
+        tooEarly: false,
+        started: false, // 데모에는 백그라운드 작업이 없다
+        diag: { start: now, end: now, nowUtc: now, rawInWindow: 0, latestCreatedAt: null },
+      };
+    },
+    async runMiddayDigest() {
+      return { date: new Date().toLocaleDateString("en-CA"), tooEarly: false, existed: false, started: false };
+    },
+    async deleteDigest() {},
+    async restoreDigest() {},
+    async purgeDigest() {},
+    async sweepFeedRange() {
+      return { swept: 0 };
+    },
+    async listSessions() {
+      // Static demo has no server-side sessions.
+      return load().map((s) => ({ id: s.id, hasSession: false }));
+    },
+    async listPending() {
+      return loadPending();
+    },
+    async saveManualAnalysis(input) {
+      const pending = loadPending();
+      const art = pending.find((p) => p.id === input.articleId);
+      const saved = loadSavedFeed();
+      saved.unshift({
+        id: input.articleId,
+        title: art?.title ?? null,
+        url: art?.url ?? null,
+        author: null,
+        publishedAt: art?.publishedAt ?? new Date().toISOString(),
+        sourceLabel: art?.sourceLabel ?? null,
+        provider: art?.provider ?? "generic_rss",
+        summary: input.summary,
+        implications: input.implications,
+        fullText: input.fullText ?? null,
+        tickers: input.tickers,
+        themes: input.themes,
+        impact: input.impact,
+      });
+      localStorage.setItem(SAVED_FEED_KEY, JSON.stringify(saved));
+      savePending(pending.filter((p) => p.id !== input.articleId));
+    },
+    async skipPending(articleId) {
+      savePending(loadPending().filter((p) => p.id !== articleId));
+    },
+    async marketLatest() {
+      return SAMPLE_MARKET;
+    },
+    async marketRefresh() {
+      return { ...SAMPLE_MARKET, fetchedAt: new Date().toISOString() };
+    },
+    async setMarketSymbol(symbol) {
+      return {
+        ...SAMPLE_MARKET,
+        custom: { symbol: symbol.toUpperCase(), name: symbol.toUpperCase(), quote: { value: 100, change: 0.5, changePct: 0.5 } },
+        history: { ...SAMPLE_MARKET.history, custom: sampleSeries(100, 12) },
+      };
+    },
+    async marketCandles(symbol, timeframe) {
+      const n = timeframe === "1Y" ? 30 : timeframe === "1M" ? 60 : 120;
+      const day = 24 * 60 * 60_000;
+      const start = Date.now() - n * day;
+      let prev = 100;
+      const candles = Array.from({ length: n }, (_, i) => {
+        const o = prev;
+        const c = Math.round((o + (Math.sin(i / 5) * 4 + (Math.random() - 0.5) * 6)) * 100) / 100;
+        const h = Math.max(o, c) + Math.random() * 3;
+        const l = Math.min(o, c) - Math.random() * 3;
+        prev = c;
+        return { t: start + i * day, o, h: Math.round(h * 100) / 100, l: Math.round(l * 100) / 100, c };
+      });
+      return { symbol: symbol.toUpperCase(), name: symbol.toUpperCase(), timeframe, candles };
+    },
+    async researchList() {
+      return SAMPLE_RESEARCH;
+    },
+    async researchRefresh() {
+      return { ...SAMPLE_RESEARCH, collectedAt: new Date().toISOString() };
+    },
+    // 논지 지도 — demo: read-only sample, mutations are no-ops.
+    async listThreads() {
+      return SAMPLE_THREADS;
+    },
+    async createThread() {
+      return { id: Math.floor(Math.random() * 1e6) };
+    },
+    async updateThread() {},
+    async setThreadArchived() {},
+    async removeThread() {},
+    async threadSignals() {
+      return [];
+    },
+    async thesisInbox() {
+      return [];
+    },
+    async assignSignal() {},
+    async promoteSignal() {
+      return { threadId: Math.floor(Math.random() * 1e6) };
+    },
+    async dismissSignal() {},
+    async seedThreads() {
+      return { created: 0 };
+    },
+  };
+}
+
+function sampleSeries(base: number, amp: number, n = 180): { t: number; v: number }[] {
+  const day = 24 * 60 * 60_000;
+  const start = Date.now() - n * day;
+  return Array.from({ length: n }, (_, i) => ({
+    t: start + i * day,
+    v: Math.round((base + amp * Math.sin(i / 12) + amp * 0.4 * Math.sin(i / 3)) * 100) / 100,
+  }));
+}
+
+const SAMPLE_MARKET: MarketSnapshot = {
+  fetchedAt: new Date().toISOString(),
+  fearGreed: { score: 37.3, rating: "fear", prevClose: 37.5, week: 35.5, month: 59.4, year: 54.3, asOf: null },
+  custom: { symbol: "CBOE:VIX", name: "Volatility S&P 500 Index", quote: { value: 16.4, change: -2.04, changePct: -11.06 } },
+  breadth: {
+    s5fi: { value: 55.26, change: 1.79, changePct: 3.35 },
+    ndfi: { value: 50.49, change: 3.96, changePct: 8.51 },
+  },
+  adr: {
+    kospi: { value: 72.99, prevClose: 72.56 },
+    kosdaq: { value: 68.18, prevClose: 68.76 },
+  },
+  credit: {
+    kospi: { value: 12.4, prevValue: 12.2 },
+    kosdaq: { value: 9.8, prevValue: 9.9 },
+  },
+  liquidity: { net: 5.72, net4wChange: -0.08, reserves: 3.22, rrp: 0.02, tga: 0.81, asOf: new Date().toISOString() },
+  history: {
+    fearGreed: sampleSeries(50, 18),
+    custom: sampleSeries(18, 6),
+    s5fi: sampleSeries(55, 22),
+    ndfi: sampleSeries(52, 24),
+    kospiAdr: sampleSeries(95, 20),
+    kosdaqAdr: sampleSeries(90, 22),
+    creditKospi: sampleSeries(12, 1.2),
+    creditKosdaq: sampleSeries(9.8, 1),
+    netLiquidity: sampleSeries(5.7, 0.15),
+    reserves: sampleSeries(3.2, 0.1),
+    tga: sampleSeries(0.8, 0.15),
+    rrp: sampleSeries(0.02, 0.01),
+    kospiClose: sampleSeries(8200, 400),
+    kosdaqClose: sampleSeries(880, 60),
+    vkospi: [],
+    forcedLiqRatio: sampleSeries(2, 1.2),
+    forcedLiqAmount: sampleSeries(40000, 25000),
+    vix: sampleSeries(16, 5),
+    vix3m: sampleSeries(19, 3),
+    hyOas: sampleSeries(3.2, 0.8),
+    ixic: sampleSeries(18000, 1500),
+    // 데모는 VVIX_PANIC(140) 아래로만 진동시켜 정적 데모가 REBOUND로 오점등하지 않게 한다.
+    vvix: sampleSeries(100, 20),
+  },
+  errors: [],
+};
+
+const SAMPLE_RESEARCH: ResearchList = {
+  date: "2026-06-20",
+  dates: ["2026-06-20", "2026-06-19", "2026-06-18"],
+  collectedAt: new Date().toISOString(),
+  error: null,
+  reports: [
+    { id: 1, source: "naver", reportDate: "2026-06-20", category: "기업", title: "삼성전자 - HBM4 양산 가시화, 실적 모멘텀 회복", summary: "HBM4 양산이 앞당겨지며 메모리 실적 모멘텀이 회복, 목표주가 상향.", marketCap: 5134567e8, stockName: "삼성전자", stockCode: "005930", targetPrice: "95,000", opinion: "매수", broker: "미래에셋증권", pdfUrl: "https://example.com/r1.pdf", coverageCount: 7, isMajor: true, tpRaised: true },
+    { id: 2, source: "hankyung", reportDate: "2026-06-20", category: "기업", title: "SK하이닉스 - DRAM 가격 반등 본격화", summary: null, marketCap: 1623400e8, stockName: "SK하이닉스", stockCode: "000660", targetPrice: "240,000", opinion: "매수", broker: "한국투자증권", pdfUrl: "https://example.com/r2.pdf", coverageCount: 5, isMajor: true, tpRaised: false },
+    { id: 3, source: "naver", reportDate: "2026-06-20", category: "기업", title: "현대차 - 하반기 신차 사이클 점검", summary: "하반기 신차 출시로 믹스 개선 기대, 단 환율 변동성은 부담.", marketCap: 543000e8, stockName: "현대차", stockCode: "005380", targetPrice: "270,000", opinion: "매수", broker: "NH투자증권", pdfUrl: "https://example.com/r3.pdf", coverageCount: 2, isMajor: false, tpRaised: false },
+    { id: 4, source: "naver", reportDate: "2026-06-20", category: "산업", title: "반도체 - 메모리 업황 회복 사이클 진입", summary: "감산 효과와 AI 수요로 메모리 업황이 회복 사이클에 진입.", marketCap: null, stockName: null, stockCode: null, targetPrice: null, opinion: null, broker: "키움증권", pdfUrl: "https://example.com/r4.pdf", coverageCount: 0, isMajor: false, tpRaised: false },
+    { id: 5, source: "hankyung", reportDate: "2026-06-20", category: "산업", title: "2차전지 - 수요 둔화 우려 점검", summary: null, marketCap: null, stockName: null, stockCode: null, targetPrice: null, opinion: null, broker: "대신증권", pdfUrl: "https://example.com/r5.pdf", coverageCount: 0, isMajor: false, tpRaised: false },
+  ],
+};
+
+const SAMPLE_THREADS: ThreadRow[] = [
+  {
+    id: 1, code: "A", name: "NAND / HBF", thesis: "NAND 업황 반등과 HBF 구조적 수요",
+    context: null, archived: false, sort: 0, createdAt: new Date().toISOString(),
+    total: 3, lastSignalAt: new Date().toISOString(),
+    c7: { support: 2, weaken: 0, refute: 0, neutral: 1 }, c30: { support: 2, weaken: 1, refute: 0, neutral: 1 },
+  },
+  {
+    id: 2, code: "B", name: "HBM / DRAM", thesis: "HBM·DRAM 사이클과 AI 메모리 수요",
+    context: null, archived: false, sort: 1, createdAt: new Date().toISOString(),
+    total: 1, lastSignalAt: new Date().toISOString(),
+    c7: { support: 1, weaken: 0, refute: 0, neutral: 0 }, c30: { support: 1, weaken: 0, refute: 0, neutral: 0 },
+  },
+];
+
+const PENDING_KEY = "feedwatch.pending.v1";
+const SAVED_FEED_KEY = "feedwatch.savedfeed.v1";
+
+function loadPending(): PendingArticle[] {
+  const raw = localStorage.getItem(PENDING_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as PendingArticle[];
+    } catch {
+      /* reseed */
+    }
+  }
+  const seeded = SAMPLE_PENDING;
+  localStorage.setItem(PENDING_KEY, JSON.stringify(seeded));
+  return seeded;
+}
+function savePending(rows: PendingArticle[]) {
+  localStorage.setItem(PENDING_KEY, JSON.stringify(rows));
+}
+function loadSavedFeed(): FeedItem[] {
+  const raw = localStorage.getItem(SAVED_FEED_KEY);
+  if (raw) {
+    try {
+      return JSON.parse(raw) as FeedItem[];
+    } catch {
+      /* ignore */
+    }
+  }
+  return [];
+}
+
+const SAMPLE_PENDING: PendingArticle[] = [
+  {
+    id: 101,
+    title: "(예시) 한국은행, 기준금리 동결 결정… 추가 인하 신중론",
+    url: "https://example.com/pending-1",
+    body: "한국은행 금융통화위원회가 기준금리를 동결했다. 위원 다수는 물가 안정세를 확인하면서도 가계부채와 환율 변동성을 이유로 추가 인하에 신중한 입장을 보였다. 시장은 다음 분기 인하 가능성을 절반 정도로 보고 있다…",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "한국경제",
+    provider: "hankyung",
+  },
+  {
+    id: 102,
+    title: "(예시) 세상학개론: 반도체 사이클, 지금 어디쯤인가",
+    url: "https://example.com/pending-2",
+    body: "이번 글에서는 메모리 반도체 가격 반등과 AI 가속기 수요를 바탕으로 현재 반도체 사이클의 위치를 점검한다. 공급 측 감산 효과가 가격에 반영되기 시작했고, 데이터센터 투자가 수요를 견인하는 구조가 당분간 이어질 것으로 본다…",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "세상학개론",
+    provider: "fanding",
+  },
+];
+
+const CFG_KEY = "feedwatch.analysis.v1";
+
+const SAMPLE_FEED: FeedItem[] = [
+  {
+    id: 1,
+    title: "(예시) 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향",
+    url: "https://example.com/sample-1",
+    author: null,
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "예시 소스",
+    provider: "generic_rss",
+    summary: "데이터센터향 GPU 수요가 예상을 상회한다는 내용. 공급은 여전히 타이트.",
+    implications: "AI 인프라 투자 사이클이 지속된다는 내 논제를 강화. 관련 밸류체인에 우호적.",
+    fullText: "## 한 줄 판정\n수요 가이던스 상향은 AI 인프라 스레드를 **강화**한다. 증거 티어 = 경영진 주장.\n\n## 신호의 정체\n경영진 가이던스 상향(경영진 주장 티어). 1차 출처(컨콜 트랜스크립트) 검증 필요.",
+    tickers: ["NVDA"],
+    themes: ["AI 반도체"],
+    impact: "bullish",
+  },
+  {
+    id: 2,
+    title: "(예시) 금리 동결 시그널, 성장주 밸류에이션에 우호적",
+    url: "https://example.com/sample-2",
+    author: null,
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "예시 소스",
+    provider: "hankyung",
+    summary: "중앙은행이 추가 인상에 신중. 시장은 동결을 기대.",
+    implications: "성장주 비중이 높은 내 포트폴리오에 중립~소폭 우호적.",
+    fullText: null,
+    tickers: [],
+    themes: ["매크로", "금리"],
+    impact: "neutral",
+  },
+  {
+    id: 3,
+    title: "(예시) 텔레그램 투자채널 — 메시지 3건",
+    url: null,
+    author: "투자채널",
+    publishedAt: new Date().toISOString(),
+    sourceLabel: "텔레그램 투자채널",
+    provider: "telegram",
+    body: "[09:12] 오늘 외국인 반도체 순매수 지속. 수급 양호.\n[10:30] 환율 1,330원대 진입, 수출주 단기 변수 주의.\n[13:05] AI 데이터센터 관련 부품주 거래량 급증.",
+    summary: "외국인 반도체 순매수 지속, 환율·AI 부품주 동향 메모.",
+    implications: "단기 수급/환율 체크용. 원문 링크가 없어 피드에서 본문으로 확인.",
+    fullText: null,
+    tickers: [],
+    themes: ["반도체", "환율"],
+    impact: "neutral",
+  },
+];
+
+const SAMPLE_DIGEST: DigestFull = {
+  id: 1,
+  title: `${new Date().toLocaleDateString("en-CA")} (예시)`,
+  periodStart: new Date().toLocaleDateString("en-CA"),
+  periodEnd: new Date().toLocaleDateString("en-CA"),
+  markdown: `# 일일 다이제스트 (예시)
+
+## 오늘의 핵심 3가지
+- AI 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" id="cite-1" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">[1]</a></sup> — 인프라 사이클 지속 신호.
+- 중앙은행 금리 동결 시그널 <sup class="cite" id="cite-2" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">[2]</a></sup> — 성장주 밸류에이션에 우호적.
+- 환율 변동성 확대 — 수출주 단기 변수.
+
+## 종목·테마별 업데이트
+- **AI 반도체 (상승)**: 데이터센터 수요 강세 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">[1]</a></sup>. 텔레그램 수급 메모도 동일 방향 <sup class="cite" id="cite-3" data-tip="텔레그램 투자채널 — 메시지 3건 — 출처: 텔레그램 투자채널"><a href="?article=3" target="_blank" rel="noopener">[3]</a></sup>.
+- **매크로·금리 (중립)**: 동결 기대 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">[2]</a></sup>.
+
+## 주목할 신규 글
+- 엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 <sup class="cite" data-tip="엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향 — 출처: 예시 소스"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">[1]</a></sup> (상승)
+- 금리 동결 시그널, 성장주에 우호적 <sup class="cite" data-tip="금리 동결 시그널, 성장주에 우호적 — 출처: 한국경제"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">[2]</a></sup> (중립)
+- 텔레그램 투자채널 수급·환율 메모 <sup class="cite" data-tip="텔레그램 투자채널 — 메시지 3건 — 출처: 텔레그램 투자채널"><a href="?article=3" target="_blank" rel="noopener">[3]</a></sup> (중립)
+
+> 예시 데이터입니다. 숫자를 누르면 아래 '참조 원문'으로 이동하고, 거기서 원문 링크로 연결됩니다. 텔레그램 글은 원문이 없어 '피드에서 원문 보기'로 연결됩니다.
+
+<h2>참조 원문</h2>
+<ol class="digest-refs">
+  <li id="ref-1"><a href="https://example.com/sample-1" target="_blank" rel="noopener noreferrer">엔비디아, 차세대 데이터센터 GPU 수요 가이던스 상향</a> <span class="ref-src">— 출처: 예시 소스</span> <a href="#cite-1" class="ref-back" title="본문으로">↩</a></li>
+  <li id="ref-2"><a href="https://example.com/sample-2" target="_blank" rel="noopener noreferrer">금리 동결 시그널, 성장주에 우호적</a> <span class="ref-src">— 출처: 한국경제</span> <a href="#cite-2" class="ref-back" title="본문으로">↩</a></li>
+  <li id="ref-3"><a href="?article=3" class="ref-feed" target="_blank" rel="noopener">텔레그램 투자채널 — 메시지 3건</a> <span class="ref-src">— 출처: 텔레그램 투자채널 · 피드에서 원문 보기 ↗</span> <a href="#cite-3" class="ref-back" title="본문으로">↩</a></li>
+</ol>`,
+};
+
+function seedRows(): SourceRow[] {
+  const now = Date.now();
+  const mk = (i: number, p: Provider, ft: FetchType, id: string, label: string): SourceRow => ({
+    id: i,
+    provider: p,
+    fetchType: ft,
+    identifier: id,
+    label,
+    enabled: true,
+    config: {},
+    sessionStatus: null,
+    lastError: null,
+    createdAt: new Date(now - (2 - i) * 1000).toISOString(),
+  });
+  return [
+    mk(1, "fanding", "scrape_auth", "https://fanding.kr/@sesang101/", "세상학개론"),
+    mk(2, "hankyung", "rss", "https://www.hankyung.com/", "한국경제"),
+  ];
+}
+
+// Lightweight preset lookup to avoid importing server-only code paths here.
+import { PROVIDER_PRESETS } from "../../shared/providers.js";
+function presetFetchType(p: Provider): FetchType {
+  return PROVIDER_PRESETS[p].fetchType;
+}
+
+export const api: DataApi = STATIC ? makeStaticApi() : makeTrpcApi();

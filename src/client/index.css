@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Force light form controls so dark-mode phones don't render inputs black. */
+  color-scheme: light;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased;
+}
+
+/* Long dashboard details are folded on phones and opened programmatically on
+   desktop so the existing wide-screen layout remains unchanged. */
+.mobile-fold-summary::-webkit-details-marker { display: none; }
+.mobile-fold[open] .mobile-fold-chevron { transform: rotate(180deg); }
+.mobile-fold[open] > .mobile-fold-content { @apply mt-2; }
+@media (min-width: 640px) {
+  .mobile-fold[open] > .mobile-fold-content { margin-top: 0; }
+}
+
+/* Horizontal scroll strips (e.g. the mobile tab bar): scroll within, no visible bar. */
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+/* Keep inputs readable everywhere (esp. mobile dark mode). */
+input,
+textarea,
+select {
+  @apply bg-white text-slate-900;
+}
+
+/* Lightweight markdown styling for the Daily Digest. */
+.prose-digest h1 { @apply text-xl font-bold mt-2 mb-3; }
+.prose-digest h2 { @apply text-lg font-semibold mt-5 mb-2; }
+.prose-digest h3 { @apply text-base font-semibold mt-4 mb-1; }
+.prose-digest p { @apply my-2 text-slate-700; }
+.prose-digest ul { @apply list-disc pl-5 my-2 space-y-1 text-slate-700; }
+.prose-digest ol { @apply list-decimal pl-5 my-2 space-y-1 text-slate-700; }
+.prose-digest a { @apply text-blue-600 hover:underline; }
+.prose-digest strong { @apply font-semibold text-slate-900; }
+.prose-digest blockquote { @apply border-l-4 border-slate-200 pl-3 my-2 text-slate-500 text-sm; }
+
+/* Footnote-style citations + numbered "참조 원문" list for the digest. */
+.prose-digest .cite a {
+  @apply font-normal text-blue-600 no-underline hover:underline;
+  /* No long-press link callout on a [N] — we just want the peek tooltip. */
+  -webkit-touch-callout: none;
+}
+/* Hover (or a light tap on a phone) over a [N] shows its title + source. JS sets
+   --tip-shift / --tip-maxw per [N] (see DigestPage) so the tooltip is clamped fully
+   on-screen — it never runs off the right edge. */
+.prose-digest .cite[data-tip] { position: relative; }
+.prose-digest .cite[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: var(--tip-shift, 0px);
+  bottom: calc(100% + 4px);
+  z-index: 20;
+  width: max-content;
+  max-width: var(--tip-maxw, 18rem);
+  white-space: normal;
+  pointer-events: none;
+  @apply rounded border border-slate-300 bg-white px-2 py-1 text-xs font-normal not-italic leading-snug text-slate-700 shadow-md;
+}
+/* Collapsible "참조 원문" — [N] now jumps straight to the source, so the list is
+   folded away by default; click the summary to expand the bibliography. */
+.prose-digest details.digest-refs-wrap { @apply mt-5 border-t border-slate-100 pt-3; }
+.prose-digest details.digest-refs-wrap > summary {
+  @apply cursor-pointer list-none text-sm font-semibold text-slate-500 hover:text-slate-700;
+}
+.prose-digest details.digest-refs-wrap > summary::-webkit-details-marker { display: none; }
+.prose-digest details.digest-refs-wrap > summary::before { content: "▸ "; }
+.prose-digest details.digest-refs-wrap[open] > summary::before { content: "▾ "; }
+.prose-digest ol.digest-refs { @apply list-decimal pl-6 my-3 space-y-1 text-sm text-slate-600; }
+.prose-digest ol.digest-refs li { @apply scroll-mt-24; }
+/* Jumped-to footnote / citation (set via JS, see DigestPage): .ref-flash is a
+   brief attention pulse; .ref-active is the persistent marker that stays until
+   the NEXT jump — so after reading the original (or visiting another tab) you
+   can still see which [N] you were on. The pulse settles into the marker color. */
+.prose-digest .ref-flash { @apply rounded; animation: digest-flash 1.5s ease-out; }
+.prose-digest .ref-active { @apply rounded bg-amber-200 outline outline-2 outline-amber-300/70; }
+@keyframes digest-flash {
+  from { background-color: rgb(251 191 36); } /* amber-400 */
+  to { background-color: rgb(253 230 138); } /* amber-200 = .ref-active bg */
+}
+.prose-digest .ref-src { @apply text-slate-400; }
+.prose-digest .ref-back { @apply ml-1 text-slate-300 no-underline hover:text-blue-600; }

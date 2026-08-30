@@ -1,0 +1,104 @@
+{
+  "version": "7",
+  "dialect": "mysql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1780978240274,
+      "tag": "0000_sturdy_longshot",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1780985069273,
+      "tag": "0001_spooky_absorbing_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "5",
+      "when": 1781010187014,
+      "tag": "0002_premium_anthem",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "5",
+      "when": 1781020000000,
+      "tag": "0003_trash_and_periods",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "5",
+      "when": 1781030000000,
+      "tag": "0004_low_priority",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "5",
+      "when": 1781040000000,
+      "tag": "0005_saved",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "5",
+      "when": 1781050000000,
+      "tag": "0006_bigger_text",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "5",
+      "when": 1781060000000,
+      "tag": "0007_filter_feedback",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "5",
+      "when": 1781070000000,
+      "tag": "0008_research_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "5",
+      "when": 1781080000000,
+      "tag": "0009_research_summary_marketcap",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "5",
+      "when": 1781090000000,
+      "tag": "0010_thesis_map",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "5",
+      "when": 1787472000000,
+      "tag": "0011_source_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "5",
+      "when": 1787558400000,
+      "tag": "0012_reclassify_source_review",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "5",
+      "when": 1787565600000,
+      "tag": "0013_promote_substantive_low",
+      "breakpoints": true
+    }
+  ]
+}
