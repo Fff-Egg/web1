@@ -79,7 +79,8 @@ async function runMiddayRoutine(): Promise<void> {
 }
 
 /** 21시 routine: fold the day's feedback into the filter memo, then generate
- *  the digests (backfilling a missed 14시분) and sweep the whole day's window. */
+ *  the digests (backfilling a missed 14시분) and sweep only after a verified
+ *  primary-final success. */
 async function runEveningRoutine(): Promise<void> {
   try {
     const fx = await feedbackRepo.refreshGuidance();
@@ -93,7 +94,8 @@ async function runEveningRoutine(): Promise<void> {
       d ? `${label}="${d.title}" (${d.itemCount} items)` : `${label}=${existed ? "exists" : "empty"}`;
     console.log(
       `[scheduler] digest: ${part("midday", r.midday, r.middayExisted)}, ` +
-        `${part("evening", r.evening, r.eveningExisted)}, swept=${r.swept}`,
+        `${part("evening", r.evening, r.eveningExisted)}, swept=${r.swept}` +
+        (r.sweepSkippedReason ? `, sweep-skipped=${r.sweepSkippedReason}` : ""),
     );
   } catch (err) {
     console.error("[scheduler] digest failed:", err);

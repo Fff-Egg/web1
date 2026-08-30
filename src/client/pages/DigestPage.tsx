@@ -497,7 +497,7 @@ export function DigestPage() {
         )}
         <p className="mt-2 text-xs text-slate-400">
           날짜는 <strong>{evH} 경계</strong> 기준이라 <strong>끝나는 날</strong>을 고릅니다 — 날짜 칸 아래의 실제 구간을 보세요.
-          ⚠️ <strong>{evH} 경계 루틴은 종합을 마친 창을 곧바로 휴지통으로 정리</strong>하므로, 이미 마감된 날을 고르면
+          ⚠️ <strong>{evH} 경계 루틴은 최종 모델이 정상 완성한 창만 휴지통으로 정리</strong>하므로, 이미 정리된 날을 고르면
           피드가 비어 저장된 다이제스트로 대체 종합됩니다. <strong>오늘 모인 글로 만들려면 위 “오늘 모인 글”</strong>을 누르세요.
         </p>
         {genState === "pending" && (
@@ -548,14 +548,14 @@ export function DigestPage() {
             {runEvening.isPending ? "실행 중…" : `🕘 지금 ${evH} 작업 실행`}
           </button>
           <span className="ml-2 text-xs text-slate-400">
-            아침분(어제 {midH}~오늘 {evH}) + 어제 낮분 보충 + 하루 창 전체 피드 정리 · {evH} 이후 보충용
+            아침분(어제 {midH}~오늘 {evH}) + 어제 낮분 보충 + 최종 모델 성공 시에만 하루 창 피드 정리 · {evH} 이후 보충용
           </span>
           {runEvening.data && (
             <>
               <p className="mt-2 text-xs text-slate-600">
                 {runEvening.data.tooEarly
                   ? `아직 ${evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`
-                  : `오늘(${runEvening.data.date}) 경계 루틴을 시작했습니다 — 학습 메모 · 낮분 보충 · 아침분 · 피드 정리를 ` +
+                  : `오늘(${runEvening.data.date}) 경계 루틴을 시작했습니다 — 학습 메모 · 낮분 보충 · 아침분을 만들고, 최종 모델 성공 때만 피드를 정리합니다. ` +
                     `백그라운드로 처리합니다. 완료되면 아래 목록에 나타납니다(글이 많으면 몇 분 걸립니다).`}
               </p>
               <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
@@ -721,6 +721,11 @@ function ModelBadge({ meta }: { meta: unknown }) {
   const m = meta as
     | {
         model?: string;
+        slot?: string;
+        cleanupGate?: {
+          eligible?: boolean;
+          reason?: "primary_final_success" | "trace_missing" | "final_fallback" | "final_incomplete" | "map_incomplete";
+        };
         models?: {
           version?: number;
           primary?: string;
@@ -748,6 +753,7 @@ function ModelBadge({ meta }: { meta: unknown }) {
     const finalUsed = final.used?.join(" + ") || final.planned || primary;
     const finalFallback = (final.fallbacks ?? 0) > 0;
     const failed = (map?.failures ?? 0) + (final.failures ?? 0);
+    const cleanupBlocked = m?.slot === "evening" && m.cleanupGate?.eligible === false;
     const diagnostics: Array<AttemptError & { stageLabel: string }> = [
       ...(map?.errors ?? []).map((e) => ({ ...e, stageLabel: "자료 정리" })),
       ...(final.errors ?? []).map((e) => ({ ...e, stageLabel: "최종 작성" })),
@@ -770,11 +776,17 @@ function ModelBadge({ meta }: { meta: unknown }) {
     };
     const phaseLabel = (phase?: AttemptError["phase"]) =>
       phase === "retry" ? "같은 모델 재시도" : phase === "fallback" ? "폴백" : "첫 시도";
+    const cleanupReasonLabel: Record<string, string> = {
+      trace_missing: "성공 여부를 증명할 모델 기록이 없음",
+      final_fallback: "설정한 최종 모델이 실패해 Flash가 대신 작성함",
+      final_incomplete: "설정한 최종 모델이 완성본을 반환하지 못함",
+      map_incomplete: "자료 정리 묶음 일부가 끝내 실패함",
+    };
     return (
       <div
         className={
           "mb-2 rounded px-2.5 py-2 text-[11px] leading-relaxed " +
-          (finalFallback || failed > 0 || diagnostics.length > 0
+          (finalFallback || failed > 0 || diagnostics.length > 0 || cleanupBlocked
             ? "bg-amber-50 text-amber-800"
             : "bg-emerald-50 text-emerald-800")
         }
@@ -828,6 +840,12 @@ function ModelBadge({ meta }: { meta: unknown }) {
           </p>
         )}
         {failed > 0 && <p className="mt-1">끝내 실패한 자료 묶음 <strong>{failed}개</strong>는 내용이 빠졌습니다.</p>}
+        {cleanupBlocked && (
+          <p className="mt-1.5 rounded border border-amber-200 bg-white/60 px-2 py-1 font-medium">
+            🛡️ 아침분 피드 정리 보류 — {cleanupReasonLabel[m.cleanupGate?.reason ?? ""] ?? "완성 여부를 확인할 수 없음"}.
+            원문 피드는 그대로 남겼습니다.
+          </p>
+        )}
       </div>
     );
   }

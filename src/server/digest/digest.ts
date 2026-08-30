@@ -10,8 +10,12 @@ import {
 } from "../analysis/anthropic.js";
 import {
   completeDigestStage,
+  digestCleanupGate,
+  digestFinalTokenBudget,
   digestThinkingMode,
+  DIGEST_PRO_THINKING_TOKEN_FLOOR,
   newModelTrace,
+  type DigestCleanupGate,
   type ModelTrace,
 } from "./modelPipeline.js";
 
@@ -135,17 +139,46 @@ export async function hasMiddayFor(date: string): Promise<boolean> {
 
 /** True if an auto digest already exists for this KST date — optionally for one
  *  slot. Legacy auto digests (pre-slot) count as the 21시 (evening) run. */
-export async function hasAutoDigestFor(date: string, slot?: DigestSlot): Promise<boolean> {
-  if (!hasDb) return false;
+interface AutoDigestState {
+  exists: boolean;
+  cleanupGate: DigestCleanupGate | null;
+}
+
+function cleanupGateFromMeta(meta: unknown): DigestCleanupGate {
+  const m = meta as
+    | { cleanupGate?: DigestCleanupGate; models?: ModelTrace }
+    | null
+    | undefined;
+  if (m?.cleanupGate && typeof m.cleanupGate.eligible === "boolean") return m.cleanupGate;
+  return digestCleanupGate(m?.models);
+}
+
+/** Latest safety state for an automatic slot.  If duplicate rows exist, one
+ * verified primary-final success is sufficient because it covers the same slot. */
+async function autoDigestState(date: string, slot?: DigestSlot): Promise<AutoDigestState> {
+  if (!hasDb) return { exists: false, cleanupGate: null };
   const rows = await db
-    .select({ meta: digests.meta })
+    .select({ meta: digests.meta, createdAt: digests.createdAt })
     .from(digests)
-    .where(and(eq(digests.periodStart, date), eq(digests.periodEnd, date), isNull(digests.deletedAt)));
-  return rows.some((r) => {
+    .where(and(eq(digests.periodStart, date), eq(digests.periodEnd, date), isNull(digests.deletedAt)))
+    .orderBy(desc(digests.createdAt));
+  const matching = rows.filter((r) => {
     const m = r.meta as { auto?: boolean; slot?: string } | null | undefined;
     if (m?.auto !== true) return false;
     return !slot || (m.slot ?? "evening") === slot;
   });
+  if (matching.length === 0) return { exists: false, cleanupGate: null };
+  const gates = matching.map((r) => cleanupGateFromMeta(r.meta));
+  return {
+    exists: true,
+    // Same-slot duplicate digests cover the same source window.  Prefer a
+    // verified successful primary result; otherwise retain the newest block reason.
+    cleanupGate: gates.find((g) => g.eligible) ?? gates[0],
+  };
+}
+
+export async function hasAutoDigestFor(date: string, slot?: DigestSlot): Promise<boolean> {
+  return (await autoDigestState(date, slot)).exists;
 }
 
 const DIGEST_SYSTEM = `너는 내 개인 투자 다이제스트 편집자다. 아래는 오늘 분석된 글들의 목록이다.
@@ -322,16 +355,15 @@ export interface GenerateDigestOpts {
 }
 
 const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
-const PRO_THINKING_MIN_TOKENS = (): number =>
-  Number(process.env.DIGEST_PRO_THINKING_TOKENS ?? 24_576);
 
 /** Thinking and final prose share max_tokens. Reserve room for both so Pro does
  * not spend the whole old 8K/12K cap on reasoning and return an empty report. */
 function finalMaxTokens(model: string): number {
-  const configured = DIGEST_MAX_TOKENS();
-  return digestThinkingMode(model, "final") === "enabled"
-    ? Math.max(configured, PRO_THINKING_MIN_TOKENS())
-    : configured;
+  return digestFinalTokenBudget(
+    model,
+    DIGEST_MAX_TOKENS(),
+    Number(process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_PRO_THINKING_TOKEN_FLOOR),
+  );
 }
 
 // ── Map-reduce synthesis (large windows) ────────────────────────────
@@ -716,7 +748,13 @@ export async function sweepWindow(startDate: string, endDate: string): Promise<n
  */
 export async function generateDigest(
   opts: GenerateDigestOpts = {},
-): Promise<{ id: number; title: string; itemCount: number; trashed: number } | null> {
+): Promise<{
+  id: number;
+  title: string;
+  itemCount: number;
+  trashed: number;
+  cleanupGate: DigestCleanupGate;
+} | null> {
   if (!hasDb) {
     console.warn("[digest] no DATABASE_URL — skipping.");
     return null;
@@ -788,6 +826,8 @@ export async function generateDigest(
 
   const map = trace.stages.map;
   const final = trace.stages.final;
+  const cleanupGate = digestCleanupGate(trace);
+  meta = { ...meta, cleanupGate };
   console.log(
     `[digest:${trace.runId}] ${title}: 자료 정리 ${map.used.join(" + ") || (map.attempts ? map.planned : "원문 직접")}` +
       ` → 최종 종합 ${final.used.join(" + ") || final.planned}` +
@@ -803,16 +843,28 @@ export async function generateDigest(
 
   let trashed = 0;
   if (opts.trashFeedAfter && !useDigests) {
-    trashed = await trashWindowFeed(start, end);
+    if (cleanupGate.eligible) {
+      trashed = await trashWindowFeed(start, end);
+    } else {
+      console.warn(
+        `[digest:${trace.runId}] feed sweep skipped: cleanup gate=${cleanupGate.reason}; source feed preserved.`,
+      );
+    }
   }
   console.log(
     `[digest:${trace.runId}] "${title}": saved (source=${String(meta.source)}, items=${Number(meta.itemCount)}` +
       `${trashed ? `, trashed=${trashed}` : ""}).`,
   );
-  return { id: Number(res.id), title, itemCount: Number(meta.itemCount), trashed };
+  return { id: Number(res.id), title, itemCount: Number(meta.itemCount), trashed, cleanupGate };
 }
 
-type DigestRunResult = { id: number; title: string; itemCount: number; trashed: number } | null;
+type DigestRunResult = {
+  id: number;
+  title: string;
+  itemCount: number;
+  trashed: number;
+  cleanupGate: DigestCleanupGate;
+} | null;
 
 /** M시 cron: generate the 낮분 digest (오늘 H시~M시, label = 생성일) if it doesn't
  *  exist yet. NEVER sweeps and never touches the filter memo — that's the boundary run. */
@@ -824,7 +876,8 @@ export async function runMiddayDigest(date = middayLabelDate()): Promise<DigestR
 /**
  * 21시 routine (digest part): backfill a missed 14시분, generate the 21시분
  * (오늘14시~21시), then sweep the WHOLE day window (어제21시~오늘21시) — but only
- * if the day got at least one auto digest (an undigested day is never swept).
+ * when the morning digest's configured final model completed without map holes.
+ * Flash fallback reports are saved while their source feed is preserved.
  * Slot guards make this safe to re-run (boot catch-up, manual button).
  */
 export async function runDailyDigests(date = kstToday()): Promise<{
@@ -833,18 +886,29 @@ export async function runDailyDigests(date = kstToday()): Promise<{
   middayExisted: boolean;
   eveningExisted: boolean;
   swept: number;
+  sweepSkippedReason: string | null;
 }> {
   // 낮분 backfill targets ITS generation day — the day the window's M시 fell on.
   const middayDate = middayLabelFor(date);
   const middayExisted = await hasMiddayFor(middayDate);
   const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: middayDate });
-  const eveningExisted = await hasAutoDigestFor(date, "evening");
+  const existingEvening = await autoDigestState(date, "evening");
+  const eveningExisted = existingEvening.exists;
   const evening = eveningExisted ? null : await generateDigest({ auto: true, slot: "evening", start: date });
   let swept = 0;
+  let sweepSkippedReason: string | null = null;
   if (middayExisted || eveningExisted || midday || evening) {
-    swept = await sweepWindow(date, date);
+    const gate = evening?.cleanupGate ?? existingEvening.cleanupGate;
+    if (gate?.eligible) {
+      swept = await sweepWindow(date, date);
+    } else {
+      sweepSkippedReason = gate?.reason ?? "morning_digest_missing";
+      console.warn(
+        `[digest] ${date}: 07시 피드 정리 보류 (${sweepSkippedReason}) — 원문 피드를 남깁니다.`,
+      );
+    }
   }
-  return { midday, evening, middayExisted, eveningExisted, swept };
+  return { midday, evening, middayExisted, eveningExisted, swept, sweepSkippedReason };
 }
 
 function buildFallbackMarkdown(title: string, rows: DigestItem[]): string {

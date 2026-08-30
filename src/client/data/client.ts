@@ -456,7 +456,7 @@ function makeStaticApi(): DataApi {
           source: cfg.digestMapModel ? "web" : "filter",
         },
         final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
-        finalTokens: 24_576,
+        finalTokens: 49_152,
         finalAttempts: 1,
         finalFallbackTokens: 8192,
       };

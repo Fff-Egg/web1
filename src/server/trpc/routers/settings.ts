@@ -7,7 +7,10 @@ import {
   llmProvider,
   resolveModel,
 } from "../../analysis/anthropic.js";
-import { digestThinkingMode } from "../../digest/modelPipeline.js";
+import {
+  digestFinalTokenBudget,
+  DIGEST_PRO_THINKING_TOKEN_FLOOR,
+} from "../../digest/modelPipeline.js";
 
 const analysisConfigSchema = z.object({
   instructions: z.string(),
@@ -50,9 +53,10 @@ export const settingsRouter = router({
       : { ...filter, source: "filter" as const };
     const final = configuredModel(cfg.analysisModel, "ANALYSIS_MODEL", ANALYSIS_MODEL);
     const fallbackTokens = Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
-    const finalTokens = digestThinkingMode(final.effective, "final") === "enabled"
-      ? Math.max(fallbackTokens, Number(process.env.DIGEST_PRO_THINKING_TOKENS ?? 24_576))
-      : fallbackTokens;
+    const configuredProTokens = Number(
+      process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_PRO_THINKING_TOKEN_FLOOR,
+    );
+    const finalTokens = digestFinalTokenBudget(final.effective, fallbackTokens, configuredProTokens);
     return {
       provider: llmProvider(),
       filter,

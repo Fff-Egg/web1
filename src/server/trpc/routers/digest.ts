@@ -93,7 +93,7 @@ export const digestRouter = router({
     }),
 
   /** Run the 21시 routine now for today: filter memo + digests (낮분 backfill +
-   *  저녁분) + whole-day sweep. Refused before 21시 — running early would close
+   *  저녁분) + conditional whole-day sweep after primary-final success. Refused before 21시 — running early would close
    *  the 저녁분 window with a partial day (tonight's cron then skips it, and
    *  누른시각~21시 글은 어느 다이제스트에도 못 들어감) AND sweep too early. */
   runEvening: publicProcedure.mutation(async () => {
@@ -138,7 +138,7 @@ export const digestRouter = router({
       };
     }
     // ⚠️ 경계 루틴은 앱에서 가장 무거운 작업이다 — 학습메모 distill(LLM 1회) + 낮분 보충
-    // + 아침분 생성(각각 풀데이 맵리듀스) + 하루 창 sweep. 이걸 HTTP 요청 안에서 await하면
+    // + 아침분 생성(각각 풀데이 맵리듀스) + 성공 시 하루 창 sweep. 이걸 HTTP 요청 안에서 await하면
     // 모바일 브라우저/엣지 타임아웃을 넘겨 "Load failed"로 끊긴다(2026-08 실장애).
     // `generate`와 동일하게 **즉시 반환 + 백그라운드 실행**으로 처리하고, 클라는 다이제스트
     // 목록을 폴링해 결과를 잡는다. 빠른 부분(진단 쿼리·tooEarly 판정)은 동기로 남긴다.
@@ -149,7 +149,8 @@ export const digestRouter = router({
         console.log(
           `[digest] 경계 루틴 완료(${today}): 낮분 ${run.midday ? `"${run.midday.title}"` : run.middayExisted ? "이미 있음" : "없음"} · ` +
             `아침분 ${run.evening ? `"${run.evening.title}"` : run.eveningExisted ? "이미 있음" : "없음"} · ` +
-            `sweep ${run.swept}건 · 메모 ${memo?.updated ? `갱신(신규 ${memo.newCount})` : "변화 없음"}`,
+            `sweep ${run.swept}건${run.sweepSkippedReason ? ` (보류: ${run.sweepSkippedReason})` : ""} · ` +
+            `메모 ${memo?.updated ? `갱신(신규 ${memo.newCount})` : "변화 없음"}`,
         );
       } catch (e) {
         console.error("[digest] 경계 루틴 실패:", e);

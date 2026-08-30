@@ -8,6 +8,8 @@ import {
 import {
   classifyDigestFailure,
   completeDigestStage,
+  digestCleanupGate,
+  digestFinalTokenBudget,
   digestThinkingMode,
   newModelTrace,
   type CompleteFn,
@@ -121,6 +123,13 @@ test("다이제스트는 최종 Pro만 thinking을 켜고 Flash·맵은 끈다",
 
   process.env.DIGEST_PRO_THINKING = "0";
   assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "disabled");
+});
+
+test("단일 Pro 호출은 Railway의 옛 24,576 설정이 남아도 49,152토큰을 확보한다", () => {
+  useDeepSeekEndpoint();
+  assert.equal(digestFinalTokenBudget("deepseek-v4-pro", 8192, 24_576), 49_152);
+  assert.equal(digestFinalTokenBudget("deepseek-v4-pro", 8192, 65_536), 65_536);
+  assert.equal(digestFinalTokenBudget("deepseek-v4-flash", 8192, 65_536), 8192);
 });
 
 test("본문이 있어도 finish_reason=length면 잘린 결과를 성공으로 저장하지 않는다", async () => {
@@ -386,4 +395,34 @@ test("의도된 Flash 자료 정리와 Pro 최종 종합은 폴백 없이 단계
   assert.deepEqual(trace.used, ["deepseek-v4-flash", "deepseek-v4-pro"]);
   assert.equal(trace.fallbacks, 0);
   assert.equal(trace.failures, 0);
+});
+
+test("07시 피드 정리는 설정한 최종 모델의 완전한 성공 때만 허용한다", () => {
+  const success = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+  success.stages.final.used.push(success.stages.final.planned);
+  assert.deepEqual(digestCleanupGate(success), {
+    eligible: true,
+    reason: "primary_final_success",
+  });
+
+  const fallback = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+  fallback.stages.final.used.push("deepseek-v4-flash");
+  fallback.stages.final.fallbacks = 1;
+  assert.deepEqual(digestCleanupGate(fallback), {
+    eligible: false,
+    reason: "final_fallback",
+  });
+
+  const mapHole = newModelTrace("deepseek-v4-flash", "deepseek-v4-pro");
+  mapHole.stages.final.used.push(mapHole.stages.final.planned);
+  mapHole.stages.map.failures = 1;
+  assert.deepEqual(digestCleanupGate(mapHole), {
+    eligible: false,
+    reason: "map_incomplete",
+  });
+
+  assert.deepEqual(digestCleanupGate(undefined), {
+    eligible: false,
+    reason: "trace_missing",
+  });
 });

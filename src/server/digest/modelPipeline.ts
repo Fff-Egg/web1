@@ -55,6 +55,24 @@ export function digestThinkingMode(
   return "disabled";
 }
 
+export const DIGEST_PRO_THINKING_TOKEN_FLOOR = 49_152;
+
+/** One shared calculator keeps the execution path and Settings preview aligned.
+ * A stale Railway 24,576 override must not silently shrink the new one-shot call. */
+export function digestFinalTokenBudget(
+  model: string,
+  regularMaxTokens: number,
+  requestedThinkingTokens = DIGEST_PRO_THINKING_TOKEN_FLOOR,
+): number {
+  const regular = Number.isFinite(regularMaxTokens) && regularMaxTokens > 0 ? regularMaxTokens : 8192;
+  const requested = Number.isFinite(requestedThinkingTokens) && requestedThinkingTokens > 0
+    ? requestedThinkingTokens
+    : DIGEST_PRO_THINKING_TOKEN_FLOOR;
+  return digestThinkingMode(model, "final") === "enabled"
+    ? Math.max(regular, DIGEST_PRO_THINKING_TOKEN_FLOOR, requested)
+    : regular;
+}
+
 export interface StageModelTrace {
   /** Value selected by Settings/env before provider compatibility remapping. */
   configured: string;
@@ -92,6 +110,33 @@ export interface ModelTrace {
     map: StageModelTrace;
     final: StageModelTrace;
   };
+}
+
+export type DigestCleanupBlockReason =
+  | "trace_missing"
+  | "final_fallback"
+  | "final_incomplete"
+  | "map_incomplete";
+
+/**
+ * The 07시 boundary sweep is destructive, so a merely "saved" digest is not
+ * enough.  It is safe only when the configured final model itself completed
+ * and every map chunk survived.  A Flash emergency result remains readable,
+ * but deliberately keeps the source feed for inspection/re-generation.
+ */
+export type DigestCleanupGate =
+  | { eligible: true; reason: "primary_final_success" }
+  | { eligible: false; reason: DigestCleanupBlockReason };
+
+export function digestCleanupGate(trace: ModelTrace | null | undefined): DigestCleanupGate {
+  if (!trace || trace.version !== 2) return { eligible: false, reason: "trace_missing" };
+  const { map, final } = trace.stages;
+  if (final.fallbacks > 0) return { eligible: false, reason: "final_fallback" };
+  if (final.failures > 0 || !final.used.includes(final.planned)) {
+    return { eligible: false, reason: "final_incomplete" };
+  }
+  if (map.failures > 0) return { eligible: false, reason: "map_incomplete" };
+  return { eligible: true, reason: "primary_final_success" };
 }
 
 function newStage(configured: string): StageModelTrace {
