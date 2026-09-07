@@ -5,6 +5,7 @@ import type { FeedFilter } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { SourceTabs, tallyByProvider, SOURCE_ORDER } from "../components/SourceTabs.js";
 import { FeedCard, dropFromFeedCache, IMPACT_STYLE, IMPACT_LABEL } from "../components/FeedCard.js";
+import { TrashPage } from "./TrashPage.js";
 
 /**
  * Feed — the day's transient picks (중요 / 검토 대상). These are exactly what the
@@ -16,10 +17,12 @@ export function FeedPage() {
   const [filter, setFilter] = useState<FeedFilter>({});
   const [provider, setProvider] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [trashOpen, setTrashOpen] = useState(false);
 
   const feed = useQuery({
     queryKey: ["feed", filter],
     queryFn: () => api.listFeed(filter),
+    enabled: !trashOpen,
   });
   const bucketCounts = useQuery({
     queryKey: ["feedCounts"],
@@ -39,6 +42,7 @@ export function FeedPage() {
   // Counts are a cheap aggregate; refresh them (and clear selection) after a bulk op.
   const afterBulk = () => {
     qc.invalidateQueries({ queryKey: ["feedCounts"] });
+    qc.invalidateQueries({ queryKey: ["trashFeed"] });
     clearSel();
   };
   const delMany = useMutation({
@@ -66,7 +70,7 @@ export function FeedPage() {
 
   return (
     <div className="space-y-4">
-      {/* 중요 / 검토 대상 / 원문 확인 전환 */}
+      {/* 휴지통도 Feed 안에서 확인한다. 삭제/분류 정책은 바꾸지 않는다. */}
       <div className="space-y-1">
         <div className="flex flex-wrap items-center gap-1">
           {([
@@ -74,12 +78,18 @@ export function FeedPage() {
             ["low", "검토 대상"],
             ["source-review", "원문 확인"],
           ] as const).map(([key, label]) => {
-            const on = (filter.priority ?? "important") === key;
+            const on = !trashOpen && (filter.priority ?? "important") === key;
             const n = key === "important" ? bc.important : key === "low" ? bc.low : bc.sourceReview;
             return (
               <button
                 key={key}
-                onClick={() => setFilter((f) => ({ ...f, priority: key === "important" ? undefined : key }))}
+                aria-pressed={on}
+                onClick={() => {
+                  setTrashOpen(false);
+                  clearSel();
+                  setProvider(null);
+                  setFilter((f) => ({ ...f, priority: key === "important" ? undefined : key }));
+                }}
                 className={
                   "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium " +
                   (on ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
@@ -89,13 +99,24 @@ export function FeedPage() {
               </button>
             );
           })}
+          <button
+            aria-pressed={trashOpen}
+            onClick={() => { setTrashOpen(true); clearSel(); }}
+            className={
+              "shrink-0 whitespace-nowrap rounded-full px-3 py-1 text-sm font-medium " +
+              (trashOpen ? "bg-slate-900 text-white" : "border border-slate-200 bg-white text-slate-600")
+            }
+          >
+            휴지통
+          </button>
         </div>
         <p className="text-xs text-slate-400">⭐저장 · 지난 텔레그램은 “보관함” 탭</p>
       </div>
 
+      {trashOpen ? <TrashPage /> : <>
       {filter.priority === "low" && (
         <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-          낮은 중요도/개인적이라고 판별된 글입니다. 훑어보고 <strong>남기기</strong>(피드로) 또는{" "}
+          낮은 중요도로 분류되어 보존 중인 글입니다. 바로 휴지통으로 보내지 않습니다. 훑어보고 <strong>남기기</strong>(중요로) 또는{" "}
           <strong>삭제</strong>하세요. 여긴 다이제스트에 포함되지 않습니다.
         </p>
       )}
@@ -206,6 +227,7 @@ export function FeedPage() {
           />
         ))}
       </ul>
+      </>}
     </div>
   );
 }

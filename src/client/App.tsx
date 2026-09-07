@@ -7,12 +7,11 @@ import { FeedPage } from "./pages/FeedPage.js";
 import { ArchivePage } from "./pages/ArchivePage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
-import { TrashPage } from "./pages/TrashPage.js";
 import { MarketPage } from "./pages/MarketPage.js";
 import { ResearchPage } from "./pages/ResearchPage.js";
 import { ThesisMapPage } from "./pages/ThesisMapPage.js";
 
-type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "trash" | "settings" | "research" | "thesis";
+type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "settings" | "research" | "thesis";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "market", label: "시황분석" },
@@ -21,7 +20,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "archive", label: "보관함" },
   { id: "analyze", label: "분석(수동)" },
   { id: "sources", label: "Sources" },
-  { id: "trash", label: "휴지통" },
   { id: "settings", label: "Settings" },
   { id: "research", label: "리포트" },
   { id: "thesis", label: "논지 지도" },
@@ -95,7 +93,6 @@ export function App() {
       {tab === "archive" && <ArchivePage />}
       {tab === "analyze" && <ManualPage />}
       {tab === "sources" && <SourcesPage />}
-      {tab === "trash" && <TrashPage />}
       {tab === "settings" && <SettingsPage />}
       {tab === "research" && <ResearchPage />}
       {tab === "thesis" && <ThesisMapPage />}

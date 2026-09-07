@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
+import { TrashFeedCard } from "../components/TrashFeedCard.js";
 
 /**
  * Trash — soft-deleted Feed items and Digests. Multi-select to restore or
@@ -19,6 +20,7 @@ export function TrashPage() {
     qc.invalidateQueries({ queryKey: ["trashFeed"] });
     qc.invalidateQueries({ queryKey: ["trashDigests"] });
     qc.invalidateQueries({ queryKey: ["feed"] });
+    qc.invalidateQueries({ queryKey: ["feedCounts"] });
     qc.invalidateQueries({ queryKey: ["digests"] });
   };
   const onFeedDone = () => { invalidate(); setSelFeed(new Set()); };
@@ -30,6 +32,10 @@ export function TrashPage() {
   const dRestore = useMutation({ mutationFn: (ids: number[]) => api.digestRestoreMany(ids), onSuccess: onDigestDone });
   const dPurge = useMutation({ mutationFn: (ids: number[]) => api.digestPurgeMany(ids), onSuccess: onDigestDone });
   const dPurgeAll = useMutation({ mutationFn: () => api.digestPurgeAll(), onSuccess: onDigestDone });
+  const feedBusy = fRestore.isPending || fPurge.isPending || fPurgeAll.isPending;
+  const digestBusy = dRestore.isPending || dPurge.isPending || dPurgeAll.isPending;
+  const feedError = feed.error ?? fRestore.error ?? fPurge.error ?? fPurgeAll.error;
+  const digestError = digests.error ?? dRestore.error ?? dPurge.error ?? dPurgeAll.error;
 
   const toggle = (set: Set<number>, setSet: (s: Set<number>) => void, id: number) => {
     const n = new Set(set);
@@ -40,8 +46,9 @@ export function TrashPage() {
   return (
     <div className="space-y-6">
       <p className="rounded border border-slate-200 bg-slate-50 px-4 py-2 text-sm text-slate-600">
-        삭제한 항목은 여기로 옵니다. 선택해서 <strong>복원</strong>하거나 <strong>영구삭제</strong>할 수
-        있고, <strong>전체 삭제</strong>로 비울 수 있어요. 영구삭제는 되돌릴 수 없습니다.
+        직접 삭제하거나 정리 작업으로 이동된 항목입니다. 낮은 중요도 글은 먼저 <strong>검토 대상</strong>에
+        보존되며, 낮다는 이유만으로 즉시 휴지통에 보내지 않습니다. 내용을 확인하고 <strong>복원</strong>하면
+        기존 분류에 따라 Feed 또는 보관함에 다시 표시됩니다. 영구삭제는 되돌릴 수 없습니다.
       </p>
 
       {/* Feed 휴지통 */}
@@ -50,32 +57,33 @@ export function TrashPage() {
           <h3 className="text-sm font-semibold text-slate-700">
             Feed 휴지통 {feed.data ? `(${feed.data.length})` : ""}
           </h3>
-          <button onClick={() => setSelFeed(new Set((feed.data ?? []).map((i) => i.id)))} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-600">전체 선택</button>
+          <button disabled={feedBusy} onClick={() => setSelFeed(new Set((feed.data ?? []).map((i) => i.id)))} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-600">전체 선택</button>
           {selFeed.size > 0 && (
             <>
-              <button onClick={() => fRestore.mutate([...selFeed])} className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">선택 복원</button>
-              <button onClick={() => fPurge.mutate([...selFeed])} className="rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white">선택 영구삭제</button>
-              <button onClick={() => setSelFeed(new Set())} className="text-xs text-slate-400 underline">해제</button>
+              <button disabled={feedBusy} onClick={() => fRestore.mutate([...selFeed])} className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">선택 복원</button>
+              <button disabled={feedBusy} onClick={() => { if (confirm(`선택한 글 ${selFeed.size}건을 영구삭제할까요? 되돌릴 수 없습니다.`)) fPurge.mutate([...selFeed]); }} className="rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white">선택 영구삭제</button>
+              <button disabled={feedBusy} onClick={() => setSelFeed(new Set())} className="text-xs text-slate-400 underline">해제</button>
             </>
           )}
           {(feed.data?.length ?? 0) > 0 && (
-            <button onClick={() => { if (confirm("Feed 휴지통을 전부 영구삭제할까요?")) fPurgeAll.mutate(); }} className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-600">전체 삭제</button>
+            <button disabled={feedBusy} onClick={() => { if (confirm("화면에 표시되지 않은 항목까지 Feed 휴지통을 전부 영구삭제할까요? 되돌릴 수 없습니다.")) fPurgeAll.mutate(); }} className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-600">전체 삭제</button>
           )}
         </div>
+        <p className="mb-2 text-xs text-slate-400">최근 삭제 순으로 최대 1,000건을 표시합니다. Feed의 날짜·소스 필터는 적용되지 않습니다.</p>
+        {feed.isLoading && <p className="text-sm text-slate-500">휴지통을 불러오는 중…</p>}
+        {feedError && <p role="alert" className="text-sm text-red-600">{feedError.message}</p>}
         {feed.data && feed.data.length === 0 && <p className="text-sm text-slate-400">비어 있음</p>}
         <ul className="space-y-2">
           {feed.data?.map((item) => (
-            <li key={item.id} className="flex items-center gap-2 rounded border border-slate-200 bg-white p-3">
-              <input type="checkbox" checked={selFeed.has(item.id)} onChange={() => toggle(selFeed, setSelFeed, item.id)} className="h-4 w-4 shrink-0" />
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium">{item.title ?? "(제목 없음)"}</div>
-                <div className="text-xs text-slate-400">{item.sourceLabel ?? item.provider}</div>
-              </div>
-              <div className="flex shrink-0 gap-2 text-xs">
-                <button onClick={() => fRestore.mutate([item.id])} className="text-blue-600 hover:underline">복원</button>
-                <button onClick={() => fPurge.mutate([item.id])} className="text-red-600 hover:underline">영구삭제</button>
-              </div>
-            </li>
+            <TrashFeedCard
+              key={item.id}
+              item={item}
+              checked={selFeed.has(item.id)}
+              disabled={feedBusy}
+              onToggle={() => toggle(selFeed, setSelFeed, item.id)}
+              onRestore={() => fRestore.mutate([item.id])}
+              onPurge={() => { if (confirm("이 글을 영구삭제할까요? 되돌릴 수 없습니다.")) fPurge.mutate([item.id]); }}
+            />
           ))}
         </ul>
       </section>
@@ -86,23 +94,25 @@ export function TrashPage() {
           <h3 className="text-sm font-semibold text-slate-700">
             다이제스트 휴지통 {digests.data ? `(${digests.data.length})` : ""}
           </h3>
-          <button onClick={() => setSelDigest(new Set((digests.data ?? []).map((d) => d.id)))} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-600">전체 선택</button>
+          <button disabled={digestBusy} onClick={() => setSelDigest(new Set((digests.data ?? []).map((d) => d.id)))} className="rounded border border-slate-200 px-2 py-0.5 text-xs text-slate-600">전체 선택</button>
           {selDigest.size > 0 && (
             <>
-              <button onClick={() => dRestore.mutate([...selDigest])} className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">선택 복원</button>
-              <button onClick={() => dPurge.mutate([...selDigest])} className="rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white">선택 영구삭제</button>
-              <button onClick={() => setSelDigest(new Set())} className="text-xs text-slate-400 underline">해제</button>
+              <button disabled={digestBusy} onClick={() => dRestore.mutate([...selDigest])} className="rounded bg-blue-600 px-2 py-0.5 text-xs font-medium text-white">선택 복원</button>
+              <button disabled={digestBusy} onClick={() => { if (confirm(`선택한 다이제스트 ${selDigest.size}건을 영구삭제할까요? 되돌릴 수 없습니다.`)) dPurge.mutate([...selDigest]); }} className="rounded bg-red-600 px-2 py-0.5 text-xs font-medium text-white">선택 영구삭제</button>
+              <button disabled={digestBusy} onClick={() => setSelDigest(new Set())} className="text-xs text-slate-400 underline">해제</button>
             </>
           )}
           {(digests.data?.length ?? 0) > 0 && (
-            <button onClick={() => { if (confirm("다이제스트 휴지통을 전부 영구삭제할까요?")) dPurgeAll.mutate(); }} className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-600">전체 삭제</button>
+            <button disabled={digestBusy} onClick={() => { if (confirm("다이제스트 휴지통을 전부 영구삭제할까요? 되돌릴 수 없습니다.")) dPurgeAll.mutate(); }} className="ml-auto rounded border border-red-200 px-2 py-0.5 text-xs text-red-600">전체 삭제</button>
           )}
         </div>
+        {digests.isLoading && <p className="text-sm text-slate-500">다이제스트 휴지통을 불러오는 중…</p>}
+        {digestError && <p role="alert" className="text-sm text-red-600">{digestError.message}</p>}
         {digests.data && digests.data.length === 0 && <p className="text-sm text-slate-400">비어 있음</p>}
         <ul className="space-y-2">
           {digests.data?.map((d) => (
             <li key={d.id} className="flex items-center gap-2 rounded border border-slate-200 bg-white p-3">
-              <input type="checkbox" checked={selDigest.has(d.id)} onChange={() => toggle(selDigest, setSelDigest, d.id)} className="h-4 w-4 shrink-0" />
+              <input type="checkbox" aria-label={`선택: ${d.title ?? d.periodStart ?? `#${d.id}`}`} checked={selDigest.has(d.id)} disabled={digestBusy} onChange={() => toggle(selDigest, setSelDigest, d.id)} className="h-4 w-4 shrink-0" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{d.title ?? d.periodStart ?? `#${d.id}`}</div>
                 <div className="text-xs text-slate-400">
@@ -111,8 +121,8 @@ export function TrashPage() {
                 </div>
               </div>
               <div className="flex shrink-0 gap-2 text-xs">
-                <button onClick={() => dRestore.mutate([d.id])} className="text-blue-600 hover:underline">복원</button>
-                <button onClick={() => dPurge.mutate([d.id])} className="text-red-600 hover:underline">영구삭제</button>
+                <button disabled={digestBusy} onClick={() => dRestore.mutate([d.id])} className="text-blue-600 hover:underline">복원</button>
+                <button disabled={digestBusy} onClick={() => { if (confirm("이 다이제스트를 영구삭제할까요? 되돌릴 수 없습니다.")) dPurge.mutate([d.id]); }} className="text-red-600 hover:underline">영구삭제</button>
               </div>
             </li>
           ))}
