@@ -1,4 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
+import { LlmCallProbe } from "./llmDiagnostics.js";
+import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 
 let _client: Anthropic | null = null;
 
@@ -107,6 +109,8 @@ function extraBody(): Record<string, unknown> {
 }
 
 export interface CompleteOpts {
+  /** Observation only; never changes model parameters or retries. */
+  onDiagnostics?: (diagnostics: LlmCallDiagnostics) => void;
   model: string;
   system: string;
   user: string;
@@ -148,93 +152,108 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
  *   LLM_MODEL     default model id (overridable per-pass via FILTER/ANALYSIS_MODEL)
  */
 async function completeOpenAI(opts: CompleteOpts): Promise<string> {
-  const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
-  const configuredExtra = extraBody();
-  const isDeepSeekV4 = /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model);
-  // DeepSeek V4's API defaults to thinking=enabled. A per-article filter is
-  // called hundreds of times a day and does not benefit enough from private
-  // chain-of-thought to justify that token bill. Keep non-thinking as the app's
-  // cost-safe default for both Flash and Pro. A stage-specific per-call value
-  // is applied LAST so final Pro can think without accidentally enabling it for
-  // hundreds of Flash filter/map calls, even when a stale global env exists.
-  const costSafeExtra =
-    isDeepSeekV4 && configuredExtra.thinking === undefined
-      ? { thinking: { type: "disabled" } }
-      : {};
-  const callExtra =
-    isDeepSeekV4 && opts.thinking
-      ? { thinking: { type: opts.thinking } }
-      : {};
-  const res = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.LLM_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: opts.model,
-      max_tokens: opts.maxTokens ?? 1024,
-      temperature: 0,
-      messages: [
-        { role: "system", content: stripLoneSurrogates(opts.system) },
-        { role: "user", content: stripLoneSurrogates(opts.user) },
-      ],
-      ...costSafeExtra,
-      ...configuredExtra,
-      ...callExtra,
-    }),
-  });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`LLM API ${res.status}: ${text.slice(0, 300)}`);
-  }
-  const data = (await res.json()) as {
-    choices?: {
-      message?: { content?: string; reasoning_content?: string };
-      finish_reason?: string;
-    }[];
-    usage?: { prompt_tokens?: number; completion_tokens?: number };
-  };
-  const choice = data.choices?.[0];
-  const text = (choice?.message?.content ?? "").trim();
-  const reason = choice?.finish_reason ?? "?";
-  const reasoning = (choice?.message?.reasoning_content ?? "").length;
-  const u = data.usage;
-  const detail =
-    `finish_reason=${reason}` +
-    (reasoning > 0 ? ` reasoning_len=${reasoning}` : "") +
-    (u ? ` tokens(prompt=${u.prompt_tokens ?? "?"}, completion=${u.completion_tokens ?? "?"})` : "") +
-    ` max_tokens=${opts.maxTokens ?? 1024}`;
+  const probe = new LlmCallProbe(opts.system, opts.user);
+  try {
+    const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
+    const configuredExtra = extraBody();
+    const isDeepSeekV4 = /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model);
+    // DeepSeek V4's API defaults to thinking=enabled. A per-article filter is
+    // called hundreds of times a day and does not benefit enough from private
+    // chain-of-thought to justify that token bill. Keep non-thinking as the app's
+    // cost-safe default for both Flash and Pro. A stage-specific per-call value
+    // is applied LAST so final Pro can think without accidentally enabling it for
+    // hundreds of Flash filter/map calls, even when a stale global env exists.
+    const costSafeExtra =
+      isDeepSeekV4 && configuredExtra.thinking === undefined
+        ? { thinking: { type: "disabled" } }
+        : {};
+    const callExtra =
+      isDeepSeekV4 && opts.thinking
+        ? { thinking: { type: opts.thinking } }
+        : {};
+    const body = JSON.stringify({
+        model: opts.model,
+        max_tokens: opts.maxTokens ?? 1024,
+        temperature: 0,
+        messages: [
+          { role: "system", content: stripLoneSurrogates(opts.system) },
+          { role: "user", content: stripLoneSurrogates(opts.user) },
+        ],
+        ...costSafeExtra,
+        ...configuredExtra,
+        ...callExtra,
+      });
+    probe.request(base, body);
+    const res = await fetch(`${base}/chat/completions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
+      body,
+    });
+    const raw = await probe.read(res);
+    if (!res.ok) {
+      // Provider error bodies can echo keys or prompts. Retain status, never that body.
+      throw new Error(`LLM API ${res.status}: provider request failed`);
+    }
+    probe.data.stage = "parsing_response";
+    let parsed: unknown;
+    try { parsed = JSON.parse(raw); } catch { throw new Error("LLM invalid JSON response"); }
+    const data = parsed as {
+      choices?: {
+        message?: { content?: string; reasoning_content?: string };
+        finish_reason?: string;
+      }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number };
+    };
+    probe.data.stage = "validating_response";
+    const choice = data.choices?.[0];
+    const text = (choice?.message?.content ?? "").trim();
+    const reason = choice?.finish_reason ?? "?";
+    const reasoning = (choice?.message?.reasoning_content ?? "").length;
+    const u = data.usage;
+    probe.data.finishReason = /^[a-z_]{1,40}$/.test(reason) ? reason : "unknown";
+    probe.data.reasoningChars = reasoning;
+    probe.data.contentChars = text.length;
+    if (typeof u?.prompt_tokens === "number") probe.data.promptTokens = u.prompt_tokens;
+    if (typeof u?.completion_tokens === "number") probe.data.completionTokens = u.completion_tokens;
+    const detail =
+      `finish_reason=${reason}` +
+      (reasoning > 0 ? ` reasoning_len=${reasoning}` : "") +
+      (u ? ` tokens(prompt=${u.prompt_tokens ?? "?"}, completion=${u.completion_tokens ?? "?"})` : "") +
+      ` max_tokens=${opts.maxTokens ?? 1024}`;
 
-  // `finish_reason=length` means the answer is incomplete even when content is
-  // non-empty. Returning that partial text used to save reports cut off halfway
-  // through a sentence (the deterministic bibliography still made them look
-  // superficially complete). Throw so the digest policy can record the reason
-  // and retry or fall back according to the stage policy.
-  if (reason === "length") {
-    console.warn(
-      `[llm] 불완전 응답 폐기 (model=${opts.model}) ${detail}` +
-        (text ? ` partial_chars=${text.length}` : ""),
-    );
-    throw new Error(
-      `LLM 응답 잘림 (${detail}${text ? ` partial_chars=${text.length}` : ""})` +
-        " — 부분 결과는 저장하지 않습니다.",
-    );
-  }
-  if (text) return text;
+    // `finish_reason=length` means the answer is incomplete even when content is
+    // non-empty. Returning that partial text used to save reports cut off halfway
+    // through a sentence (the deterministic bibliography still made them look
+    // superficially complete). Throw so the digest policy can record the reason
+    // and retry or fall back according to the stage policy.
+    if (reason === "length") {
+      console.warn(
+        `[llm] 불완전 응답 폐기 (model=${opts.model}) ${detail}` +
+          (text ? ` partial_chars=${text.length}` : ""),
+      );
+      throw new Error(
+        `LLM 응답 잘림 (${detail}${text ? ` partial_chars=${text.length}` : ""})` +
+          " — 부분 결과는 저장하지 않습니다.",
+      );
+    }
+    if (text) { probe.data.stage = "complete"; return text; }
 
-  // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
-  // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
-  // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
-  // 이제는 던져서 단계 정책이 재시도/폴백하고, 원인이 화면·로그에 드러나게 한다.
-  console.error(`[llm] 빈 응답 (model=${opts.model}) ${detail}`);
-  const hint =
-    reason === "length"
-      ? " — 출력 토큰이 부족합니다(추론형 모델이면 사고 토큰이 예산을 다 씁니다). DIGEST_MAP_TOKENS·DIGEST_MAX_TOKENS를 올리세요."
-      : reason === "content_filter"
-        ? " — 제공자 필터에 걸렸습니다."
-        : "";
-  throw new Error(`LLM 빈 응답 (${detail})${hint}`);
+    // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
+    // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
+    // 쓸모없는 리포트를 저장한다(2026-08 실장애: "### 묶음 1" 제목만 남음).
+    // 이제는 던져서 단계 정책이 재시도/폴백하고, 원인이 화면·로그에 드러나게 한다.
+    console.error(`[llm] 빈 응답 (model=${opts.model}) ${detail}`);
+    const hint =
+      reason === "length"
+        ? " — 출력 토큰이 부족합니다(추론형 모델이면 사고 토큰이 예산을 다 씁니다). DIGEST_MAP_TOKENS·DIGEST_MAX_TOKENS를 올리세요."
+        : reason === "content_filter"
+          ? " — 제공자 필터에 걸렸습니다."
+          : "";
+    throw new Error(`LLM 빈 응답 (${detail})${hint}`);
+  } catch (error) {
+    probe.failure(error);
+    throw error;
+  } finally { probe.publish(opts.onDiagnostics); }
 }
 
 /** Strip ```json fences / prose and parse the first JSON object. Returns null on failure. */

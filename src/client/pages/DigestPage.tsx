@@ -1,3 +1,5 @@
+import { LlmDiagnosticsPanel } from "../components/LlmDiagnosticsPanel.js";
+import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
@@ -707,6 +709,8 @@ function ModelBadge({ meta }: { meta: unknown }) {
     kind?: string;
     detail?: string;
     at?: string;
+    elapsedMs?: number;
+    diagnostics?: LlmCallDiagnostics;
   };
   type StageTrace = {
     configured?: string;
@@ -829,6 +833,7 @@ function ModelBadge({ meta }: { meta: unknown }) {
                     {` — ${failureLabel(e.kind)}`}
                   </p>
                   {e.detail && <code className="mt-0.5 block break-all text-[10px] opacity-70">{e.detail}</code>}
+                  <LlmDiagnosticsPanel diagnostics={e.diagnostics} runId={t.runId} elapsedMs={e.elapsedMs} />
                 </li>
               ))}
             </ol>

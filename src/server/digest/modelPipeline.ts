@@ -1,3 +1,4 @@
+import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import {
   complete,
   resolveModel,
@@ -29,6 +30,8 @@ export interface ModelAttemptFailure {
   /** Sanitized and truncated provider detail. Never contains prompts or API keys. */
   detail: string;
   at: string;
+  elapsedMs?: number;
+  diagnostics?: LlmCallDiagnostics;
 }
 
 /**
@@ -234,10 +237,15 @@ function noteFailure(
   phase: ModelAttemptFailure["phase"],
   opts: CompleteOpts,
   err: unknown,
+  attempt: number,
+  elapsedMs: number,
+  diagnostics?: LlmCallDiagnostics,
 ): void {
   const step = trace.stages[stage];
   step.errors.push({
-    attempt: step.attempts,
+    attempt,
+    elapsedMs,
+    ...(diagnostics ? { diagnostics } : {}),
     phase,
     model: resolveModel(opts.model),
     ...(opts.maxTokens ? { maxTokens: opts.maxTokens } : {}),
@@ -291,6 +299,26 @@ export async function completeDigestStage(
   const step = trace.stages[policy.stage];
   const primary = resolveModel(opts.model);
   const initial = { ...opts, model: primary };
+  const invokeAttempt = async (call: CompleteOpts, phase: ModelAttemptFailure["phase"]): Promise<string> => {
+    const attempt = step.attempts; // Snapshot: concurrent map calls share step.
+    const start = performance.now();
+    let diagnostics: LlmCallDiagnostics | undefined;
+    const label = `[digest:${trace.runId}] ${policy.stage} attempt=${attempt} phase=${phase}`;
+    console.info(`${label} llm_start model=${call.model} input_chars=${call.system.length + call.user.length}`);
+    try {
+      const result = await invoke({ ...call, onDiagnostics: (d) => {
+        diagnostics = d;
+        try { call.onDiagnostics?.(d); } catch { /* observation only */ }
+      } });
+      console.info(`${label} llm_success ${JSON.stringify(diagnostics ?? { durationMs: Math.round(performance.now() - start) })}`);
+      return result;
+    } catch (error) {
+      const elapsedMs = Math.round(performance.now() - start);
+      noteFailure(trace, policy.stage, phase, call, error, attempt, elapsedMs, diagnostics);
+      console.warn(`${label} llm_failure ${JSON.stringify({ kind: classifyDigestFailure(error), elapsedMs, diagnostics })}`);
+      throw error;
+    }
+  };
   const invokeFallback = async (
     failure: unknown,
     baseOpts: CompleteOpts,
@@ -317,11 +345,10 @@ export async function completeDigestStage(
       ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
     };
     try {
-      const text = await invoke(fallbackOpts);
+      const text = await invokeAttempt(fallbackOpts, "fallback");
       noteSuccess(trace, policy.stage, fallback, true);
       return text;
     } catch (fallbackErr) {
-      noteFailure(trace, policy.stage, "fallback", fallbackOpts, fallbackErr);
       step.failures++;
       syncTotals(trace);
       throw fallbackErr;
@@ -330,11 +357,10 @@ export async function completeDigestStage(
 
   step.attempts++;
   try {
-    const text = await invoke(initial);
+    const text = await invokeAttempt(initial, "initial");
     noteSuccess(trace, policy.stage, primary, false);
     return text;
   } catch (firstErr) {
-    noteFailure(trace, policy.stage, "initial", initial, firstErr);
     if (policy.retryPrimary === false) {
       return invokeFallback(firstErr, initial, 1);
     }
@@ -350,11 +376,10 @@ export async function completeDigestStage(
         `: ${safeFailureDetail(firstErr)}`,
     );
     try {
-      const text = await invoke(retry);
+      const text = await invokeAttempt(retry, "retry");
       noteSuccess(trace, policy.stage, primary, false);
       return text;
     } catch (secondErr) {
-      noteFailure(trace, policy.stage, "retry", retry, secondErr);
       return invokeFallback(secondErr, retry, 2);
     }
   }
