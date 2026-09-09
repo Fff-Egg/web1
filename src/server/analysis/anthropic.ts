@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { LlmCallProbe } from "./llmDiagnostics.js";
+import { readChatCompletionStream } from "./chatCompletionStream.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 
 let _client: Anthropic | null = null;
@@ -171,6 +172,10 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       isDeepSeekV4 && opts.thinking
         ? { thinking: { type: opts.thinking } }
         : {};
+    // Long final Pro thinking calls should deliver generation progress instead
+    // of holding the whole answer until the end. This does not add any call or
+    // retry. Resolve from the actual model so Flash fallback stays non-streaming.
+    const streamFinalPro = /^deepseek-v4-pro(?:$|-)/i.test(opts.model) && opts.thinking === "enabled";
     const body = JSON.stringify({
         model: opts.model,
         max_tokens: opts.maxTokens ?? 1024,
@@ -182,6 +187,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         ...costSafeExtra,
         ...configuredExtra,
         ...callExtra,
+        ...(streamFinalPro ? { stream: true } : {}),
       });
     probe.request(base, body);
     const res = await fetch(`${base}/chat/completions`, {
@@ -189,26 +195,34 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${process.env.LLM_API_KEY}` },
       body,
     });
-    const raw = await probe.read(res);
     if (!res.ok) {
+      await probe.read(res);
       // Provider error bodies can echo keys or prompts. Retain status, never that body.
       throw new Error(`LLM API ${res.status}: provider request failed`);
     }
-    probe.data.stage = "parsing_response";
-    let parsed: unknown;
-    try { parsed = JSON.parse(raw); } catch { throw new Error("LLM invalid JSON response"); }
-    const data = parsed as {
+    type Completion = {
       choices?: {
         message?: { content?: string; reasoning_content?: string };
         finish_reason?: string;
       }[];
       usage?: { prompt_tokens?: number; completion_tokens?: number };
     };
+    let data: Completion;
+    let streamedReasoning: number | undefined;
+    if (probe.data.stream) {
+      const result = await readChatCompletionStream(probe.chunks(res), probe.data, () => probe.elapsed());
+      streamedReasoning = result.reasoningChars;
+      data = { choices: [{ message: { content: result.content }, finish_reason: result.finishReason }], usage: result.usage };
+    } else {
+      const raw = await probe.read(res);
+      probe.data.stage = "parsing_response";
+      try { data = JSON.parse(raw); } catch { throw new Error("LLM invalid JSON response"); }
+    }
     probe.data.stage = "validating_response";
     const choice = data.choices?.[0];
     const text = (choice?.message?.content ?? "").trim();
     const reason = choice?.finish_reason ?? "?";
-    const reasoning = (choice?.message?.reasoning_content ?? "").length;
+    const reasoning = streamedReasoning ?? (choice?.message?.reasoning_content ?? "").length;
     const u = data.usage;
     probe.data.finishReason = /^[a-z_]{1,40}$/.test(reason) ? reason : "unknown";
     probe.data.reasoningChars = reasoning;
@@ -235,6 +249,9 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         `LLM 응답 잘림 (${detail}${text ? ` partial_chars=${text.length}` : ""})` +
           " — 부분 결과는 저장하지 않습니다.",
       );
+    }
+    if (probe.data.stream && reason !== "stop") {
+      throw new Error(`LLM 불완전 스트림 (finish_reason=${probe.data.finishReason}) — 부분 결과는 저장하지 않습니다.`);
     }
     if (text) { probe.data.stage = "complete"; return text; }
 

@@ -26,10 +26,11 @@ export function LlmDiagnosticsPanel({ diagnostics: d, runId, elapsedMs }: {
     <p>응답 수신 {count(d.receivedBytes)}바이트 / {count(d.receivedChunks)}청크 · 마지막 수신 후 대기 {seconds(d.idleMs)}</p>
     <p>요청 시작 기준: 헤더 {seconds(d.headersMs)} · 첫 데이터 {seconds(d.firstByteMs)} · 마지막 데이터 {seconds(d.lastByteMs)}</p>
     <p>스트리밍 {d.stream ? "ON" : "OFF"} · 앱 자체 타임아웃 미설정 (통신 계층·제공자 제한은 별도)</p>
+    {d.stream && <p>첫 사고 응답 {seconds(d.firstReasoningMs)} · 첫 본문 {seconds(d.firstContentMs)} · 스트림 종료 신호 {d.streamCompleted === undefined ? "확인 불가" : d.streamCompleted ? "수신" : "미수신"}</p>}
     <p>실제 요청 상한 {count(d.effectiveMaxTokens)}토큰 · 제공자 보고: 입력 {count(d.promptTokens)} / 출력 {count(d.completionTokens)}토큰</p>
     <p>종료 사유 {d.finishReason ?? "미수신"} · 사고 {count(d.reasoningChars)}자 / 본문 {count(d.contentChars)}자</p>
     <p className="break-all">오류 코드 {d.errorCodes?.join(" → ") || "미확인"} · 서버 {d.endpointHost ?? "미확인"} · Node {d.nodeVersion}</p>
-    <p className="mt-1 opacity-70">수신 바이트·사고 글자 수는 토큰 수가 아닙니다. 연결 종료만으로 제공자·중간 네트워크 중 어디가 원인인지 단정할 수 없습니다.</p>
+    <p className="mt-1 opacity-70">수신 바이트에는 연결 유지 신호도 포함되며, 사고 글자 수는 토큰 수가 아닙니다. 연결 종료만으로 제공자·중간 네트워크 중 어디가 원인인지 단정할 수 없습니다.</p>
     <button type="button" onClick={copy} className="mt-1.5 rounded border border-amber-300 px-2 py-1 font-medium">진단 정보 복사</button>
     <span role="status" className="ml-2">{copyState}</span>
     <details className="mt-1"><summary className="cursor-pointer">상세 JSON (요청 식별자 포함)</summary>

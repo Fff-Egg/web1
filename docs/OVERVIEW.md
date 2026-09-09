@@ -16,7 +16,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - **LLM**: DeepSeek(OpenAI 호환, `LLM_BASE_URL`/`LLM_API_KEY`) — `complete()` 헬퍼로 추상화, Anthropic SDK 폴백
 - **스케줄**: node-cron(Asia/Seoul) — 수집 인터벌 + 다이제스트/시황/리포트 크론 + 부팅 캐치업
 - **소스 수집**: twitter-scraper(X 쿠키) · gramjs(텔레그램 MTProto) · ws(TradingView) · rss-parser · playwright · marked(다이제스트 렌더)
-- **배포**: Railway(앱 web1 + MySQL). `start = db:migrate && tsx src/server/index.ts`. 개발 브랜치 푸시 = 자동 재배포. 아웃바운드 개방(외부 수집은 프로덕션에서만).
+- **배포**: Railway(앱 web1 + MySQL). `start = db:migrate && tsx src/server/index.ts`. `claude/focused-planck-m3wgbz` 푸시 = 자동 재배포. 사용자 요청에 따라 이후 코드 변경과 인수인계 기록도 이 브랜치에 함께 커밋·푸시한다. 아웃바운드 개방(외부 수집은 프로덕션에서만).
 
 **규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0010(11개).
 
@@ -159,7 +159,7 @@ MEGA 배지  = VIX ≥ 40
 1. **수집** (`workers/collect.ts` collectAll): 소스별 어댑터로 fetch → `articles` upsert. 같은 (source,url) 글은 삭제됐어도 재생성 안 함(불안정 GUID 부활 차단). X=쿠키 직접수집, 텔레그램=MTProto 배치(커서 lastMessageId).
 2. **1차 분석** (`analysis/analyze.ts` filterRelevant): LLM 1콜로 섹터 비편향 관련성·중요도·요약 + 논지 신호 동시 산출. 활성 스레드는 필터가 아닌 사후 태그로만 사용. 한국어 강제·fail-open. 본문 미수집 shell은 LLM 판정 전에 원문확인함으로 보존. 배치(50)×동시성(3), 429 감지 시 사이클 중단 후 재개.
 3. **피드백 학습** (`feedback.ts` refreshGuidance): 사용자 액션(휴지통=중요↓/남기기·복원=중요↑)만 `filter_feedback`에 기록. 경계 루틴에서 새 피드백만 distill해 '학습 메모'에 누적 통합 → 1차 필터 중요도에만 재주입(관련성 게이트 불변).
-4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+하루 sweep+피드백 distill) · 17시(낮분). 창 글 30건 초과면 **Flash(기본=필터 모델)**로 크기 균형 청크를 사실 위주 압축한 뒤 **Pro(분석 모델)**가 최종 연결·작성한다. 최종 Pro 실패 시 같은 Pro를 증액 예산으로 한 번 더 시도하고, 두 번 모두 실패할 때만 Flash로 폴백한다. 전역 각주 [N] 유지. [N] 인용을 각주 링크로(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
+4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+조건부 하루 sweep+피드백 distill) · 낮분(코드 기본 17시, 2026-09-09 운영 14시). 창 글 30건 초과면 **Flash(기본=필터 모델)**로 크기 균형 청크를 사실 위주 압축한 뒤 **Pro(분석 모델)**가 최종 연결·작성한다. 최종 Pro는 Thinking ON·최소 49,152 토큰으로 **1회만** 호출하고, 실패하면 원인을 기록한 뒤 같은 Pro 재시도 없이 Flash로 폴백한다. 명시적으로 Thinking을 켠 최종 DeepSeek Pro는 SSE로 수신하고 정상 종료와 완성 본문을 확인한 뒤 저장한다. Flash 폴백본은 보존하며 원문 피드 정리는 성공 조건에 따라 보류한다. 전역 각주 [N] 유지. [N] 인용을 각주 링크로(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
 
 ---
 
@@ -221,3 +221,8 @@ CLAUDE.md             — 전체 인수인계(가장 상세)
 
 ### 2026-09-08: 반복 LLM 연결 종료 진단
 다이제스트 실패 화면에 요청 소요 시간·실패 단계·HTTP 상태·입력 크기·수신량·오류 코드와 **진단 정보 복사**를 추가했다. 기존 Pro 1회→Flash/Thinking/토큰/스케줄은 그대로다. 운영 절차와 수치 해석은 [LLM_DIAGNOSTICS.md](LLM_DIAGNOSTICS.md) 참조. 과거 실행은 소급 계측 불가.
+
+### 2026-09-09: 14시 최종 Pro 수신을 스트리밍으로 변경
+기준 배포 `cc02628`의 14시 자동본에서 HTTP 200 뒤 약 4분 동안 4바이트/4청크만 받고 `ECONNRESET`이 발생한 것을 확인했다. 이는 비스트리밍 대기 중 연결 유지용 빈 줄만 수신한 패턴과 부합한다. 사용량·종료 사유를 못 받았으므로 토큰 부족으로 단정할 수 없고, 연결을 끊은 네트워크 구간도 확인되지 않았다.
+
+앱은 명시적인 Thinking ON DeepSeek Pro(현재 최종 단계)에만 SSE를 자동 적용하고 `firstReasoningMs`·`firstContentMs`·`streamCompleted`를 계측한다. 다른 호출에 사용자가 명시한 `LLM_EXTRA_BODY.stream=true`도 존중한다. 부분 본문은 실패 시 버리고 `stop` + `[DONE]` + 비어 있지 않은 본문을 모두 확인한 결과만 저장한다. 모델·예산·Pro 1회 후 Flash 폴백·운영 시각은 유지하며, 자동 분석 직렬화나 추가 Pro 재시도는 넣지 않는다. 자동/수동은 모델 정책이 같지만 화면에서 비교한 기간은 각각 07~14시와 07시~다음날07시로 다르다. 로컬 테스트 129/129·타입 검사·빌드·diff 검사 및 별도 코드 검토는 통과했으며, 배포 및 다음 14시 자동 실행의 실서버 검증은 대기 중이다. 자세한 실측과 한계는 [LLM_DIAGNOSTICS.md](LLM_DIAGNOSTICS.md) 참조.

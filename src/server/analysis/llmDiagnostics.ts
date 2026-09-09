@@ -26,31 +26,41 @@ export class LlmCallProbe {
     if (typeof parsed.max_tokens === "number") this.data.effectiveMaxTokens = parsed.max_tokens;
     this.data.stage = "awaiting_headers";
   }
-  async read(res: Response): Promise<string> {
+  async *chunks(res: Response): AsyncGenerator<string> {
     this.data.httpStatus = res.status;
     this.data.headersMs = this.elapsed();
     this.data.providerRequestId = identifier(res.headers.get("x-request-id")) ?? identifier(res.headers.get("request-id"));
     this.data.stage = "reading_body";
-    if (!res.body) return "";
-    // This observes transport chunks; it does NOT enable SSE / change stream:false.
+    if (!res.body) return;
+    // Count transport bytes for both JSON and SSE, including keep-alives.
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    const parts: string[] = [];
+    let finished = false;
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) { finished = true; break; }
         if (value.byteLength === 0) continue;
         const now = this.elapsed();
         this.data.firstByteMs ??= now;
         this.data.lastByteMs = now;
         this.data.receivedBytes += value.byteLength;
         this.data.receivedChunks++;
-        parts.push(decoder.decode(value, { stream: true }));
+        yield decoder.decode(value, { stream: true });
       }
-      parts.push(decoder.decode());
-      return parts.join("");
-    } finally { reader.releaseLock(); }
+      const tail = decoder.decode();
+      if (tail) yield tail;
+    } finally {
+      // A parser may stop at [DONE] or reject an event before the socket closes.
+      // Release that response without replacing its original success/failure.
+      if (!finished) { try { await reader.cancel(); } catch { /* already failed */ } }
+      reader.releaseLock();
+    }
+  }
+  async read(res: Response): Promise<string> {
+    const parts: string[] = [];
+    for await (const chunk of this.chunks(res)) parts.push(chunk);
+    return parts.join("");
   }
   failure(error: unknown): void {
     const codes: string[] = [];

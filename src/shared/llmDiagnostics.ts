@@ -17,6 +17,11 @@ export interface LlmCallDiagnostics {
   headersMs?: number;
   firstByteMs?: number;
   lastByteMs?: number;
+  /** First model output, distinct from transport keep-alive bytes. */
+  firstReasoningMs?: number;
+  firstContentMs?: number;
+  /** SSE terminal marker received; a successful finish reason is checked separately. */
+  streamCompleted?: boolean;
   idleMs?: number;
   httpStatus?: number;
   providerRequestId?: string;

@@ -87,7 +87,12 @@ test("호출별 다이제스트 정책은 전역 env보다 우선한다", async 
   process.env.LLM_EXTRA_BODY = JSON.stringify({ thinking: { type: "enabled" } });
   const bodies: Record<string, unknown>[] = [];
   globalThis.fetch = async (_input, init) => {
-    bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    bodies.push(body);
+    if (body.stream) return new Response(
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "완료" }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+      { headers: { "Content-Type": "text/event-stream" } },
+    );
     return new Response(
       JSON.stringify({ choices: [{ message: { content: "완료" }, finish_reason: "stop" }] }),
       { status: 200, headers: { "Content-Type": "application/json" } },
@@ -111,6 +116,8 @@ test("호출별 다이제스트 정책은 전역 env보다 우선한다", async 
 
   assert.deepEqual(bodies[0]?.thinking, { type: "disabled" });
   assert.deepEqual(bodies[1]?.thinking, { type: "enabled" });
+  assert.equal(bodies[0]?.stream, undefined);
+  assert.equal(bodies[1]?.stream, true);
 });
 
 test("다이제스트는 최종 Pro만 thinking을 켜고 Flash·맵은 끈다", () => {

@@ -14,13 +14,13 @@ afterEach(() => {
   globalThis.fetch = fetchBefore;
   for (const key of keys) { if (envBefore[key] === undefined) delete process.env[key]; else process.env[key] = envBefore[key]; }
 });
-function setup() {
+function setup(thinking: "enabled" | "disabled" = "disabled") {
   process.env.LLM_BASE_URL = "https://llm.example/v1";
   process.env.LLM_API_KEY = "PRIVATE_API_KEY";
   delete process.env.LLM_EXTRA_BODY;
   let observed: LlmCallDiagnostics | undefined;
   return {
-    opts: { model: "deepseek-v4-pro", system: "PRIVATE_SYSTEM", user: "PRIVATE_ARTICLE", maxTokens: 49152, thinking: "enabled" as const, onDiagnostics: (d: LlmCallDiagnostics) => { observed = d; } },
+    opts: { model: "deepseek-v4-pro", system: "PRIVATE_SYSTEM", user: "PRIVATE_ARTICLE", maxTokens: 49152, thinking, onDiagnostics: (d: LlmCallDiagnostics) => { observed = d; } },
     get: () => { assert.ok(observed); return observed; },
   };
 }
@@ -40,7 +40,7 @@ test("pre-header rejection records stage and cause, not invented zero usage", as
 });
 
 test("mid-body reset records received bytes, HTTP 200, timings; one Pro then Flash", async () => {
-  const { opts } = setup();
+  const { opts } = setup("enabled");
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
@@ -65,14 +65,14 @@ test("mid-body reset records received bytes, HTTP 200, timings; one Pro then Fla
   assert.equal(d.effectiveMaxTokens, 49152); noSecrets(trace);
 });
 
-test("success keeps wire parameters and result; broken observer never triggers retry", async () => {
+test("non-streaming success keeps wire parameters; broken observer never triggers retry", async () => {
   const { opts, get } = setup();
   let calls = 0;
   globalThis.fetch = async (_url, init) => {
     calls++;
     const body = JSON.parse(String(init?.body));
     assert.equal(body.max_tokens, 49152); assert.equal(body.stream, undefined);
-    assert.equal(init?.signal, undefined); assert.equal(body.thinking.type, "enabled");
+    assert.equal(init?.signal, undefined); assert.equal(body.thinking.type, "disabled");
     return success();
   };
   assert.equal(await complete(opts), "report");
