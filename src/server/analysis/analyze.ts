@@ -11,6 +11,7 @@ import {
   hasLLM,
   FILTER_MODEL,
   ANALYSIS_MODEL,
+  supportsThinkingControl,
 } from "./anthropic.js";
 import {
   ANALYSIS_OUTPUT_CONTRACT,
@@ -18,6 +19,7 @@ import {
   shouldTreatAsImportant,
 } from "../../shared/analysis.js";
 import { needsSourceReview, sourceReviewSummary } from "../../shared/sourceReview.js";
+import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 
 // Cap body length sent to the model (cuts token cost). Tune via env.
 const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
@@ -233,14 +235,16 @@ export async function filterRelevant(
   // Give the summarizer enough of the (possibly batched) body to summarize well.
   const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
   const user = `제목: ${article.title ?? ""}\n원문 URL: ${article.url ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
+  const filterModel = cfg.filterModel || FILTER_MODEL();
+  const thinking = supportsThinkingControl(filterModel) ? cfg.filterThinking ?? "disabled" : undefined;
   const text = await complete({
-    model: cfg.filterModel || FILTER_MODEL(),
+    model: filterModel,
     system,
     user,
-    thinking: "disabled",
+    thinking,
     // The thesis fields (signals[] + newThread) can add several hundred tokens on
     // top of the summary — 600 truncated the JSON and silently dropped summaries.
-    maxTokens: Number(process.env.FILTER_MAX_TOKENS ?? (threads.length > 0 ? 1400 : 600)),
+    maxTokens: thinkingTokenBudget(Number(process.env.FILTER_MAX_TOKENS ?? (threads.length > 0 ? 1400 : 600)), thinking),
   });
   let parsed = parseJsonLoose<Record<string, unknown>>(text);
   if (!parsed) {

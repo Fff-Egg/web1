@@ -9,7 +9,8 @@ import {
 } from "../../analysis/anthropic.js";
 import {
   digestFinalTokenBudget,
-  DIGEST_PRO_THINKING_TOKEN_FLOOR,
+  DIGEST_FINAL_THINKING_TOKEN_FLOOR,
+  digestThinkingMode,
 } from "../../digest/modelPipeline.js";
 
 const analysisConfigSchema = z.object({
@@ -21,6 +22,9 @@ const analysisConfigSchema = z.object({
   filterModel: z.string().optional(),
   digestMapModel: z.string().optional(),
   analysisModel: z.string().optional(),
+  filterThinking: z.enum(["enabled", "disabled"]).optional(),
+  digestMapThinking: z.enum(["enabled", "disabled"]).optional(),
+  digestFinalThinking: z.enum(["enabled", "disabled"]).optional(),
 });
 
 type ModelSource = "web" | "railway" | "default" | "filter";
@@ -53,18 +57,24 @@ export const settingsRouter = router({
       : { ...filter, source: "filter" as const };
     const final = configuredModel(cfg.analysisModel, "ANALYSIS_MODEL", ANALYSIS_MODEL);
     const fallbackTokens = Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
-    const configuredProTokens = Number(
-      process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_PRO_THINKING_TOKEN_FLOOR,
+    const configuredThinkingTokens = Number(
+      process.env.DIGEST_FINAL_THINKING_TOKENS ?? process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_FINAL_THINKING_TOKEN_FLOOR,
     );
-    const finalTokens = digestFinalTokenBudget(final.effective, fallbackTokens, configuredProTokens);
+    const finalTokens = digestFinalTokenBudget(final.effective, fallbackTokens, configuredThinkingTokens, cfg.digestFinalThinking);
+    const finalThinking = digestThinkingMode(final.effective, "final", cfg.digestFinalThinking);
+    const mapThinking = digestThinkingMode(map.effective, "map", cfg.digestMapThinking);
     return {
       provider: llmProvider(),
       filter,
       map,
       final,
       finalTokens,
+      finalThinking,
+      mapThinking,
+      filterThinking: digestThinkingMode(filter.effective, "map", cfg.filterThinking),
+      finalFallbackAvailable: final.effective !== map.effective || (finalThinking === "enabled" && mapThinking === "disabled"),
       finalAttempts: 1,
-      finalFallbackTokens: fallbackTokens,
+      finalFallbackTokens: digestFinalTokenBudget(map.effective, fallbackTokens, configuredThinkingTokens, mapThinking),
     };
   }),
   updateAnalysisConfig: publicProcedure

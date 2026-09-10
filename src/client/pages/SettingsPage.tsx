@@ -42,8 +42,8 @@ export function SettingsPage() {
         <div>
           <h2 className="text-lg font-semibold">분석 지침</h2>
           <p className="mt-1 text-sm text-slate-500">
-            <strong>Flash</strong>가 글을 넓게 선별·정리하고, <strong>Pro</strong>가 여러 글의 연결과 함의를
-            최종 다이제스트로 종합하도록 단계별 모델을 나눌 수 있습니다.
+            글 선별·자료 정리·최종 작성에 사용할 모델을 단계별로 설정할 수 있습니다.
+            DeepSeek의 생각 기능은 모델 이름과 별개로 단계마다 설정하며, 모델을 바꿔도 유지됩니다.
           </p>
           <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-800">
             논지 지도는 글을 거르는 필터가 아니라 선별 후 붙이는 사후 태그입니다. 바이오·방산·크립토 등 현재
@@ -102,7 +102,7 @@ export function SettingsPage() {
 
         <label className="block">
           <span className="text-sm font-semibold text-slate-700">
-            2차 — 뽑힌 정보를 어떻게 종합 분석할지 (하루 1회 다이제스트)
+            2차 — 뽑힌 정보를 어떻게 종합 분석할지 (정기 다이제스트)
           </span>
           <p className="text-xs text-slate-400">
             그날 1차로 뽑힌 글들을 한 번에 묶어, 서로 어떻게 연결되고 왜 중요한지 종합합니다. 결과 맨 아래엔
@@ -153,7 +153,7 @@ export function SettingsPage() {
               </label>
               <label className="block">
                 <span className="text-xs font-medium text-slate-700">최종 연결·심층 모델</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Pro 권장 · 비우면 ANALYSIS_MODEL</span>
+                <span className="mt-0.5 block text-[11px] text-slate-400">Flash 또는 Pro · 비우면 ANALYSIS_MODEL</span>
                 <input
                   value={form.analysisModel ?? ""}
                   onChange={(e) => set({ analysisModel: e.target.value || undefined })}
@@ -162,6 +162,21 @@ export function SettingsPage() {
                 />
               </label>
             </div>
+            <div className="grid gap-3 sm:grid-cols-3">
+              <ThinkingControl label="글 선별 Thinking" value={form.filterThinking}
+                supported={planQuery.data?.filterThinking !== undefined}
+                onChange={(filterThinking) => set({ filterThinking })} />
+              <ThinkingControl label="자료 정리 Thinking" value={form.digestMapThinking}
+                supported={planQuery.data?.mapThinking !== undefined}
+                onChange={(digestMapThinking) => set({ digestMapThinking })} />
+              <ThinkingControl label="최종 보고서 Thinking" value={form.digestFinalThinking}
+                supported={planQuery.data?.finalThinking !== undefined}
+                onChange={(digestFinalThinking) => set({ digestFinalThinking })} />
+            </div>
+            <p className="text-xs text-slate-500">
+              기본은 선별 OFF · 정리 OFF · 최종 ON입니다. 직접 선택한 값이 서버 기본값보다 우선합니다.
+              ON은 생각할 시간을 더 주므로 비용과 생성 시간이 늘어날 수 있습니다. 저장 후 아래 적용 흐름을 확인하세요.
+            </p>
             {planQuery.data && <ModelFlowCard plan={planQuery.data} />}
             {planQuery.error && (
               <p className="text-xs text-red-600">현재 적용 모델을 불러오지 못했습니다.</p>
@@ -195,6 +210,27 @@ export function SettingsPage() {
   );
 }
 
+function ThinkingControl({ label, value, supported, onChange }: {
+  label: string;
+  value: AnalysisConfig["filterThinking"];
+  supported: boolean;
+  onChange: (value: AnalysisConfig["filterThinking"]) => void;
+}) {
+  return (
+    <label className="block text-xs font-medium text-slate-700">
+      {label}
+      <select value={value ?? ""} disabled={!supported}
+        onChange={(e) => onChange(e.target.value === "enabled" ? "enabled" : e.target.value === "disabled" ? "disabled" : undefined)}
+        className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 disabled:bg-slate-100 disabled:text-slate-400">
+        <option value="">기본값 (서버 설정)</option>
+        <option value="disabled">OFF — 빠르게 처리</option>
+        <option value="enabled">ON — 충분히 생각</option>
+      </select>
+      {!supported && <span className="mt-1 block text-[11px] font-normal text-slate-400">이 API의 생각 기능 제어는 아직 지원하지 않습니다.</span>}
+    </label>
+  );
+}
+
 function sourceLabel(source: ModelPlan["filter"]["source"]): string {
   if (source === "web") return "웹 설정";
   if (source === "railway") return "Railway 변수";
@@ -204,12 +240,11 @@ function sourceLabel(source: ModelPlan["filter"]["source"]): string {
 
 function ModelFlowCard({ plan }: { plan: ModelPlan }) {
   const steps = [
-    { label: "① 글별 선별", step: plan.filter },
-    { label: "② 묶음별 사실 정리", step: plan.map },
-    { label: "③ 최종 연결·작성", step: plan.final },
+    { label: "① 글별 선별", step: plan.filter, thinking: plan.filterThinking },
+    { label: "② 묶음별 사실 정리", step: plan.map, thinking: plan.mapThinking },
+    { label: "③ 최종 연결·작성", step: plan.final, thinking: plan.finalThinking },
   ];
   const remapped = steps.filter(({ step }) => step.configured !== step.effective);
-  const separated = plan.map.effective !== plan.final.effective;
   return (
     <div className="rounded-lg border border-indigo-100 bg-indigo-50/60 p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -223,11 +258,14 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
         </span>
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-3">
-        {steps.map(({ label, step }, index) => (
+        {steps.map(({ label, step, thinking }, index) => (
           <div key={label} className="relative rounded-md border border-indigo-100 bg-white px-3 py-2">
             <p className="text-[10px] font-medium text-slate-500">{label}</p>
             <p className="mt-0.5 break-all font-mono text-xs font-semibold text-slate-800">{step.effective}</p>
             <p className="mt-1 text-[10px] text-slate-400">{sourceLabel(step.source)}</p>
+            {thinking && (
+              <p className="mt-1 text-[10px] text-indigo-700">Thinking {thinking === "enabled" ? "ON" : "OFF"}</p>
+            )}
             {index < steps.length - 1 && (
               <span className="absolute -right-2.5 top-1/2 z-10 hidden -translate-y-1/2 text-indigo-300 sm:block">→</span>
             )}
@@ -235,9 +273,15 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
         ))}
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-indigo-800">
-        최종 모델은 최대 {plan.finalTokens.toLocaleString()}토큰으로 <strong>{plan.finalAttempts}번만</strong> 실행합니다. 실패하면
-        같은 모델을 재시도하지 않고 원인을 기록한 뒤, 자료 정리 모델을 최대
-        {plan.finalFallbackTokens.toLocaleString()}토큰으로 즉시 실행합니다.
+        최종 작성은 {plan.finalThinking ? `Thinking ${plan.finalThinking === "enabled" ? "ON" : "OFF"} · ` : ""}
+        최대 {plan.finalTokens.toLocaleString()}토큰 설정으로 <strong>{plan.finalAttempts}번</strong> 시도합니다.{" "}
+        {plan.finalFallbackAvailable ? (
+          <>
+            실패하면 원인을 기록하고, 자료 정리 단계의 설정(
+            {plan.mapThinking ? `Thinking ${plan.mapThinking === "enabled" ? "ON" : "OFF"} · ` : ""}
+            최대 {plan.finalFallbackTokens.toLocaleString()}토큰)으로 한 번 대체 작성합니다.
+          </>
+        ) : "실패하면 원인을 기록하고 종료합니다."}
       </p>
       {remapped.map(({ label, step }) => (
         <p key={label} className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
@@ -245,11 +289,6 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
           " "}<span className="font-mono font-semibold">{step.effective}</span>(으)로 치환됩니다.
         </p>
       ))}
-      {!separated && (
-        <p className="mt-1 rounded bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
-          ⚠ 자료 정리와 최종 종합이 같은 모델입니다. Flash→Pro 분리를 원하면 서로 다른 모델을 지정하세요.
-        </p>
-      )}
     </div>
   );
 }

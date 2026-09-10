@@ -71,8 +71,32 @@ test("final Pro receives split UTF-8 SSE without changing thinking or budget, or
   assert.equal(calls, 2);
 });
 
-test("mid-stream reset discards partial Pro text and invokes Flash once without streaming or sweep", async () => {
+// These IDs exercise family matching only; fixtures do not assert availability.
+for (const model of ["deepseek-flash", "future-model-fixture", "deepseek-v4-flash", "deepseek-v4.1-flash", "deepseek-v4.1-pro"]) {
+test(`${model} final thinking streams while filter/map remain non-thinking`, async () => {
   const { opts } = setup();
+  process.env.LLM_EXTRA_BODY = JSON.stringify({ thinking: { type: "enabled" }, stream: false });
+  const bodies: any[] = [];
+  globalThis.fetch = async (_url, init) => {
+    const body = JSON.parse(String(init?.body)); bodies.push(body);
+    return body.stream ? stream(full()) : new Response(JSON.stringify({ choices: [{ message: { content: "정리 완료" }, finish_reason: "stop" }] }));
+  };
+  assert.equal(await complete({ ...opts, model, thinking: "disabled", maxTokens: 8000 }), "정리 완료");
+  assert.equal(bodies[0].thinking.type, "disabled"); assert.equal(bodies[0].stream, false);
+  assert.equal(await complete({ ...opts, model }), "분석 완료 🚀");
+  assert.equal(bodies[1].thinking.type, "enabled"); assert.equal(bodies[1].stream, true);
+  assert.equal(bodies[1].max_tokens, 49152); assert.equal(bodies.length, 2);
+  delete process.env.LLM_EXTRA_BODY;
+  assert.equal(await complete({ ...opts, model, thinking: undefined }), "정리 완료");
+  assert.equal(bodies[2].thinking.type, "disabled"); assert.equal(bodies[2].stream, undefined);
+});
+}
+
+for (const model of ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4.1-flash"]) {
+test(`mid-stream reset discards partial ${model} text and invokes non-thinking fallback once without sweep`, async () => {
+  const { opts } = setup();
+  opts.model = model;
+  const fallbackModel = model === "deepseek-v4-pro" ? "deepseek-v4-flash" : model;
   const bodies: any[] = [];
   globalThis.fetch = async (_url, init) => {
     bodies.push(JSON.parse(String(init?.body)));
@@ -83,9 +107,10 @@ test("mid-stream reset discards partial Pro text and invokes Flash once without 
       else c.error(reset());
     } }), { status: 200 });
   };
-  const trace = newModelTrace("deepseek-v4-flash", opts.model);
-  assert.equal(await completeDigestStage(opts, { stage: "final", retryPrimary: false, fallbackModel: "deepseek-v4-flash", fallbackThinking: "disabled", fallbackMaxTokens: 8192 }, trace), "Flash 완성본");
+  const trace = newModelTrace(fallbackModel, opts.model);
+  assert.equal(await completeDigestStage(opts, { stage: "final", retryPrimary: false, fallbackModel, fallbackThinking: "disabled", fallbackMaxTokens: 8192 }, trace), "Flash 완성본");
   assert.equal(bodies.length, 2); assert.equal(bodies[0].stream, true); assert.equal(bodies[1].stream, undefined);
+  assert.equal(bodies[0].model, model); assert.equal(bodies[1].model, fallbackModel);
   assert.equal(bodies[1].thinking.type, "disabled"); assert.equal(bodies[1].max_tokens, 8192);
   assert.equal(trace.stages.final.retries, 0); assert.equal(trace.stages.final.fallbacks, 1);
   assert.equal(digestCleanupGate(trace).eligible, false);
@@ -94,6 +119,7 @@ test("mid-stream reset discards partial Pro text and invokes Flash once without 
   assert.deepEqual(d.errorCodes, ["ECONNRESET"]); assert.equal(d.contentChars, "PRIVATE_PARTIAL".length);
   assert.doesNotMatch(JSON.stringify(trace), /PRIVATE_/);
 });
+}
 
 test("known incomplete finish reasons reject partial content even with DONE", async () => {
   const { opts, get } = setup();
@@ -105,7 +131,7 @@ test("known incomplete finish reasons reject partial content even with DONE", as
   }
 });
 
-test("Flash, non-thinking Pro and unrelated models retain JSON transport; resolved Pro streams", async () => {
+test("non-thinking Flash/Pro and unrelated models retain JSON transport; resolved Pro streams", async () => {
   const { opts } = setup();
   const bodies: any[] = [];
   globalThis.fetch = async (_url, init) => {
@@ -113,9 +139,11 @@ test("Flash, non-thinking Pro and unrelated models retain JSON transport; resolv
     return body.stream ? stream(full()) : new Response(JSON.stringify({ choices: [{ message: { content: "ok" }, finish_reason: "stop" }] }));
   };
   for (const call of [{ model: "deepseek-v4-flash", thinking: "disabled" as const }, { model: "deepseek-v4-pro", thinking: "disabled" as const }, { model: "another-model", thinking: "enabled" as const }]) {
+    if (call.model === "another-model") process.env.LLM_BASE_URL = "https://another-provider.example/v1";
     assert.equal(await complete({ ...opts, ...call }), "ok");
   }
   assert.ok(bodies.every(body => body.stream === undefined));
+  process.env.LLM_BASE_URL = "https://api.deepseek.com";
   process.env.LLM_MODEL = "deepseek-v4-pro";
   assert.equal(await complete({ ...opts, model: "claude-old-saved-id" }), "분석 완료 🚀");
   assert.equal(bodies[3].stream, true); assert.equal(bodies[3].model, "deepseek-v4-pro");

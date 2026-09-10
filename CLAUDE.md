@@ -7,7 +7,19 @@
 > `docs/fear-indicators.md`(K-공포지수·US 진입신호 지표 상세)에 자족적으로 정리돼 있다. 이 CLAUDE.md의
 > §0 이후는 세션 인수인계·주의사항·세부 구현 노트다.
 
-## 최신 인수인계 — 2026-09-09 낮 14시 Pro 연결 종료
+## 최신 인수인계 — 2026-09-10 V4.1 Flash 전환
+
+- **사용자 결정**: V4.1 Pro 출시일이 미정이므로 그때까지 V4.1 Flash를 전 단계에서 사용한다. 코드와 인수인계는 계속 `claude/focused-planck-m3wgbz`에 함께 커밋·푸시한다.
+- **정식 모델 ID 확인**: [DeepSeek 공식 요금표](https://api-docs.deepseek.com/quick_start/pricing/)의 V4.1 Flash API ID는 **`deepseek-flash`**다. 기존 `deepseek-v4-flash` 및 `deepseek-v4-flash-vision-exp`도 V4.1 Flash로 연결된다. 앞서 추정한 `deepseek-v4.1-flash`는 운영 설정에 쓰지 않는다. `deepseek-v4-pro`는 9/14 13:00 KST부터 V4.1 Flash로 연결될 예정이며 V4.1 Pro 날짜는 미정이다.
+- **사용자 설정 완료**: 9/10 18:48 스크린샷에서 Settings → 고급의 1차 글 선별·다이제스트 자료 정리·최종 연결 세 칸 모두 `deepseek-flash`, “저장됨” 및 서버 적용 흐름까지 확인했다. 이 웹 설정이 Railway 모델 환경변수보다 우선한다. API 키 변경은 필요 없다.
+- **모델과 독립적인 설정**: 공식 `api.deepseek.com`에서는 모델 이름과 무관하게 같은 Thinking 프로토콜을 쓴다. 기본은 선별 OFF·맵 OFF·최종 ON + SSE다. Settings에서 `filterThinking`·`digestMapThinking`·`digestFinalThinking`을 직접 ON/OFF로 선택할 수 있고, 저장된 선택은 모델 이름을 바꿔도 유지되며 환경변수 기본값보다 우선한다. 다른 제공자는 기존에 호환되는 모델에만 이 제어를 적용한다.
+- **실패 처리**: 최종은 1회 실행하고 실패하면 자료 정리 설정으로 최대 1회 대체한다. 동일 ID도 명시적인 ON→OFF 전환이면 대체를 허용하며, 같은 ID·같은 모드의 중복 호출은 하지 않는다. 대체 작성본의 원문 피드 정리는 계속 보류한다.
+- **토큰/변수 호환**: `DIGEST_FINAL_THINKING` 및 `DIGEST_FINAL_THINKING_TOKENS`가 새 이름이며, 미설정이면 기존 `DIGEST_PRO_THINKING`/`DIGEST_PRO_THINKING_TOKENS`를 따른다. 최종 ON 호출은 최소 49,152의 최대 토큰 설정을 확보하고 더 큰 기존 설정도 존중한다. 이는 고정 사용량이 아니다. 스크린샷의 기존 일반/대체 예산 24,576은 유지된다. 변수 추가 없이 기존 설정으로 동작한다. 선별·맵을 사용자가 ON으로 바꾸면 작은 출력 예산을 생각 토큰만으로 소진하지 않도록 최대 토큰 설정을 최소 49,152로 확보한다. 기본 OFF 예산은 유지한다. 새 Thinking 필드는 settings JSON에 저장하므로 SQL 마이그레이션은 없다.
+- **화면**: 모델 입력 아래에 단계별 Thinking 선택 메뉴(기본값/OFF/ON)를 추가했다. 현재 서버 적용 흐름에는 저장 후 실제 모드를 표시하고, 동일 모델 사용을 문제 삼던 Flash→Pro 경고를 제거했다. 대체 작성 안내도 모델이 같은 경우를 설명한다.
+- **일정**: 운영 07시/14시 유지. 현재 공식 혼잡 시간은 평일 KST 10~13시·15~19시다. 새 Flash 비혼잡 요금은 100만 토큰당 캐시 적중 입력 $0.003, 미적중 입력 $0.15, 출력 $0.60이며 혼잡 요금은 2배다. 추후 공식 변경을 확인한다.
+- **검증/배포**: `npm test` **147/147**, `npm run typecheck`, `npm run build`, `git diff --check` 통과. 새 정식 ID 및 미래 이름의 호출별 Thinking 우선순위, SSE, 연결 중단 시 부분 폐기, 동일 Flash OFF 대체, Settings 저장/기존 변수 호환을 검증했다. 배포 상태는 해당 커밋의 Railway 상태와 `/api/health` revision으로 확인한다. 실제 새 모델 보고서의 품질·자동 실행 성공 여부는 배포 후 실행 결과로 확인해야 한다.
+
+## 이전 인수인계 — 2026-09-09 낮 14시 Pro 연결 종료
 
 **사용자 요청**: 앞으로의 코드 변경과 인수인계 기록은 모두 **`claude/focused-planck-m3wgbz`에 함께 커밋·푸시**한다. 다른 브랜치로 배포 대상을 옮기지 않는다. 아래는 이번 확인 결과이며, 뒤쪽의 오래된 시각·재시도 설명보다 우선한다.
 

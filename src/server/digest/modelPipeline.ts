@@ -1,7 +1,9 @@
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
+import { THINKING_TOKEN_FLOOR, thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import {
   complete,
   resolveModel,
+  supportsThinkingControl,
   type CompleteOpts,
 } from "../analysis/anthropic.js";
 
@@ -36,44 +38,43 @@ export interface ModelAttemptFailure {
 
 /**
  * Stage-specific DeepSeek policy:
- * - article filter / map compression / Flash fallback: thinking OFF (cost control)
- * - final Pro synthesis: thinking ON (cross-article reasoning quality)
+ * - article filter / map compression / emergency fallback: thinking OFF (cost control)
+ * - final Flash or Pro synthesis: thinking ON (cross-article reasoning quality)
  *
- * `DIGEST_PRO_THINKING=0` is the emergency kill switch. Other providers are
- * left untouched because their thinking controls are not API-compatible.
+ * Saved Settings overrides these defaults. Without a saved override,
+ * `DIGEST_FINAL_THINKING` (then legacy `DIGEST_PRO_THINKING`) controls the final default.
+ * Other providers are left
+ * untouched because their thinking controls are not API-compatible.
  */
 export function digestThinkingMode(
   model: string,
   stage: DigestModelStage,
+  configured?: CompleteOpts["thinking"],
 ): CompleteOpts["thinking"] {
-  const resolved = resolveModel(model);
-  if (!/^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(resolved)) return undefined;
+  if (!supportsThinkingControl(model)) return undefined;
+  if (configured) return configured;
   if (
     stage === "final" &&
-    /^deepseek-v4-pro(?:$|-)/i.test(resolved) &&
-    process.env.DIGEST_PRO_THINKING !== "0"
+    (process.env.DIGEST_FINAL_THINKING ?? process.env.DIGEST_PRO_THINKING) !== "0"
   ) {
     return "enabled";
   }
   return "disabled";
 }
 
-export const DIGEST_PRO_THINKING_TOKEN_FLOOR = 49_152;
+export const DIGEST_FINAL_THINKING_TOKEN_FLOOR = THINKING_TOKEN_FLOOR;
+/** Backward-compatible export for callers using the original Pro policy name. */
+export const DIGEST_PRO_THINKING_TOKEN_FLOOR = DIGEST_FINAL_THINKING_TOKEN_FLOOR;
 
 /** One shared calculator keeps the execution path and Settings preview aligned.
  * A stale Railway 24,576 override must not silently shrink the new one-shot call. */
 export function digestFinalTokenBudget(
   model: string,
   regularMaxTokens: number,
-  requestedThinkingTokens = DIGEST_PRO_THINKING_TOKEN_FLOOR,
+  requestedThinkingTokens = DIGEST_FINAL_THINKING_TOKEN_FLOOR,
+  configuredThinking?: CompleteOpts["thinking"],
 ): number {
-  const regular = Number.isFinite(regularMaxTokens) && regularMaxTokens > 0 ? regularMaxTokens : 8192;
-  const requested = Number.isFinite(requestedThinkingTokens) && requestedThinkingTokens > 0
-    ? requestedThinkingTokens
-    : DIGEST_PRO_THINKING_TOKEN_FLOOR;
-  return digestThinkingMode(model, "final") === "enabled"
-    ? Math.max(regular, DIGEST_PRO_THINKING_TOKEN_FLOOR, requested)
-    : regular;
+  return thinkingTokenBudget(regularMaxTokens, digestThinkingMode(model, "final", configuredThinking), requestedThinkingTokens);
 }
 
 export interface StageModelTrace {
@@ -124,8 +125,8 @@ export type DigestCleanupBlockReason =
 /**
  * The 07시 boundary sweep is destructive, so a merely "saved" digest is not
  * enough.  It is safe only when the configured final model itself completed
- * and every map chunk survived.  A Flash emergency result remains readable,
- * but deliberately keeps the source feed for inspection/re-generation.
+ * and every map chunk survived. An emergency result (including the same
+ * model with thinking disabled) keeps the source feed for re-generation.
  */
 export type DigestCleanupGate =
   | { eligible: true; reason: "primary_final_success" }
@@ -269,9 +270,9 @@ export type CompleteFn = (opts: CompleteOpts) => Promise<string>;
 
 export interface DigestCallPolicy {
   stage: DigestModelStage;
-  /** Emergency model used after the planned model has exhausted its allowed attempts. */
+  /** Emergency model; may match the primary when falling back from thinking ON to OFF. */
   fallbackModel?: string;
-  /** Override thinking for the emergency fallback (normally Flash = disabled). */
+  /** Override thinking for the emergency fallback (normally disabled). */
   fallbackThinking?: CompleteOpts["thinking"];
   /** Token budget for the fallback model (normally the non-thinking final budget). */
   fallbackMaxTokens?: number;
@@ -287,8 +288,8 @@ export interface DigestCallPolicy {
  *   2. either immediate emergency fallback, or one same-model retry when enabled
  *
  * Map calls keep one Flash retry so a transient chunk failure does not create a
- * hole. Final Pro calls set retryPrimary=false: one expensive Thinking attempt,
- * then Flash immediately, with the Pro failure retained in trace.errors.
+ * hole. Final calls set retryPrimary=false: one attempt, then an emergency call
+ * with the map settings (normally thinking OFF), retaining failures in trace.errors.
  */
 export async function completeDigestStage(
   opts: CompleteOpts,
@@ -325,7 +326,9 @@ export async function completeDigestStage(
     failedPrimaryAttempts: number,
   ): Promise<string> => {
     const fallback = policy.fallbackModel ? resolveModel(policy.fallbackModel) : "";
-    if (!fallback || fallback === primary) {
+    const sameModelThinkingFallback = fallback === primary &&
+      baseOpts.thinking === "enabled" && policy.fallbackThinking === "disabled";
+    if (!fallback || (fallback === primary && !sameModelThinkingFallback)) {
       step.failures++;
       syncTotals(trace);
       throw failure;
@@ -334,7 +337,7 @@ export async function completeDigestStage(
     console.warn(
       `[digest:${trace.runId}] ${policy.stage} ${primary} ` +
         (failedPrimaryAttempts === 1
-          ? `실패 — 같은 모델 재시도 없이 ${fallback} 폴백`
+          ? `실패 — 기본 설정 재시도 없이 ${fallback}${sameModelThinkingFallback ? " (Thinking OFF)" : ""} 폴백`
           : `${failedPrimaryAttempts}회 실패 — 최후 수단으로 ${fallback} 폴백`) +
         `: ${safeFailureDetail(failure)}`,
     );

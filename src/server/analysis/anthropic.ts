@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { LlmCallProbe } from "./llmDiagnostics.js";
 import { readChatCompletionStream } from "./chatCompletionStream.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
+import { supportsDeepSeekThinking } from "../../shared/deepseekModels.js";
 
 let _client: Anthropic | null = null;
 
@@ -57,6 +58,11 @@ export function resolveModel(model: string): string {
   return usingOpenAI() && id.startsWith("claude") ? OPENAI_DEFAULT_MODEL() : id;
 }
 
+/** Protocol support follows the provider endpoint, so model upgrades need no code change. */
+export function supportsThinkingControl(model: string): boolean {
+  return usingOpenAI() && supportsDeepSeekThinking(process.env.LLM_BASE_URL, resolveModel(model));
+}
+
 export const FILTER_MODEL = () =>
   resolveModel(
     process.env.FILTER_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-haiku-4-5-20251001"),
@@ -92,8 +98,8 @@ export function stripLoneSurrogates(s: string): string {
  * 넘긴다. 다만 현재 주 제공자인 DeepSeek V4는 thinking이 기본 ON이라는
  * 공식 규격이 확정돼 있어, 기사마다 수천 개의 사고 토큰을 쓰지 않도록 앱이
  * 비추론 모드를 안전 기본값으로 넣는다. 다이제스트 파이프라인은 이 전역값과
- * 별개로 호출별 `thinking`을 넘겨 **최종 Pro 종합만 ON**, 필터·맵·Flash 폴백은
- * OFF로 고정한다. `LLM_EXTRA_BODY`는 그 밖의 호출에 적용할 전역 기본값이다.
+ * 별개로 호출별 `thinking`을 넘긴다. 기본은 **최종 종합 ON**, 필터·맵은 OFF며,
+ * Settings에서 단계별로 바꿀 수 있다. `LLM_EXTRA_BODY`는 그 밖의 호출에 적용할 전역 기본값이다.
  * 파싱 실패는 무시하고 경고만 남긴다 — 잘못된 env가 분석 전체를 막으면 안 된다.
  */
 function extraBody(): Record<string, unknown> {
@@ -157,12 +163,12 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   try {
     const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
     const configuredExtra = extraBody();
-    const isDeepSeekV4 = /^deepseek-v4-(?:flash|pro)(?:$|-)/i.test(opts.model);
+    const isDeepSeekV4 = supportsThinkingControl(opts.model);
     // DeepSeek V4's API defaults to thinking=enabled. A per-article filter is
     // called hundreds of times a day and does not benefit enough from private
     // chain-of-thought to justify that token bill. Keep non-thinking as the app's
     // cost-safe default for both Flash and Pro. A stage-specific per-call value
-    // is applied LAST so final Pro can think without accidentally enabling it for
+    // is applied LAST so final synthesis can think without accidentally enabling it for
     // hundreds of Flash filter/map calls, even when a stale global env exists.
     const costSafeExtra =
       isDeepSeekV4 && configuredExtra.thinking === undefined
@@ -172,10 +178,10 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       isDeepSeekV4 && opts.thinking
         ? { thinking: { type: opts.thinking } }
         : {};
-    // Long final Pro thinking calls should deliver generation progress instead
+    // Long final thinking calls should deliver generation progress instead
     // of holding the whole answer until the end. This does not add any call or
-    // retry. Resolve from the actual model so Flash fallback stays non-streaming.
-    const streamFinalPro = /^deepseek-v4-pro(?:$|-)/i.test(opts.model) && opts.thinking === "enabled";
+    // retry. Explicit stage thinking keeps the non-thinking fallback on JSON.
+    const streamFinalThinking = isDeepSeekV4 && opts.thinking === "enabled";
     const body = JSON.stringify({
         model: opts.model,
         max_tokens: opts.maxTokens ?? 1024,
@@ -187,7 +193,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         ...costSafeExtra,
         ...configuredExtra,
         ...callExtra,
-        ...(streamFinalPro ? { stream: true } : {}),
+        ...(streamFinalThinking ? { stream: true } : {}),
       });
     probe.request(base, body);
     const res = await fetch(`${base}/chat/completions`, {

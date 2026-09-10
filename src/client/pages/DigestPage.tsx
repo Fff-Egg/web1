@@ -696,7 +696,7 @@ export function DigestPage() {
 
 /**
  * 이 리포트를 **실제로 어느 모델이 만들었는지** 한 줄로 보여준다.
- * 설정 모델이 실패해 폴백이 돌면 결과물의 성격이 달라지므로(추론형 vs 경량) 숨기지 않는다.
+ * 최종 작성이 실패해 모델이나 생각 기능을 바꿔 대체 작성했으면 이를 표시한다.
  * meta.models는 2026-08 이후 생성분에만 있다 — 옛 다이제스트는 meta.model만 표시.
  */
 function ModelBadge({ meta }: { meta: unknown }) {
@@ -747,8 +747,8 @@ function ModelBadge({ meta }: { meta: unknown }) {
   const primary = t?.primary ?? m?.model;
   if (!primary) return null;
 
-  // v2: intentional Flash map → Pro final is not a fallback. Report each stage
-  // separately, and warn only when the FINAL Pro stage actually fell back.
+  // v2: report the planned map and final stages separately. Fallback is based
+  // on the recorded attempt policy, including same-model thinking ON → OFF.
   if (t?.version === 2 && t.stages?.final) {
     const map = t.stages.map;
     const final = t.stages.final;
@@ -782,7 +782,7 @@ function ModelBadge({ meta }: { meta: unknown }) {
       phase === "retry" ? "같은 모델 재시도" : phase === "fallback" ? "폴백" : "첫 시도";
     const cleanupReasonLabel: Record<string, string> = {
       trace_missing: "성공 여부를 증명할 모델 기록이 없음",
-      final_fallback: "설정한 최종 모델이 실패해 Flash가 대신 작성함",
+      final_fallback: "최종 작성에 실패해 자료 정리 단계의 설정으로 대체 작성함",
       final_incomplete: "설정한 최종 모델이 완성본을 반환하지 못함",
       map_incomplete: "자료 정리 묶음 일부가 끝내 실패함",
     };
@@ -811,9 +811,9 @@ function ModelBadge({ meta }: { meta: unknown }) {
         )}
         {finalFallback && (
           <p className="mt-1">
-            설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>이(가){" "}
-            {(final.retries ?? 0) > 0 ? "재시도까지 실패해" : "한 번 실패해 같은 모델 재시도 없이"}{" "}
-            자료 정리 모델이 최종 작성했습니다.
+            설정한 최종 모델 <span className="font-mono">{final.planned ?? primary}</span>의{" "}
+            {(final.retries ?? 0) > 0 ? "재시도까지 실패해," : "첫 시도가 실패해,"}{" "}
+            자료 정리 단계의 설정으로 대체 작성했습니다.
           </p>
         )}
         {diagnostics.length > 0 && (

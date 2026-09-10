@@ -6,6 +6,7 @@ import type { Provider, FetchType, SourceConfig, AnalysisConfig, Impact, Verdict
 // pattern as the schema.js line above) — no duplicated field lists to drift.
 import type { ThreadWithStats as ThreadRow, SignalRow } from "../../server/repo/thesis.js";
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
+import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
 
@@ -115,6 +116,10 @@ export interface ModelPlan {
   finalTokens: number;
   finalAttempts: number;
   finalFallbackTokens: number;
+  finalThinking?: "enabled" | "disabled";
+  mapThinking?: "enabled" | "disabled";
+  filterThinking?: "enabled" | "disabled";
+  finalFallbackAvailable: boolean;
 }
 
 export interface DataApi {
@@ -444,9 +449,12 @@ function makeStaticApi(): DataApi {
     },
     async getModelPlan() {
       const cfg = await this.getAnalysisConfig();
-      const filter = cfg.filterModel || "deepseek-v4-flash";
+      const filter = cfg.filterModel || "deepseek-flash";
       const map = cfg.digestMapModel || filter;
-      const final = cfg.analysisModel || "deepseek-v4-pro";
+      const final = cfg.analysisModel || "deepseek-flash";
+      const filterThinking = cfg.filterThinking ?? "disabled";
+      const mapThinking = cfg.digestMapThinking ?? "disabled";
+      const finalThinking = cfg.digestFinalThinking ?? "enabled";
       return {
         provider: "openai-compatible",
         filter: { configured: filter, effective: filter, source: cfg.filterModel ? "web" : "default" },
@@ -456,9 +464,13 @@ function makeStaticApi(): DataApi {
           source: cfg.digestMapModel ? "web" : "filter",
         },
         final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
-        finalTokens: 49_152,
+        finalTokens: thinkingTokenBudget(8192, finalThinking),
+        finalThinking,
+        mapThinking,
+        filterThinking,
+        finalFallbackAvailable: final !== map || (finalThinking === "enabled" && mapThinking === "disabled"),
         finalAttempts: 1,
-        finalFallbackTokens: 8192,
+        finalFallbackTokens: thinkingTokenBudget(8192, mapThinking),
       };
     },
     async updateAnalysisConfig(cfg) {

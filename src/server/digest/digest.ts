@@ -2,6 +2,7 @@ import { and, or, gte, lt, lte, ne, eq, desc, isNull, inArray } from "drizzle-or
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
+import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import {
   hasLLM,
@@ -13,7 +14,7 @@ import {
   digestCleanupGate,
   digestFinalTokenBudget,
   digestThinkingMode,
-  DIGEST_PRO_THINKING_TOKEN_FLOOR,
+  DIGEST_FINAL_THINKING_TOKEN_FLOOR,
   newModelTrace,
   type DigestCleanupGate,
   type ModelTrace,
@@ -356,13 +357,14 @@ export interface GenerateDigestOpts {
 
 const DIGEST_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
 
-/** Thinking and final prose share max_tokens. Reserve room for both so Pro does
+/** Thinking and final prose share max_tokens. Reserve room for both so the model does
  * not spend the whole old 8K/12K cap on reasoning and return an empty report. */
-function finalMaxTokens(model: string): number {
+function finalMaxTokens(model: string, thinking?: AnalysisConfig["digestFinalThinking"]): number {
   return digestFinalTokenBudget(
     model,
     DIGEST_MAX_TOKENS(),
-    Number(process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_PRO_THINKING_TOKEN_FLOOR),
+    Number(process.env.DIGEST_FINAL_THINKING_TOKENS ?? process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_FINAL_THINKING_TOKEN_FLOOR),
+    thinking,
   );
 }
 
@@ -454,7 +456,8 @@ const MAP_SYSTEM =
   "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
 
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
-async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace): Promise<string[]> {
+async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"]): Promise<string[]> {
+  const thinking = digestThinkingMode(model, "map", configuredThinking);
   const partials = new Array<string>(chunks.length);
   const failed: number[] = [];
   const runOne = async (ci: number) => {
@@ -465,10 +468,10 @@ async function mapStage(rows: DigestItem[], chunks: number[][], model: string, t
           model,
           system: MAP_SYSTEM,
           user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
-          maxTokens: MAP_MAX_TOKENS(),
-          thinking: digestThinkingMode(model, "map"),
+          maxTokens: thinkingTokenBudget(MAP_MAX_TOKENS(), thinking),
+          thinking,
         },
-        { stage: "map", retryMaxTokens: MAP_RETRY_TOKENS() },
+        { stage: "map", retryMaxTokens: thinkingTokenBudget(MAP_RETRY_TOKENS(), thinking) },
         trace,
       );
     } catch (err) {
@@ -604,14 +607,14 @@ async function synthesizeFromFeed(
         model: finalModel,
         system,
         user,
-        maxTokens: finalMaxTokens(finalModel),
-        thinking: digestThinkingMode(finalModel, "final"),
+        maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
+        thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
       },
       {
         stage: "final",
         fallbackModel: mapModel,
-        fallbackThinking: digestThinkingMode(mapModel, "map"),
-        fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+        fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
+        fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
         retryPrimary: false,
       },
       trace,
@@ -619,7 +622,7 @@ async function synthesizeFromFeed(
   } else {
     const chunks = packChunks(rows);
     console.log(`[digest] map-reduce: ${rows.length}건 → ${chunks.length}청크 (≤${MAP_MAX_ITEMS()}건/청크)`);
-    const partials = await mapStage(rows, chunks, mapModel, trace);
+    const partials = await mapStage(rows, chunks, mapModel, trace, cfg.digestMapThinking);
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n` +
       `1차로 선별된 글 ${rows.length}건을 1단계에서 글별로 압축 정리했다(글마다 전역 번호 [N]). ` +
@@ -630,14 +633,14 @@ async function synthesizeFromFeed(
         model: finalModel,
         system,
         user,
-        maxTokens: finalMaxTokens(finalModel),
-        thinking: digestThinkingMode(finalModel, "final"),
+        maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
+        thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
       },
       {
         stage: "final",
         fallbackModel: mapModel,
-        fallbackThinking: digestThinkingMode(mapModel, "map"),
-        fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+        fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
+        fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
         retryPrimary: false,
       },
       trace,
@@ -678,14 +681,14 @@ async function synthesizeFromDigests(
       model: finalModel,
       system,
       user,
-      maxTokens: finalMaxTokens(finalModel),
-      thinking: digestThinkingMode(finalModel, "final"),
+      maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
+      thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
     },
     {
       stage: "final",
       fallbackModel: mapModel,
-      fallbackThinking: digestThinkingMode(mapModel, "map"),
-      fallbackMaxTokens: DIGEST_MAX_TOKENS(),
+      fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
+      fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
       retryPrimary: false,
     },
     trace,
@@ -781,8 +784,8 @@ export async function generateDigest(
   // A separate override lets users experiment without changing article filtering.
   const mapModel = cfg.digestMapModel || filterModel;
   const finalModel = cfg.analysisModel || ANALYSIS_MODEL();
-  // Record map/final stages separately so the UI can distinguish an intentional
-  // Flash→Pro pipeline from a Pro failure that really fell back to Flash.
+  // Record the planned stages separately from emergency fallback attempts,
+  // even when the same model is used with different thinking settings.
   const trace = newModelTrace(mapModel, finalModel);
 
   const rows = opts.fromDigests ? [] : await fetchFeedRows(start, end);
@@ -877,7 +880,7 @@ export async function runMiddayDigest(date = middayLabelDate()): Promise<DigestR
  * 21시 routine (digest part): backfill a missed 14시분, generate the 21시분
  * (오늘14시~21시), then sweep the WHOLE day window (어제21시~오늘21시) — but only
  * when the morning digest's configured final model completed without map holes.
- * Flash fallback reports are saved while their source feed is preserved.
+ * Emergency fallback reports are saved while their source feed is preserved.
  * Slot guards make this safe to re-run (boot catch-up, manual button).
  */
 export async function runDailyDigests(date = kstToday()): Promise<{

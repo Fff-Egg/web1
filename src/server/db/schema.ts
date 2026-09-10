@@ -348,6 +348,10 @@ export interface AnalysisConfig {
   /** Optional digest map/compression model. Defaults to filterModel/FILTER_MODEL. */
   digestMapModel?: string;
   analysisModel?: string;
+  /** Per-stage thinking overrides, independent of model IDs. Omit to use defaults. */
+  filterThinking?: "enabled" | "disabled";
+  digestMapThinking?: "enabled" | "disabled";
+  digestFinalThinking?: "enabled" | "disabled";
 }
 
 // ─── Relations ──────────────────────────────────────────────────────

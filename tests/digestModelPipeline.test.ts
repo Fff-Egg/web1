@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
+import { isDeepSeekV4Model, supportsDeepSeekThinking } from "../src/shared/deepseekModels.js";
 import {
   complete,
   FILTER_MODEL,
@@ -21,6 +22,7 @@ const KEYS = [
   "LLM_MODEL",
   "FILTER_MODEL",
   "LLM_EXTRA_BODY",
+  "DIGEST_FINAL_THINKING",
   "DIGEST_PRO_THINKING",
 ] as const;
 const before = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
@@ -39,13 +41,43 @@ function useDeepSeekEndpoint(): void {
   process.env.LLM_BASE_URL = "https://llm.example/v1";
   process.env.LLM_API_KEY = "test-key";
   process.env.LLM_MODEL = "deepseek-v4-flash";
+  delete process.env.DIGEST_FINAL_THINKING;
+  delete process.env.DIGEST_PRO_THINKING;
 }
+
+test("DeepSeek V4/V4.1 이름은 버전 접미사를 포함해 호환 정책 대상으로만 인식한다", () => {
+  for (const model of [
+    "deepseek-flash",
+    "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4-flash-0731",
+    "deepseek-v4.1-flash", "deepseek-v4.1-pro", "DeepSeek-V4.1-Flash-0910",
+  ]) {
+    assert.equal(isDeepSeekV4Model(model), true, model);
+  }
+  for (const model of ["deepseek-chat", "deepseek-flashlight", "deepseek-v4.2-flash", "deepseek-v4-flashlight", "qwen-2.5-32b"]) {
+    assert.equal(isDeepSeekV4Model(model), false, model);
+  }
+});
 
 test("OpenAI 호환 환경의 오래된 Claude FILTER_MODEL은 실제 LLM_MODEL로 표시된다", () => {
   useDeepSeekEndpoint();
   process.env.FILTER_MODEL = "claude-haiku-4-5-20251001";
   assert.equal(resolveModel(process.env.FILTER_MODEL), "deepseek-v4-flash");
   assert.equal(FILTER_MODEL(), "deepseek-v4-flash");
+});
+
+test("공식 DeepSeek 엔드포인트에서는 새 모델 이름도 단계 정책과 웹 설정을 따른다", () => {
+  useDeepSeekEndpoint();
+  process.env.LLM_BASE_URL = "https://api.deepseek.com/v1";
+  const model = "future-model-fixture";
+  assert.equal(digestThinkingMode(model, "map"), "disabled");
+  assert.equal(digestThinkingMode(model, "final"), "enabled");
+  assert.equal(digestThinkingMode(model, "map", "enabled"), "enabled");
+  assert.equal(digestFinalTokenBudget(model, 24576, 65536, "disabled"), 24576);
+  process.env.DIGEST_FINAL_THINKING = "0";
+  assert.equal(digestThinkingMode(model, "final", "enabled"), "enabled");
+  assert.equal(supportsDeepSeekThinking("https://api.deepseek.com.other.example", model), false);
+  process.env.LLM_BASE_URL = "https://other-provider.example/v1";
+  assert.equal(digestThinkingMode(model, "final", "enabled"), undefined);
 });
 
 test("DeepSeek V4는 반복 분석 비용을 막기 위해 thinking을 기본으로 끈다", async () => {
@@ -120,23 +152,43 @@ test("호출별 다이제스트 정책은 전역 env보다 우선한다", async 
   assert.equal(bodies[1]?.stream, true);
 });
 
-test("다이제스트는 최종 Pro만 thinking을 켜고 Flash·맵은 끈다", () => {
+test("다이제스트는 Flash/Pro 모두 최종만 thinking을 켜고 맵은 끈다", () => {
   useDeepSeekEndpoint();
-  assert.equal(digestThinkingMode("deepseek-v4-flash", "map"), "disabled");
-  assert.equal(digestThinkingMode("deepseek-v4-pro", "map"), "disabled");
-  assert.equal(digestThinkingMode("deepseek-v4-flash", "final"), "disabled");
-  assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "enabled");
+  for (const model of [
+    "deepseek-flash",
+    "deepseek-v4-flash", "deepseek-v4-pro", "deepseek-v4.1-flash", "deepseek-v4.1-pro",
+  ]) {
+    assert.equal(digestThinkingMode(model, "map"), "disabled", model);
+    assert.equal(digestThinkingMode(model, "final"), "enabled", model);
+  }
   assert.equal(digestThinkingMode("qwen-2.5-32b", "final"), undefined);
+});
 
+test("최종 thinking 중단 설정은 새 이름을 우선하고 기존 Pro 설정도 유지한다", () => {
+  useDeepSeekEndpoint();
   process.env.DIGEST_PRO_THINKING = "0";
+  assert.equal(digestThinkingMode("deepseek-v4.1-flash", "final"), "disabled");
+  assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "disabled");
+  process.env.DIGEST_FINAL_THINKING = "1";
+  assert.equal(digestThinkingMode("deepseek-v4.1-flash", "final"), "enabled");
+  assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "enabled");
+  process.env.DIGEST_FINAL_THINKING = "0";
+  process.env.DIGEST_PRO_THINKING = "1";
+  assert.equal(digestThinkingMode("deepseek-v4.1-flash", "final"), "disabled");
   assert.equal(digestThinkingMode("deepseek-v4-pro", "final"), "disabled");
 });
 
-test("단일 Pro 호출은 Railway의 옛 24,576 설정이 남아도 49,152토큰을 확보한다", () => {
+test("최종 thinking 호출은 Flash도 49,152토큰을 확보하고 더 큰 설정을 존중한다", () => {
   useDeepSeekEndpoint();
+  assert.equal(digestFinalTokenBudget("deepseek-flash", 24_576, 24_576), 49_152);
   assert.equal(digestFinalTokenBudget("deepseek-v4-pro", 8192, 24_576), 49_152);
   assert.equal(digestFinalTokenBudget("deepseek-v4-pro", 8192, 65_536), 65_536);
-  assert.equal(digestFinalTokenBudget("deepseek-v4-flash", 8192, 65_536), 8192);
+  assert.equal(digestFinalTokenBudget("deepseek-v4-flash", 8192), 49_152);
+  assert.equal(digestFinalTokenBudget("deepseek-v4.1-flash", 8192, 24_576), 49_152);
+  assert.equal(digestFinalTokenBudget("deepseek-v4.1-flash", 8192, 65_536), 65_536);
+  assert.equal(digestFinalTokenBudget("qwen-2.5-32b", 8192, 65_536), 8192);
+  process.env.DIGEST_FINAL_THINKING = "0";
+  assert.equal(digestFinalTokenBudget("deepseek-v4.1-flash", 8192, 65_536), 8192);
 });
 
 test("본문이 있어도 finish_reason=length면 잘린 결과를 성공으로 저장하지 않는다", async () => {
@@ -295,6 +347,88 @@ test("최종 Pro는 한 번만 시도하고 실패 이유를 남긴 뒤 즉시 F
       { phase: "initial", model: "deepseek-v4-pro", kind: "unknown" },
     ],
   );
+});
+
+test("같은 Flash 모델도 최종 thinking 실패 후 OFF 폴백은 한 번 허용하고 피드 정리는 보류한다", async () => {
+  useDeepSeekEndpoint();
+  const model = "deepseek-flash";
+  const calls: Array<{ model: string; thinking?: "enabled" | "disabled"; maxTokens?: number }> = [];
+  const invoke: CompleteFn = async (opts) => {
+    calls.push({ model: opts.model, thinking: opts.thinking, maxTokens: opts.maxTokens });
+    if (opts.thinking === "enabled") throw new Error("fetch failed: ECONNRESET");
+    return "thinking OFF 완성본";
+  };
+  const trace = newModelTrace(model, model);
+  const result = await completeDigestStage(
+    {
+      model, system: "s", user: "u",
+      maxTokens: digestFinalTokenBudget(model, 8192),
+      thinking: digestThinkingMode(model, "final"),
+    },
+    {
+      stage: "final", fallbackModel: model, fallbackThinking: "disabled",
+      fallbackMaxTokens: 8192, retryPrimary: false,
+    },
+    trace,
+    invoke,
+  );
+
+  assert.equal(result, "thinking OFF 완성본");
+  assert.deepEqual(calls, [
+    { model, thinking: "enabled", maxTokens: 49_152 },
+    { model, thinking: "disabled", maxTokens: 8192 },
+  ]);
+  assert.deepEqual(trace.stages.final.used, [model]);
+  assert.equal(trace.stages.final.attempts, 2);
+  assert.equal(trace.stages.final.retries, 0);
+  assert.equal(trace.stages.final.fallbacks, 1);
+  assert.equal(trace.stages.final.failures, 0);
+  assert.equal(trace.stages.final.errors[0]?.thinking, "enabled");
+  assert.equal(trace.stages.final.errors[0]?.kind, "network");
+  assert.deepEqual(digestCleanupGate(trace), { eligible: false, reason: "final_fallback" });
+});
+
+test("동일 모델 폴백은 명시적인 thinking ON→OFF 전환이 없으면 중복 호출하지 않는다", async () => {
+  useDeepSeekEndpoint();
+  const model = "deepseek-flash";
+  for (const [thinking, fallbackThinking] of [
+    ["enabled", "enabled"], ["disabled", "disabled"],
+    [undefined, "disabled"], ["enabled", undefined],
+  ] as const) {
+    const trace = newModelTrace(model, model);
+    let calls = 0;
+    await assert.rejects(completeDigestStage(
+      { model, system: "s", user: "u", thinking },
+      { stage: "final", fallbackModel: model, fallbackThinking, retryPrimary: false },
+      trace,
+      async () => { calls++; throw new Error("no same-mode retry"); },
+    ), /no same-mode retry/);
+    assert.equal(calls, 1);
+    assert.equal(trace.stages.final.attempts, 1);
+    assert.equal(trace.stages.final.retries, 0);
+    assert.equal(trace.stages.final.fallbacks, 0);
+    assert.equal(trace.stages.final.failures, 1);
+  }
+});
+
+test("같은 Flash의 thinking OFF 폴백도 실패하면 추가 호출 없이 실패 두 건을 보존한다", async () => {
+  useDeepSeekEndpoint();
+  const model = "deepseek-flash";
+  const trace = newModelTrace(model, model);
+  const thinkingModes: Array<"enabled" | "disabled" | undefined> = [];
+  await assert.rejects(completeDigestStage(
+    { model, system: "s", user: "u", thinking: digestThinkingMode(model, "final") },
+    { stage: "final", fallbackModel: model, fallbackThinking: "disabled", retryPrimary: false },
+    trace,
+    async (opts) => { thinkingModes.push(opts.thinking); throw new Error("unavailable"); },
+  ), /unavailable/);
+  assert.deepEqual(thinkingModes, ["enabled", "disabled"]);
+  assert.equal(trace.stages.final.attempts, 2);
+  assert.equal(trace.stages.final.retries, 0);
+  assert.equal(trace.stages.final.fallbacks, 0);
+  assert.equal(trace.stages.final.failures, 1);
+  assert.deepEqual(trace.stages.final.errors.map((error) => error.phase), ["initial", "fallback"]);
+  assert.deepEqual(digestCleanupGate(trace), { eligible: false, reason: "final_incomplete" });
 });
 
 test("다이제스트 실패 사유를 화면용 범주로 분류한다", () => {

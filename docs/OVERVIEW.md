@@ -159,7 +159,7 @@ MEGA 배지  = VIX ≥ 40
 1. **수집** (`workers/collect.ts` collectAll): 소스별 어댑터로 fetch → `articles` upsert. 같은 (source,url) 글은 삭제됐어도 재생성 안 함(불안정 GUID 부활 차단). X=쿠키 직접수집, 텔레그램=MTProto 배치(커서 lastMessageId).
 2. **1차 분석** (`analysis/analyze.ts` filterRelevant): LLM 1콜로 섹터 비편향 관련성·중요도·요약 + 논지 신호 동시 산출. 활성 스레드는 필터가 아닌 사후 태그로만 사용. 한국어 강제·fail-open. 본문 미수집 shell은 LLM 판정 전에 원문확인함으로 보존. 배치(50)×동시성(3), 429 감지 시 사이클 중단 후 재개.
 3. **피드백 학습** (`feedback.ts` refreshGuidance): 사용자 액션(휴지통=중요↓/남기기·복원=중요↑)만 `filter_feedback`에 기록. 경계 루틴에서 새 피드백만 distill해 '학습 메모'에 누적 통합 → 1차 필터 중요도에만 재주입(관련성 게이트 불변).
-4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+조건부 하루 sweep+피드백 distill) · 낮분(코드 기본 17시, 2026-09-09 운영 14시). 창 글 30건 초과면 **Flash(기본=필터 모델)**로 크기 균형 청크를 사실 위주 압축한 뒤 **Pro(분석 모델)**가 최종 연결·작성한다. 최종 Pro는 Thinking ON·최소 49,152 토큰으로 **1회만** 호출하고, 실패하면 원인을 기록한 뒤 같은 Pro 재시도 없이 Flash로 폴백한다. 명시적으로 Thinking을 켠 최종 DeepSeek Pro는 SSE로 수신하고 정상 종료와 완성 본문을 확인한 뒤 저장한다. Flash 폴백본은 보존하며 원문 피드 정리는 성공 조건에 따라 보류한다. 전역 각주 [N] 유지. [N] 인용을 각주 링크로(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
+4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+조건부 하루 sweep+피드백 distill) · 낮분(코드 기본 17시, 현재 운영 14시). 큰 창은 자료 정리 모델로 청크 압축 후 최종 모델로 종합한다. 2026-09-10 사용자가 세 모델 모두 **`deepseek-flash`(V4.1 Flash)**로 저장했다. 공식 DeepSeek 엔드포인트에서는 모델 이름과 무관하게 **선별 OFF·정리 OFF·최종 ON**을 기본으로 적용하며 Settings에서 단계별 Thinking을 바꿀 수 있다. 최종 ON은 SSE·최소 49,152의 최대 토큰 설정으로 1회 실행한다(고정 사용량 아님). 실패하면 자료 정리 설정으로 최대 1회 대체하며 동일 ID는 ON→OFF 전환일 때만 허용한다. 부분 응답은 폐기하고 대체본의 원문 피드 정리는 보류한다. 전역 각주 [N] 유지. [N]은 각주 링크로 연결(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
 
 ---
 
@@ -226,3 +226,10 @@ CLAUDE.md             — 전체 인수인계(가장 상세)
 기준 배포 `cc02628`의 14시 자동본에서 HTTP 200 뒤 약 4분 동안 4바이트/4청크만 받고 `ECONNRESET`이 발생한 것을 확인했다. 이는 비스트리밍 대기 중 연결 유지용 빈 줄만 수신한 패턴과 부합한다. 사용량·종료 사유를 못 받았으므로 토큰 부족으로 단정할 수 없고, 연결을 끊은 네트워크 구간도 확인되지 않았다.
 
 앱은 명시적인 Thinking ON DeepSeek Pro(현재 최종 단계)에만 SSE를 자동 적용하고 `firstReasoningMs`·`firstContentMs`·`streamCompleted`를 계측한다. 다른 호출에 사용자가 명시한 `LLM_EXTRA_BODY.stream=true`도 존중한다. 부분 본문은 실패 시 버리고 `stop` + `[DONE]` + 비어 있지 않은 본문을 모두 확인한 결과만 저장한다. 모델·예산·Pro 1회 후 Flash 폴백·운영 시각은 유지하며, 자동 분석 직렬화나 추가 Pro 재시도는 넣지 않는다. 자동/수동은 모델 정책이 같지만 화면에서 비교한 기간은 각각 07~14시와 07시~다음날07시로 다르다. 로컬 테스트 129/129·타입 검사·빌드·diff 검사 및 별도 코드 검토는 통과했으며, 배포 및 다음 14시 자동 실행의 실서버 검증은 대기 중이다. 자세한 실측과 한계는 [LLM_DIAGNOSTICS.md](LLM_DIAGNOSTICS.md) 참조.
+
+
+### 2026-09-10: V4.1 Flash 및 모델과 독립적인 Thinking 설정
+
+정식 모델 이름은 `deepseek-flash`이며 기존 V4 Flash 이름도 V4.1 Flash로 연결된다([공식 요금표](https://api-docs.deepseek.com/quick_start/pricing/)). 사용자가 웹 Settings에 세 모델을 모두 새 이름으로 저장했다. 모델 설정 아래에 선별·정리·최종 Thinking 선택을 추가했다. 웹에서 명시한 ON/OFF가 기본값보다 우선하며, 모델 이름만 바꿔도 선택은 유지된다. 공식 `api.deepseek.com`에서는 새 모델 이름도 같은 Thinking 프로토콜로 처리한다. 다른 제공자는 호환성을 확인한 경우만 적용한다.
+
+새 저장 필드는 `filterThinking`, `digestMapThinking`, `digestFinalThinking`이고 기존 settings JSON에 들어가므로 SQL 마이그레이션은 없다. 미설정 최종 기본값은 `DIGEST_FINAL_THINKING` → 기존 `DIGEST_PRO_THINKING` → ON 순서다. 최대 토큰 변수도 새 `DIGEST_FINAL_THINKING_TOKENS` → 기존 `_PRO_` 순서를 유지한다. ON으로 바꾼 선별·자료 정리에도 생각 토큰 여유를 확보하며, 기본 OFF는 기존 예산을 유지한다. 자동 07시/14시는 바꾸지 않았다. 실제 호출·실패/대체·화면 정책은 테스트로 확인하고 배포는 커밋 Railway 상태와 공개 health revision으로 검증한다.
