@@ -1,0 +1,257 @@
+import WebSocket from "ws";
+import type { BreadthQuote, SeriesPoint, OHLC } from "../../shared/market.js";
+import { sliceLastYear } from "../../shared/market.js";
+
+/**
+ * TradingView breadth (S5FI / NDFI) via the public chart-history WebSocket.
+ *
+ * These symbols come from a barchart EOD feed and are NOT served by the
+ * scanner.tradingview.com REST endpoint (it returns 0 rows), but the chart
+ * WebSocket exposes ~1 year of daily bars to anonymous sessions. The handshake
+ * REQUIRES an `Origin: https://www.tradingview.com` header (a plain WS connect
+ * is refused with a non-101 status), so we use the `ws` library rather than the
+ * global WebSocket (which can't set request headers).
+ *
+ * We pull the daily series for the charts and derive the "current" quote
+ * (value + day-over-day change) from the last two bars, so the number on the
+ * card and the line on the chart always agree.
+ *
+ * Wire protocol: messages are framed as `~m~<len>~m~<json>`; heartbeats look
+ * like `~m~<len>~m~~h~<n>` and must be echoed back verbatim.
+ */
+const WS_URL = "wss://data.tradingview.com/socket.io/websocket?from=chart%2F";
+
+const BARS = 1300; // ~5 trading years of daily bars (for the 월/년 timeframes).
+
+/**
+ * Anonymous TradingView sessions rate-limit / refuse when too many connections
+ * open at once. A single market snapshot fans out ~9 symbol fetches in parallel
+ * (breadth S5FI/NDFI + custom + 4 liquidity series + KOSPI + VKOSPI); firing them
+ * all together starved the losers of the race, which came back empty — that's why
+ * TGA·VKOSPI showed "데이터 없음". Gate every connection through a small semaphore
+ * so at most TV_MAX open at once. The batch takes a few seconds longer, but every
+ * series lands reliably.
+ */
+const TV_MAX = 3;
+let tvActive = 0;
+const tvWaiters: Array<() => void> = [];
+function tvAcquire(): Promise<void> {
+  if (tvActive < TV_MAX) {
+    tvActive++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((res) => tvWaiters.push(res));
+}
+function tvRelease(): void {
+  tvActive--;
+  const next = tvWaiters.shift();
+  if (next) {
+    tvActive++;
+    next();
+  }
+}
+
+function frame(m: string, p: unknown[]): string {
+  const j = JSON.stringify({ m, p });
+  return `~m~${j.length}~m~${j}`;
+}
+
+/** Split a raw socket message into its individual `~m~<len>~m~` payloads. */
+function payloads(raw: string): string[] {
+  const out: string[] = [];
+  const re = /~m~(\d+)~m~/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(raw)) !== null) {
+    const len = Number(match[1]);
+    const start = re.lastIndex;
+    out.push(raw.slice(start, start + len));
+    re.lastIndex = start + len;
+  }
+  return out;
+}
+
+export interface BreadthSeries {
+  quote: BreadthQuote | null;
+  history: SeriesPoint[];
+}
+
+export interface BreadthResult {
+  s5fi: BreadthSeries;
+  ndfi: BreadthSeries;
+}
+
+/** A symbol's series + its resolved display name + canonical symbol. */
+export interface SymbolSeries extends BreadthSeries {
+  /** Human description, e.g. "Apple Inc.". */
+  name: string | null;
+  /** Canonical TradingView symbol the input resolved to, e.g. "NASDAQ:AAPL".
+   *  Lets the user type a bare ticker ("aapl") and we store the full symbol. */
+  resolved: string | null;
+}
+
+interface Bar {
+  v: number[]; // [time(s), open, high, low, close, volume]
+}
+
+/** Turn raw TradingView bars into a daily close series + a derived quote. */
+function toSeries(bars: Bar[] | undefined): BreadthSeries {
+  if (!bars || bars.length === 0) return { quote: null, history: [] };
+  const history = sliceLastYear(
+    bars
+      .filter((b) => Array.isArray(b.v) && typeof b.v[0] === "number" && typeof b.v[4] === "number")
+      .map((b) => ({ t: b.v[0] * 1000, v: Math.round(b.v[4] * 100) / 100 })),
+  );
+  let quote: BreadthQuote | null = null;
+  if (history.length > 0) {
+    const last = history[history.length - 1].v;
+    const prev = history.length > 1 ? history[history.length - 2].v : null;
+    quote = {
+      value: last,
+      change: prev !== null ? Math.round((last - prev) * 100) / 100 : null,
+      changePct: prev ? Math.round(((last - prev) / prev) * 10000) / 100 : null,
+    };
+  }
+  return { quote, history };
+}
+
+interface RawSymbol {
+  bars: Bar[];
+  name: string | null;
+  resolved: string | null;
+}
+
+/**
+ * Fetch daily bars + resolved name for ONE symbol. An anonymous chart session
+ * is limited to a single series ("exceed limit of series in the session"), so
+ * each symbol gets its own short-lived connection; callers run them in parallel.
+ * Every call goes through the TV_MAX semaphore so a snapshot's parallel fans-out
+ * don't all open at once (see tvAcquire).
+ */
+async function fetchBars(symbol: string, timeoutMs: number, resolution = "1D", count = BARS): Promise<RawSymbol> {
+  await tvAcquire();
+  try {
+    return await fetchBarsRaw(symbol, timeoutMs, resolution, count);
+  } finally {
+    tvRelease();
+  }
+}
+
+/** The raw connection (never rejects — resolves on data/error/close/timeout). */
+function fetchBarsRaw(symbol: string, timeoutMs: number, resolution: string, count: number): Promise<RawSymbol> {
+  return new Promise((resolve) => {
+    let bars: Bar[] = [];
+    let name: string | null = null;
+    let resolved: string | null = null;
+    let settled = false;
+
+    const ws = new WebSocket(WS_URL, {
+      headers: { Origin: "https://www.tradingview.com", "User-Agent": "Mozilla/5.0" },
+    });
+
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.close();
+      } catch {
+        /* already closing */
+      }
+      resolve({ bars, name, resolved });
+    };
+    const timer = setTimeout(finish, timeoutMs);
+
+    ws.on("open", () => {
+      const cs = `cs_${Math.random().toString(36).slice(2, 12)}`;
+      ws.send(frame("set_auth_token", ["unauthorized_user_token"]));
+      ws.send(frame("chart_create_session", [cs, ""]));
+      ws.send(frame("resolve_symbol", [cs, "sym1", `={"symbol":"${symbol}","adjustment":"splits"}`]));
+      ws.send(frame("create_series", [cs, "s1", "s1", "sym1", resolution, count, ""]));
+    });
+
+    ws.on("message", (data) => {
+      const raw = data.toString();
+      if (raw.includes("~h~")) {
+        ws.send(raw);
+        return;
+      }
+      for (const part of payloads(raw)) {
+        if (!part || part.startsWith("~h~")) continue;
+        try {
+          const o = JSON.parse(part) as { m?: string; p?: unknown[] };
+          if (o.m === "symbol_resolved") {
+            const info = o.p?.[2] as { description?: string; short_name?: string; pro_name?: string } | undefined;
+            name = info?.description ?? info?.short_name ?? null;
+            resolved = info?.pro_name ?? null;
+          } else if (o.m === "symbol_error" || o.m === "series_error") {
+            finish(); // invalid symbol — bail fast (empty bars)
+          } else if (o.m === "timescale_update" && o.p) {
+            const upd = o.p[1] as Record<string, { s?: Bar[] }>;
+            if (upd.s1?.s && upd.s1.s.length) {
+              bars = upd.s1.s;
+              finish();
+            }
+          }
+        } catch {
+          /* control frame */
+        }
+      }
+    });
+
+    ws.on("error", finish);
+    ws.on("close", finish);
+  });
+}
+
+export async function fetchBreadth(timeoutMs = 22_000): Promise<BreadthResult> {
+  const [s5, nd] = await Promise.all([
+    fetchBars("INDEX:S5FI", timeoutMs),
+    fetchBars("INDEX:NDFI", timeoutMs),
+  ]);
+  return { s5fi: toSeries(s5.bars), ndfi: toSeries(nd.bars) };
+}
+
+/** Fetch an arbitrary TradingView symbol (for the user-configurable slot). */
+export async function fetchSymbol(symbol: string, timeoutMs = 22_000): Promise<SymbolSeries> {
+  const { bars, name, resolved } = await fetchBars(symbol, timeoutMs);
+  return { ...toSeries(bars), name, resolved };
+}
+
+/**
+ * Raw daily closes for any symbol (e.g. "FRED:WALCL") — no rounding, no year
+ * slicing; for collectors that post-process units themselves (liquidity.ts).
+ * Empty array = unreachable / unknown symbol (fetchBars never rejects).
+ */
+export async function fetchCloses(symbol: string, timeoutMs = 22_000): Promise<SeriesPoint[]> {
+  const { bars } = await fetchBars(symbol, timeoutMs);
+  return bars
+    .filter((b) => Array.isArray(b.v) && typeof b.v[0] === "number" && typeof b.v[4] === "number")
+    .map((b) => ({ t: b.v[0] * 1000, v: b.v[4] }));
+}
+
+export interface CandleResult {
+  /** Canonical symbol it resolved to (e.g. "NASDAQ:AAPL"), or the input. */
+  resolved: string | null;
+  name: string | null;
+  candles: OHLC[];
+}
+
+/** Fetch OHLC candles for a symbol at a given TradingView resolution. */
+export async function fetchCandles(
+  symbol: string,
+  resolution: string,
+  count: number,
+  timeoutMs = 22_000,
+): Promise<CandleResult> {
+  const { bars, name, resolved } = await fetchBars(symbol, timeoutMs, resolution, count);
+  const candles: OHLC[] = bars
+    .filter((b) => Array.isArray(b.v) && b.v.length >= 5 && b.v.slice(0, 5).every((x) => typeof x === "number"))
+    .map((b) => ({
+      t: b.v[0] * 1000,
+      o: b.v[1],
+      h: b.v[2],
+      l: b.v[3],
+      c: b.v[4],
+    }));
+  return { resolved, name, candles };
+}

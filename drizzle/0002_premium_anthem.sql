@@ -1,0 +1,1 @@
+ALTER TABLE `analyses` ADD `full_text` text;
