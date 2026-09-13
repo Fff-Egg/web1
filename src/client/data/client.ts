@@ -9,6 +9,7 @@ import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
+import type { ArticleContentMeta } from "../../shared/articleContent.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -56,6 +57,9 @@ export interface FeedItem {
   sourceLabel: string | null;
   provider: string;
   body?: string | null;
+  contentMeta?: ArticleContentMeta | null;
+  readingReady?: boolean;
+  readingSummary?: string | null;
   summary: string | null;
   implications: string | null;
   fullText: string | null;
@@ -141,6 +145,7 @@ export interface DataApi {
   setFilterGuidance(text: string): Promise<void>;
   listFeed(filter?: FeedFilter): Promise<FeedItem[]>;
   getFeedItem(id: number): Promise<FeedItem | null>;
+  refreshFeedContent(id: number): Promise<void>;
   feedCounts(): Promise<{ important: number; low: number; sourceReview: number; saved: number; telegram: number }>;
   trashFeed(): Promise<FeedItem[]>;
   deleteFeedItem(id: number): Promise<void>;
@@ -303,6 +308,7 @@ function makeTrpcApi(): DataApi {
     },
     listFeed: (filter) => client.feed.list.query(filter ?? {}) as Promise<FeedItem[]>,
     getFeedItem: (id) => client.feed.get.query({ id }) as Promise<FeedItem | null>,
+    refreshFeedContent: async (id) => { await client.feed.refreshContent.mutate({ id }); },
     feedCounts: () =>
       client.feed.counts.query() as Promise<{
         important: number;
@@ -492,6 +498,7 @@ function makeStaticApi(): DataApi {
     async getFeedItem(id) {
       return [...loadSavedFeed(), ...SAMPLE_FEED].find((x) => x.id === id) ?? null;
     },
+    async refreshFeedContent() {},
     async feedCounts() {
       const all = [...loadSavedFeed(), ...SAMPLE_FEED];
       const transient = all.filter((x) => !x.saved && x.provider !== "telegram" && !x.needsSourceReview);

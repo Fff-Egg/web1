@@ -82,6 +82,7 @@ export const telegramAdapter: SourceAdapter = {
         url: typeof ref === "string" ? `https://t.me/${ref}/${maxId}` : null,
         title: `텔레그램 ${name} — 메시지 ${fresh.length}건`,
         body,
+        linkedUrls: fresh.flatMap(m => (m.entities ?? []).flatMap(e => "url" in e && typeof e.url === "string" ? [e.url] : [])),
         author: name,
         publishedAt: last.date ? new Date(last.date * 1000) : null,
       },

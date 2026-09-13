@@ -5,6 +5,8 @@ import { db, hasDb } from "../../db/client.js";
 import { articles, analyses, sources, IMPACTS } from "../../db/schema.js";
 import { feedbackRepo } from "../../repo/feedback.js";
 import { currentWindowStart } from "../../digest/digest.js";
+import { prepareStoredArticle } from "../../repo/articleContent.js";
+import { settingsRepo } from "../../repo/settings.js";
 
 const feedSelect = {
   id: articles.id,
@@ -12,6 +14,8 @@ const feedSelect = {
   url: articles.url,
   // Only carry the full body for telegram (no original link); keeps the feed light.
   body: sql<string | null>`CASE WHEN ${sources.provider} = 'telegram' THEN ${articles.body} ELSE NULL END`,
+  contentMeta: articles.contentMeta,
+  readingReady: sql<boolean>`JSON_EXTRACT(${articles.readingCache}, '$.completedAt') IS NOT NULL`,
   author: articles.author,
   publishedAt: articles.publishedAt,
   addedAt: analyses.createdAt,
@@ -105,7 +109,8 @@ export const feedRouter = router({
     .query(async ({ input }) => {
       if (!hasDb) return null;
       const [row] = await db
-        .select(feedSelect)
+        .select({ ...feedSelect, body: articles.body,
+          readingSummary: sql<string | null>`JSON_UNQUOTE(JSON_EXTRACT(${articles.readingCache}, '$.text'))` })
         .from(analyses)
         .innerJoin(articles, eq(analyses.articleId, articles.id))
         .innerJoin(sources, eq(articles.sourceId, sources.id))
@@ -119,6 +124,11 @@ export const feedRouter = router({
         .limit(1);
       return row ?? null;
     }),
+
+  refreshContent: publicProcedure.input(z.object({ id: z.number().int().positive() })).mutation(async ({ input }) => {
+    await prepareStoredArticle(input.id, await settingsRepo.getAnalysisConfig(), true);
+    return { ok: true };
+  }),
 
   /** Counts per bucket for the tab badges. important/low mirror the Feed page
    *  (⭐saved excluded; telegram only counts while in the current day window);
@@ -203,7 +213,7 @@ export const feedRouter = router({
         .limit(1);
       if (!a) return { ok: true };
       await db.delete(analyses).where(eq(analyses.articleId, input.id));
-      await db.update(articles).set({ body: null }).where(eq(articles.id, input.id));
+      await db.update(articles).set({ body: null, sourceBody: null, contentMeta: null, readingCache: null }).where(eq(articles.id, input.id));
       return { ok: true };
     }),
 
@@ -279,7 +289,7 @@ export const feedRouter = router({
       const ids = rows.map((r) => r.id);
       if (ids.length === 0) return { ok: true };
       await db.delete(analyses).where(inArray(analyses.articleId, ids));
-      await db.update(articles).set({ body: null }).where(inArray(articles.id, ids));
+      await db.update(articles).set({ body: null, sourceBody: null, contentMeta: null, readingCache: null }).where(inArray(articles.id, ids));
       return { ok: true };
     }),
   /** Empty the feed trash — tombstone each (drop analysis + body, keep the row for dedup). */
@@ -289,7 +299,7 @@ export const feedRouter = router({
     const ids = rows.map((r) => r.id);
     if (ids.length === 0) return { ok: true };
     await db.delete(analyses).where(inArray(analyses.articleId, ids));
-    await db.update(articles).set({ body: null }).where(isNotNull(articles.deletedAt));
+    await db.update(articles).set({ body: null, sourceBody: null, contentMeta: null, readingCache: null }).where(isNotNull(articles.deletedAt));
     return { ok: true };
   }),
 });

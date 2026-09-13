@@ -1,9 +1,10 @@
 import "dotenv/config";
-import { and, eq } from "drizzle-orm";
+import { and, or, eq, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { sources, articles } from "../db/schema.js";
 import type { Source } from "../db/schema.js";
 import { getAdapter, SessionRequiredError } from "../adapters/index.js";
+import { enrichArticle } from "../adapters/fullText.js";
 
 /**
  * Collection worker. Iterates every enabled source, resolves the adapter for
@@ -48,15 +49,16 @@ export async function collectSource(source: Source): Promise<number> {
   if (items.length === 0) return 0;
 
   let inserted = 0;
+  const pending: typeof items = [];
   for (const item of items) {
     // Skip if a same-URL article already exists for this source — even if it was
     // deleted. Prevents sources with unstable feed GUIDs (some RSS bridges) from
     // re-creating (and thus resurrecting deleted) items on each collection.
-    if (item.url) {
+    {
       const [existing] = await db
         .select({ id: articles.id })
         .from(articles)
-        .where(and(eq(articles.sourceId, source.id), eq(articles.url, item.url)))
+        .where(and(eq(articles.sourceId, source.id), or(eq(articles.externalId, item.externalId), item.url ? eq(articles.url, item.url) : undefined)))
         .limit(1);
       if (existing) continue;
     }
@@ -68,14 +70,28 @@ export async function collectSource(source: Source): Promise<number> {
         externalId: item.externalId,
         url: item.url ?? null,
         title: item.title ?? null,
+        // Save the provider body before any slow linked-page fetch. If the
+        // process restarts, analysis can resume enrichment from this row.
         body: item.body ?? null,
+        sourceBody: item.body ?? null,
+        contentMeta: { version: 1, status: "unknown", method: "feed", pending: true,
+          checkedAt: new Date().toISOString(), links: [], sourceUrls: item.linkedUrls },
         author: item.author ?? null,
         publishedAt: item.publishedAt ?? null,
       })
       .onDuplicateKeyUpdate({ set: { sourceId: source.id } }); // no-op touch
     // mysql2 returns affectedRows: 1 for insert, 2 for update, 0 for unchanged dup
-    const affected = (res as unknown as { rowsAffected?: number }[])[0]?.rowsAffected;
-    if (affected === 1) inserted++;
+    if (res[0].affectedRows === 1) {
+      inserted++;
+      pending.push(item);
+    }
+  }
+  // Persist the whole fetched batch (including hidden/expanded links) before
+  // any slow enrichment; cursor-based sources can then resume from the DB.
+  for (const item of pending) {
+    const enriched = await enrichArticle(item, source);
+    await db.update(articles).set({ body: enriched.body ?? null, contentMeta: enriched.contentMeta, readingCache: null })
+      .where(and(eq(articles.sourceId, source.id), eq(articles.externalId, item.externalId), isNull(articles.deletedAt)));
   }
   return inserted;
 }

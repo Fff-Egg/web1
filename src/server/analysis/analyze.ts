@@ -20,9 +20,8 @@ import {
 } from "../../shared/analysis.js";
 import { needsSourceReview, sourceReviewSummary } from "../../shared/sourceReview.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
+import { prepareStoredArticle } from "../repo/articleContent.js";
 
-// Cap body length sent to the model (cuts token cost). Tune via env.
-const MAX_BODY_CHARS = Number(process.env.MAX_BODY_CHARS ?? 5_000);
 // Articles analyzed per pass, and how many LLM calls run concurrently within a
 // pass. Raise ANALYZE_BATCH (and/or ANALYZE_CONCURRENCY) to drain a backlog
 // faster; lower if the provider rate-limits. Throughput/hr ≈ BATCH × (60/COLLECT_INTERVAL_MIN).
@@ -36,15 +35,6 @@ export function analysisBatchSize(): number {
 /** Rate-limit / quota errors (e.g. Groq free-tier daily token cap). */
 function isRateLimit(msg: string): boolean {
   return msg.includes("429") || /rate limit|quota|TPD|tokens per day/i.test(msg);
-}
-
-// ⚠️ 이모지 등 서로게이트 페어를 한가운데서 자르면 반쪽(lone surrogate)이 남아
-// LLM API의 엄격한 JSON 파서가 400(unexpected end of hex escape)을 낸다. 한 칸 당겨 자른다.
-function clip(s: string | null | undefined, n: number): string {
-  if (!s) return "";
-  if (s.length <= n) return s;
-  const c = s.charCodeAt(n - 1);
-  return s.slice(0, c >= 0xd800 && c <= 0xdbff ? n - 1 : n);
 }
 
 /** True if the text contains Hangul (i.e., it's actually Korean). */
@@ -233,8 +223,7 @@ export async function filterRelevant(
     (threads.length > 0 ? THESIS_OUTPUT : "") +
     `}`;
   // Give the summarizer enough of the (possibly batched) body to summarize well.
-  const bodyChars = Number(process.env.FILTER_BODY_CHARS ?? 4000);
-  const user = `제목: ${article.title ?? ""}\n원문 URL: ${article.url ?? ""}\n본문:\n${clip(article.body, bodyChars)}`;
+  const user = `제목: ${article.title ?? ""}\n원문 URL: ${article.url ?? ""}\n본문 또는 전체 구간 요약:\n${article.body ?? ""}`;
   const filterModel = cfg.filterModel || FILTER_MODEL();
   const thinking = supportsThinkingControl(filterModel) ? cfg.filterThinking ?? "disabled" : undefined;
   const text = await complete({
@@ -279,7 +268,7 @@ export async function filterRelevant(
       const re = await complete({
         model: cfg.filterModel || FILTER_MODEL(),
         system: "너는 한국어 요약가다. 반드시 한국어로만 2~3문장 요약한다. 중국어·일본어는 절대 쓰지 않는다.",
-        user: `다음 글을 한국어로만 2~3문장으로 요약:\n${clip(article.body, bodyChars)}`,
+        user: `다음 글을 한국어로만 2~3문장으로 요약:\n${article.body ?? ""}`,
         maxTokens: 400,
         thinking: "disabled",
       });
@@ -309,7 +298,7 @@ export async function deepAnalyze(
   const user =
     `제목: ${article.title ?? ""}\n` +
     `출처: ${article.url ?? ""}\n\n` +
-    `본문:\n${clip(article.body, MAX_BODY_CHARS)}`;
+    `본문 또는 전체 구간 요약:\n${article.body ?? ""}`;
   const text = await complete({
     model: cfg.analysisModel || ANALYSIS_MODEL(),
     system,
@@ -380,13 +369,15 @@ export async function runAnalysis(
   const processOne = async (article: Article): Promise<void> => {
     if (rateLimited) return;
     try {
+      const prepared = await prepareStoredArticle(article.id, cfg);
+      const analysisArticle = needsSourceReview(prepared.article) ? prepared.article : { ...prepared.article, body: prepared.text };
       const {
         relevant: isRelevant,
         important,
         needsSourceReview: sourceReview,
         summary,
         thesis,
-      } = await filterRelevant(article, cfg, guidance, threadList);
+      } = await filterRelevant(analysisArticle, cfg, guidance, threadList);
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
@@ -397,7 +388,7 @@ export async function runAnalysis(
         return;
       }
       // 1st-pass pick (with its summary). Deep analysis only when enabled.
-      const deep = deepPerArticle && !sourceReview ? await deepAnalyze(article, cfg) : null;
+      const deep = deepPerArticle && !sourceReview ? await deepAnalyze(analysisArticle, cfg) : null;
       await db.insert(analyses).values({
         articleId: article.id,
         relevant: true,

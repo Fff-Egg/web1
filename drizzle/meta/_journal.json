@@ -99,6 +99,13 @@
       "when": 1787565600000,
       "tag": "0013_promote_substantive_low",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "5",
+      "when": 1789257600000,
+      "tag": "0014_full_article_reading",
+      "breakpoints": true
     }
   ]
 }

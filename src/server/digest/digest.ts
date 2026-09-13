@@ -4,6 +4,8 @@ import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { settingsRepo } from "../repo/settings.js";
+import { prepareStoredArticle } from "../repo/articleContent.js";
+import { readWholeArticle } from "../analysis/fullReading.js";
 import {
   hasLLM,
   ANALYSIS_MODEL,
@@ -209,20 +211,6 @@ interface DigestItem {
   themes: string[] | null;
 }
 
-// ⚠️ 이모지 등 서로게이트 페어를 한가운데서 자르면 반쪽(lone surrogate)이 남아
-// LLM API의 엄격한 JSON 파서가 400(unexpected end of hex escape)을 낸다. 한 칸 당겨 자른다.
-function clip(s: string | null | undefined, n: number): string {
-  if (!s) return "";
-  if (s.length <= n) return s;
-  const end = isHighSurrogate(s.charCodeAt(n - 1)) ? n - 1 : n;
-  return s.slice(0, end) + "…";
-}
-
-/** UTF-16 상위 서로게이트(페어의 앞쪽 절반) 여부. */
-function isHighSurrogate(c: number): boolean {
-  return c >= 0xd800 && c <= 0xdbff;
-}
-
 /** Escape text for safe interpolation into raw HTML (digest renders via dangerouslySetInnerHTML). */
 function escHtml(s: string): string {
   return s
@@ -381,13 +369,9 @@ const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 800
 const MAP_RETRY_TOKENS = (): number =>
   Number(process.env.DIGEST_MAP_RETRY_TOKENS ?? MAP_MAX_TOKENS() * 2);
 const MAP_CONCURRENCY = 3;
-/** Chars of each pick's body sent to the map/synthesis prompt. Raise to feed
- *  more of long articles (their conclusions/numbers sit past the cut). */
-const ITEM_BODY_CHARS = (): number => Number(process.env.DIGEST_ITEM_CHARS ?? 2500);
-
-/** Content size of one item as packed into a map prompt (title + 요약 + clipped body). */
+/** Actual size of title + filter summary + the complete prepared reading. */
 function itemSize(it: Pick<DigestItem, "title" | "body" | "summary">): number {
-  const bodyLen = Math.min((it.body ?? "").length, ITEM_BODY_CHARS());
+  const bodyLen = (it.body ?? "").length;
   return (it.title?.length ?? 0) + (it.summary?.length ?? 0) + bodyLen + 80; // + envelope
 }
 
@@ -397,7 +381,7 @@ function itemSize(it: Pick<DigestItem, "title" | "body" | "summary">): number {
  *  forbids writing links, so feeding URLs is pure wasted tokens. */
 function renderItem(it: DigestItem, n: number): string {
   const summary = it.summary?.trim();
-  const body = clip(it.body, ITEM_BODY_CHARS());
+  const body = it.body ?? "";
   return (
     `[${n}] 제목: ${it.title ?? "(제목없음)"}\n` +
     `출처: ${it.source}\n` +
@@ -595,10 +579,11 @@ async function synthesizeFromFeed(
   const system =
     "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
     (cfg.digestInstructions?.trim() || DIGEST_SYSTEM) +
+    "\n[읽기 범위] 입력은 수집된 본문 전체 또는 모든 구간을 끝까지 읽은 요약이다. 요약·분할 형식만 보고 '본문이 잘렸다'고 판단하지 마라. 수집 범위 표시가 일부 수집일 때만 그 제한을 명시하라. 2차 전언 여부와 정보 신뢰도는 수집 제한 자체가 아니라 글의 출처·근거로 판단하라.\n" +
     citeRules;
 
   let report: string;
-  if (rows.length <= MAP_MAX_ITEMS()) {
+  if (rows.length <= MAP_MAX_ITEMS() && rows.reduce((sum, row) => sum + itemSize(row), 0) <= MAP_MAX_CHARS()) {
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows.map((it, i) => renderItem(it, i + 1)).join("\n\n---\n\n");
@@ -659,13 +644,14 @@ async function synthesizeFromDigests(
   finalModel: string,
   trace: ModelTrace,
 ): Promise<string> {
-  const body = src
-    .map(
-      (d, i) =>
-        `### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n` +
-        clip(stripDigestHtml(d.markdown), 4000),
-    )
-    .join("\n\n---\n\n");
+  const inputs: string[] = [];
+  for (const [i, d] of src.entries()) {
+    const original = stripDigestHtml(d.markdown);
+    const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel,
+      thinking: cfg.digestMapThinking ?? "disabled", instructions: cfg.summaryInstructions }) : null;
+    inputs.push(`### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n${reading?.text ?? original}`);
+  }
+  const body = inputs.join("\n\n---\n\n");
   if (!hasLLM()) {
     return `# ${startDate} ~ ${endDate} 종합 (저장 다이제스트 ${src.length}건)\n\n${body}`;
   }
@@ -789,6 +775,14 @@ export async function generateDigest(
   const trace = newModelTrace(mapModel, finalModel);
 
   const rows = opts.fromDigests ? [] : await fetchFeedRows(start, end);
+  // Existing feed rows are upgraded on demand. Never feed only the head of a
+  // long body to synthesis or silently skip a failed whole-article reading.
+  if (hasLLM()) {
+    for (const row of rows) {
+      const prepared = await prepareStoredArticle(row.id, cfg);
+      row.body = prepared.text;
+    }
+  }
   // Past dates: the window's feed was swept to trash, so fall back to saved
   // digests. (The auto cron never falls back — it just skips an empty day.)
   const useDigests = !!opts.fromDigests || (rows.length === 0 && !opts.auto);

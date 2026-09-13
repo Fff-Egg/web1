@@ -14,6 +14,7 @@ import {
   date,
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
+import type { ArticleContentMeta, ReadingCache } from "../../shared/articleContent.js";
 
 /**
  * Provider identifiers — the kind of source. Each provider has a dedicated
@@ -130,6 +131,9 @@ export const articles = mysqlTable(
     url: varchar("url", { length: 1024 }),
     title: text("title"),
     body: mediumtext("body"),
+    sourceBody: mediumtext("source_body"),
+    contentMeta: json("content_meta").$type<ArticleContentMeta>(),
+    readingCache: json("reading_cache").$type<ReadingCache>(),
     author: varchar("author", { length: 255 }),
     publishedAt: timestamp("published_at"),
     fetchedAt: timestamp("fetched_at").notNull().defaultNow(),

@@ -40,6 +40,7 @@ async function fetchDirect(h: string, maxItems: number): Promise<NormalizedArtic
           (t.isRetweet ? "RT " : "") +
           (text ? tweetTitle(text) : `X 원문 확인 필요 (@${t.username ?? h})`),
         body,
+        linkedUrls: t.urls,
         author: `@${t.username ?? h}`,
         publishedAt: t.timeParsed ?? (t.timestamp ? new Date(t.timestamp * 1000) : null),
       });

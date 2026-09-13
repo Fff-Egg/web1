@@ -20,6 +20,8 @@ export async function fetchWithSession(opts: {
   bodySelector?: string;
   /** substrings in the final URL that indicate we got bounced to a login page */
   loginUrlHints?: string[];
+  /** Optional network policy for article enrichment from untrusted feed URLs. */
+  allowUrl?: (url: string) => Promise<unknown>;
 }): Promise<string> {
   const statePath = storageStateFor(opts.sourceId);
   if (!statePath) {
@@ -33,6 +35,10 @@ export async function fetchWithSession(opts: {
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ storageState: statePath });
+    if (opts.allowUrl) await context.route("**/*", async route => {
+      try { await opts.allowUrl!(route.request().url()); await route.continue(); }
+      catch { await route.abort(); }
+    });
     const page = await context.newPage();
     await page.goto(opts.url, { waitUntil: "domcontentloaded", timeout: 30_000 });
 

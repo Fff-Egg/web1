@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { useMutation, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { FeedItem } from "../data/client.js";
 import type { Impact } from "../../server/db/schema.js";
 import { renderMarkdown } from "../markdown.js";
+import { contentScope } from "../../shared/articleContent.js";
 
 /**
  * Optimistically drop articles from every cached feed list so trash/promote feel
@@ -74,6 +75,10 @@ export function FeedCard({
   const [showFull, setShowFull] = useState(false);
   const [showBody, setShowBody] = useState(!!defaultOpenBody);
   const qc = useQueryClient();
+  const bodyQuery = useQuery({ queryKey: ["feedItem", item.id], queryFn: () => api.getFeedItem(item.id), enabled: showBody });
+  const refreshBody = useMutation({ mutationFn: () => api.refreshFeedContent(item.id), onSuccess: async () => {
+    await Promise.all([qc.invalidateQueries({ queryKey: ["feedItem", item.id] }), qc.invalidateQueries({ queryKey: ["feed"] })]);
+  } });
   // Trash/promote/star: update the cache instantly (no full feed refetch); refresh
   // only the cheap bucket counts, and roll back if the mutation fails.
   const del = useMutation({
@@ -163,6 +168,7 @@ export function FeedCard({
         </div>
       </div>
 
+      {item.contentMeta && <p className={"mt-2 text-xs " + (item.contentMeta.status === "partial" ? "text-amber-700" : "text-slate-400")}>{contentScope(item.contentMeta)}</p>}
       {item.summary && <p className="mt-2 text-sm text-slate-700">{item.summary}</p>}
 
       <div className="mt-2 flex flex-wrap gap-1">
@@ -194,7 +200,7 @@ export function FeedCard({
         </div>
       )}
 
-      {item.body && (
+      {(item.body || item.id) && (
         <div className="mt-2">
           <button
             onClick={() => setShowBody((v) => !v)}
@@ -203,9 +209,17 @@ export function FeedCard({
             {showBody ? "▾ 원문 내용 접기" : "▸ 원문 내용 보기"}
           </button>
           {showBody && (
+            <div>
+            <p className="mt-1 text-xs text-slate-500">{contentScope(bodyQuery.data?.contentMeta ?? item.contentMeta)}{(bodyQuery.data?.readingReady ?? item.readingReady) ? " · 종합 분석용 내용 저장됨" : ""}</p>
+            {bodyQuery.isPending && <p className="text-xs text-slate-500">저장된 본문 불러오는 중…</p>}
+            {bodyQuery.error && <p className="text-xs text-red-600">본문을 불러오지 못했습니다.</p>}
             <pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
-              {item.body}
+              {bodyQuery.data?.body ?? item.body ?? "저장된 본문 없음"}
             </pre>
+            {bodyQuery.data?.readingSummary && <details className="mt-2 text-xs"><summary className="cursor-pointer">종합 분석에 쓰는 본문·전체 구간 요약</summary><pre className="mt-1 max-h-80 overflow-auto whitespace-pre-wrap bg-slate-50 p-2">{bodyQuery.data.readingSummary}</pre></details>}
+            <button onClick={() => refreshBody.mutate()} disabled={refreshBody.isPending} className="mt-2 text-xs text-blue-600 disabled:text-slate-400">{refreshBody.isPending ? "원문·요약 갱신 중…" : "원문·전체 요약 갱신"}</button>
+            {refreshBody.error && <p className="text-xs text-red-600">{refreshBody.error.message}</p>}
+            </div>
           )}
         </div>
       )}

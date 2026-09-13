@@ -1,4 +1,5 @@
 import type { Source } from "../db/schema.js";
+import type { ArticleContentMeta } from "../../shared/articleContent.js";
 
 /**
  * A fetched item, normalized to a common shape before it is written to the
@@ -12,6 +13,9 @@ export interface NormalizedArticle {
   body?: string | null;
   author?: string | null;
   publishedAt?: Date | null;
+  contentMeta?: ArticleContentMeta;
+  /** Expanded outbound URLs from the provider API, separate from post text. */
+  linkedUrls?: string[];
 }
 
 /**
