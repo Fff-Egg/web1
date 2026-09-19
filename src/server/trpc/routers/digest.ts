@@ -9,7 +9,6 @@ import {
   kstHour,
   kstRangeBounds,
   sweepWindow,
-  runDailyDigests,
   runMiddayDigest,
   hasMiddayFor,
   middayHour,
@@ -18,7 +17,7 @@ import {
   currentWindowDate,
   slotBounds,
 } from "../../digest/digest.js";
-import { feedbackRepo } from "../../repo/feedback.js";
+import { boundaryRunner, startBoundaryRun } from "../../digest/boundaryRun.js";
 
 const summarySelect = {
   id: digests.id,
@@ -137,27 +136,13 @@ export const digestRouter = router({
         diag,
       };
     }
-    // ⚠️ 경계 루틴은 앱에서 가장 무거운 작업이다 — 학습메모 distill(LLM 1회) + 낮분 보충
-    // + 아침분 생성(각각 풀데이 맵리듀스) + 성공 시 하루 창 sweep. 이걸 HTTP 요청 안에서 await하면
-    // 모바일 브라우저/엣지 타임아웃을 넘겨 "Load failed"로 끊긴다(2026-08 실장애).
-    // `generate`와 동일하게 **즉시 반환 + 백그라운드 실행**으로 처리하고, 클라는 다이제스트
-    // 목록을 폴링해 결과를 잡는다. 빠른 부분(진단 쿼리·tooEarly 판정)은 동기로 남긴다.
-    void (async () => {
-      try {
-        const memo = await feedbackRepo.refreshGuidance();
-        const run = await runDailyDigests();
-        console.log(
-          `[digest] 경계 루틴 완료(${today}): 낮분 ${run.midday ? `"${run.midday.title}"` : run.middayExisted ? "이미 있음" : "없음"} · ` +
-            `아침분 ${run.evening ? `"${run.evening.title}"` : run.eveningExisted ? "이미 있음" : "없음"} · ` +
-            `sweep ${run.swept}건${run.sweepSkippedReason ? ` (보류: ${run.sweepSkippedReason})` : ""} · ` +
-            `메모 ${memo?.updated ? `갱신(신규 ${memo.newCount})` : "변화 없음"}`,
-        );
-      } catch (e) {
-        console.error("[digest] 경계 루틴 실패:", e);
-      }
-    })();
-    return { date: today, tooEarly: false, started: true, diag };
+    const { job, reused } = await startBoundaryRun(today);
+    return { date: today, tooEarly: false, started: true, job, reused, diag };
   }),
+
+  boundaryStatus: publicProcedure
+    .input(z.object({ date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional() }).optional())
+    .query(({ input }) => boundaryRunner.status(input?.date ?? kstToday())),
 
   /** Schedule hours (KST) + the currently-open window's date, for the UI to label
    *  runs and default the manual-digest form to "today's live window". */

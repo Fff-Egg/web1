@@ -1,4 +1,5 @@
 import { LlmDiagnosticsPanel } from "../components/LlmDiagnosticsPanel.js";
+import { BoundaryRunPanel } from "../components/BoundaryRunPanel.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -32,6 +33,29 @@ export function DigestPage() {
   const midH = hh(schedule.data?.middayHour ?? 17);
   const evH = hh(schedule.data?.eveningHour ?? 7);
   const [selectedId, setSelectedId] = useState<number | undefined>(undefined);
+  const [boundaryDate, setBoundaryDate] = useState<string | undefined>();
+  const boundaryTransitionEpoch = useRef(0);
+  const boundaryStatus = useQuery({
+    queryKey: ["boundaryRun", boundaryDate ?? "today"],
+    queryFn: () => api.boundaryStatus(boundaryDate),
+    // A task may take longer than a few minutes. Only its own persisted terminal
+    // status can stop active polling; unrelated new digests cannot complete it.
+    refetchInterval: (query) => query.state.data?.state === "running" ? 3000 : 15000,
+    refetchIntervalInBackground: true,
+    retry: 1,
+  });
+  const boundaryJob = boundaryStatus.data;
+  const observedBoundaryResult = useRef("");
+  useEffect(() => {
+    if (!boundaryJob) return;
+    const signature = `${boundaryJob.id}:${boundaryJob.state}:${boundaryJob.digestIds.join(",")}`;
+    if (observedBoundaryResult.current === signature) return;
+    observedBoundaryResult.current = signature;
+    if (boundaryJob.digestIds.length > 0) setSelectedId(boundaryJob.digestIds.at(-1));
+    for (const key of ["digests", "digest", "feed", "feedCounts", "filterGuidance"]) {
+      qc.invalidateQueries({ queryKey: [key] });
+    }
+  }, [boundaryJob, qc]);
 
   const [start, setStart] = useState(todayStr());
   const [end, setEnd] = useState(todayStr());
@@ -126,18 +150,44 @@ export function DigestPage() {
   // Run the boundary routine now (auto-digest + that window's feed sweep + memo).
   const runEvening = useMutation({
     mutationFn: () => api.runEveningDigest(),
-    onMutate: () => {
-      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
+    onMutate: () => { boundaryTransitionEpoch.current += 1; },
+    onSuccess: async (res) => {
+      const epoch = ++boundaryTransitionEpoch.current;
+      // Inactive date-key requests are not canceled by active-only invalidation.
+      // Cancel them explicitly so an old terminal response cannot replace this ACK.
+      await qc.cancelQueries({ queryKey: ["boundaryRun"] });
+      if (epoch !== boundaryTransitionEpoch.current) return;
+      if (res.job) {
+        qc.setQueryData(["boundaryRun", res.date], res.job);
+        setBoundaryDate(res.date);
+      }
+      qc.invalidateQueries({ queryKey: ["boundaryRun"] });
     },
-    onSuccess: (res) => {
-      invalidate();
-      qc.invalidateQueries({ queryKey: ["feed"] });
-      qc.invalidateQueries({ queryKey: ["feedCounts"] });
-      qc.invalidateQueries({ queryKey: ["filterGuidance"] });
-      // 경계 루틴은 백그라운드로 돈다 — 결과(다이제스트·sweep·메모)는 폴링으로 반영.
-      if (res?.started) setGenState("pending");
-    },
+    // A lost acknowledgement does not prove the server failed to start. Read
+    // the persisted status to recover instead of encouraging a duplicate run.
+    onError: () => { qc.invalidateQueries({ queryKey: ["boundaryRun"] }); },
   });
+  const boundaryBusy = runEvening.isPending || boundaryJob?.state === "running";
+  useEffect(() => {
+    if (!boundaryJob || runEvening.isPending) return;
+    const pinRunningDate = boundaryJob.state === "running" && !boundaryDate;
+    const resumeToday = boundaryJob.state !== "running" && Boolean(boundaryDate);
+    if (!pinRunningDate && !resumeToday) return;
+    let abandoned = false;
+    const epoch = boundaryTransitionEpoch.current;
+    const targetKey = ["boundaryRun", pinRunningDate ? boundaryJob.date : "today"];
+    void (async () => {
+      // Follow a running job across midnight, then resume discovering today's
+      // cron. Neither a previous GET nor an abandoned transition may replace a
+      // newer run acknowledgement while copying between the two query keys.
+      await qc.cancelQueries({ queryKey: targetKey, exact: true });
+      if (abandoned || epoch !== boundaryTransitionEpoch.current) return;
+      qc.setQueryData(targetKey, boundaryJob);
+      setBoundaryDate(pinRunningDate ? boundaryJob.date : undefined);
+      if (resumeToday) qc.invalidateQueries({ queryKey: targetKey, exact: true });
+    })();
+    return () => { abandoned = true; };
+  }, [boundaryJob, boundaryDate, qc, runEvening.isPending]);
   // Tidy a past range's feed (no digest, no feedback signal).
   const sweep = useMutation({
     mutationFn: () => api.sweepFeedRange(start, end),
@@ -544,30 +594,41 @@ export function DigestPage() {
         <div className="mt-3 border-t border-slate-100 pt-3">
           <button
             onClick={() => runEvening.mutate()}
-            disabled={runEvening.isPending}
+            disabled={boundaryBusy}
             className="rounded border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50"
           >
-            {runEvening.isPending ? "실행 중…" : `🕘 지금 ${evH} 작업 실행`}
+            {boundaryBusy ? `${evH} 작업 진행 중…` : `🕘 지금 ${evH} 작업 실행`}
           </button>
           <span className="ml-2 text-xs text-slate-400">
             아침분(어제 {midH}~오늘 {evH}) + 어제 낮분 보충 + 최종 모델 성공 시에만 하루 창 피드 정리 · {evH} 이후 보충용
           </span>
-          {runEvening.data && (
-            <>
-              <p className="mt-2 text-xs text-slate-600">
-                {runEvening.data.tooEarly
-                  ? `아직 ${evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.`
-                  : `오늘(${runEvening.data.date}) 경계 루틴을 시작했습니다 — 학습 메모 · 낮분 보충 · 아침분을 만들고, 최종 모델 성공 때만 피드를 정리합니다. ` +
-                    `백그라운드로 처리합니다. 완료되면 아래 목록에 나타납니다(글이 많으면 몇 분 걸립니다).`}
-              </p>
-              <p className="mt-1 break-all font-mono text-[10px] text-slate-400">
-                진단: 창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}
+          {runEvening.data?.tooEarly && (
+            <p className="mt-2 text-xs text-slate-600">
+              아직 {evH}(KST) 전입니다 — 지금 실행하면 아침분이 일찍 확정되고 피드 정리도 당겨져 이후 글이 누락되므로 실행하지 않았습니다.
+            </p>
+          )}
+          {boundaryJob && <BoundaryRunPanel run={boundaryJob} onOpenDigest={setSelectedId} />}
+          {boundaryStatus.isError && (
+            <p className="mt-2 text-xs text-amber-700" role="status">
+              서버의 작업 상태를 확인할 수 없습니다. 실제 작업의 성공·실패 여부는 아직 확인되지 않았으며, 자동으로 다시 조회합니다.
+            </p>
+          )}
+          {runEvening.data && !runEvening.data.tooEarly && !boundaryJob && !boundaryStatus.isError && (
+            <p className="mt-2 text-xs text-slate-600">
+              {api.mode === "static" ? "데모에서는 서버 작업을 실행하지 않습니다." : "작업 상태를 확인하고 있습니다…"}
+            </p>
+          )}
+          {runEvening.data?.diag && (
+            <details className="mt-2 text-[10px] text-slate-400">
+              <summary className="cursor-pointer">실행 요청 진단</summary>
+              <p className="mt-1 break-all font-mono">
+                창 {runEvening.data.diag.start} ~ {runEvening.data.diag.end} · 창내 {runEvening.data.diag.rawInWindow}건 · 최근분석{" "}
                 {String(runEvening.data.diag.latestCreatedAt)} · now {runEvening.data.diag.nowUtc}
               </p>
-            </>
+            </details>
           )}
           {runEvening.error && (
-            <p className="mt-2 text-xs text-red-600">{(runEvening.error as Error).message}</p>
+            <p className="mt-2 text-xs text-red-600">실행 요청 응답을 확인하지 못했습니다: {(runEvening.error as Error).message}</p>
           )}
 
           <div className="mt-3">

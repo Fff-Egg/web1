@@ -6,6 +6,7 @@ import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
+import { reportDigestProgress } from "./progress.js";
 import {
   hasLLM,
   ANALYSIS_MODEL,
@@ -440,10 +441,11 @@ const MAP_SYSTEM =
   "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
 
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
-async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"]): Promise<string[]> {
+export async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"]): Promise<string[]> {
   const thinking = digestThinkingMode(model, "map", configuredThinking);
   const partials = new Array<string>(chunks.length);
   const failed: number[] = [];
+  let failureCause: unknown;
   const runOne = async (ci: number) => {
     const body = chunks[ci].map((i) => renderItem(rows[i], i + 1)).join("\n\n---\n\n");
     try {
@@ -462,6 +464,7 @@ async function mapStage(rows: DigestItem[], chunks: number[][], model: string, t
       // 청크 하나가 죽어도 나머지는 살린다. 단 **구멍을 숨기지 않는다** — 2단계 종합에
       // 실패 사실을 명시해, LLM이 없는 내용을 지어내거나 "입력이 비었다"고만 답하지 않게 한다.
       failed.push(ci + 1);
+      failureCause ??= err;
       const nums = chunks[ci].map((i) => i + 1);
       console.error(`[digest] 묶음 ${ci + 1} 요약 실패([${nums[0]}]~[${nums[nums.length - 1]}]):`, err);
       partials[ci] = `(이 묶음 ${chunks[ci].length}건은 1단계 요약에 실패해 내용이 없습니다. 번호 [${nums.join("], [")}] — 이 번호들은 인용하지 마세요.)`;
@@ -474,7 +477,7 @@ async function mapStage(rows: DigestItem[], chunks: number[][], model: string, t
   }
   if (failed.length === chunks.length) {
     // 전부 실패면 종합할 재료가 없다 — 쓸모없는 리포트를 저장하느니 명확히 실패시킨다.
-    throw new Error(`다이제스트 1단계 요약이 전부 실패했습니다(${chunks.length}개 묶음). 위 [digest]·[llm] 로그에서 원인을 확인하세요.`);
+    throw new Error(`다이제스트 1단계 요약이 전부 실패했습니다(${chunks.length}개 묶음). 위 [digest]·[llm] 로그에서 원인을 확인하세요.`, { cause: failureCause });
   }
   if (failed.length > 0) console.warn(`[digest] 묶음 ${failed.join(", ")} 실패 — 나머지로 종합 진행`);
   return partials;
@@ -587,6 +590,7 @@ async function synthesizeFromFeed(
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n1차로 선별된 글 (${rows.length}건). 본문을 읽고 종합하라:\n\n` +
       rows.map((it, i) => renderItem(it, i + 1)).join("\n\n---\n\n");
+    await reportDigestProgress("최종 보고서를 작성하고 있습니다. API 응답을 기다리는 중입니다.");
     report = await completeDigestStage(
       {
         model: finalModel,
@@ -607,12 +611,14 @@ async function synthesizeFromFeed(
   } else {
     const chunks = packChunks(rows);
     console.log(`[digest] map-reduce: ${rows.length}건 → ${chunks.length}청크 (≤${MAP_MAX_ITEMS()}건/청크)`);
+    await reportDigestProgress(`자료 정리 중입니다 (${rows.length}개 글, ${chunks.length}개 묶음).`);
     const partials = await mapStage(rows, chunks, mapModel, trace, cfg.digestMapThinking);
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n` +
       `1차로 선별된 글 ${rows.length}건을 1단계에서 글별로 압축 정리했다(글마다 전역 번호 [N]). ` +
       `아래 정리 목록을 원문 대신 읽고 종합하라. 인용 번호는 입력의 [N]을 그대로 사용한다:\n\n` +
       partials.map((p, i) => `### 묶음 ${i + 1}\n${p.trim()}`).join("\n\n");
+    await reportDigestProgress("최종 보고서를 작성하고 있습니다. API 응답을 기다리는 중입니다.");
     report = await completeDigestStage(
       {
         model: finalModel,
@@ -778,7 +784,8 @@ export async function generateDigest(
   // Existing feed rows are upgraded on demand. Never feed only the head of a
   // long body to synthesis or silently skip a failed whole-article reading.
   if (hasLLM()) {
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
+      await reportDigestProgress(`${startDate} ${opts.slot === "midday" ? "낮분" : "아침분"}: 원문 전체 읽기 ${index + 1}/${rows.length} (글 #${row.id})`);
       const prepared = await prepareStoredArticle(row.id, cfg);
       row.body = prepared.text;
     }
@@ -838,6 +845,8 @@ export async function generateDigest(
     .values({ title, periodStart: startDate, periodEnd: endDate, markdown, meta })
     .$returningId();
 
+  await reportDigestProgress(`${title} 보고서를 저장했습니다.`, Number(res.id));
+
   let trashed = 0;
   if (opts.trashFeedAfter && !useDigests) {
     if (cleanupGate.eligible) {
@@ -887,8 +896,10 @@ export async function runDailyDigests(date = kstToday()): Promise<{
 }> {
   // 낮분 backfill targets ITS generation day — the day the window's M시 fell on.
   const middayDate = middayLabelFor(date);
+  await reportDigestProgress(`${middayDate} 낮분 보충 여부를 확인하고 있습니다.`);
   const middayExisted = await hasMiddayFor(middayDate);
   const midday = middayExisted ? null : await generateDigest({ auto: true, slot: "midday", start: middayDate });
+  await reportDigestProgress(`${date} 아침분을 확인하고 있습니다.`);
   const existingEvening = await autoDigestState(date, "evening");
   const eveningExisted = existingEvening.exists;
   const evening = eveningExisted ? null : await generateDigest({ auto: true, slot: "evening", start: date });
@@ -897,6 +908,7 @@ export async function runDailyDigests(date = kstToday()): Promise<{
   if (middayExisted || eveningExisted || midday || evening) {
     const gate = evening?.cleanupGate ?? existingEvening.cleanupGate;
     if (gate?.eligible) {
+      await reportDigestProgress("보고서 생성을 마쳐 피드 정리를 진행하고 있습니다.");
       swept = await sweepWindow(date, date);
     } else {
       sweepSkippedReason = gate?.reason ?? "morning_digest_missing";

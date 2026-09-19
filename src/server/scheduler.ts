@@ -11,12 +11,11 @@ import {
   hasAutoDigestFor,
   hasMiddayFor,
   runMiddayDigest,
-  runDailyDigests,
   middayHour,
   middayLabelDate,
   slotBounds,
 } from "./digest/digest.js";
-import { feedbackRepo } from "./repo/feedback.js";
+import { startBoundaryRun } from "./digest/boundaryRun.js";
 import { eq } from "drizzle-orm";
 import { db, hasDb } from "./db/client.js";
 import { settings } from "./db/schema.js";
@@ -83,22 +82,11 @@ async function runMiddayRoutine(): Promise<void> {
  *  primary-final success. */
 async function runEveningRoutine(): Promise<void> {
   try {
-    const fx = await feedbackRepo.refreshGuidance();
-    console.log(`[scheduler] filter memo: ${fx.updated ? "updated" : "no change"} (new=${fx.newCount}, total=${fx.total})`);
+    const task = await startBoundaryRun();
+    const result = await task.completion;
+    console.log(`[scheduler] boundary ${result.id}: ${result.state} — ${result.message}`);
   } catch (err) {
-    console.error("[scheduler] filter memo refresh failed:", err);
-  }
-  try {
-    const r = await runDailyDigests();
-    const part = (label: string, d: { title: string; itemCount: number } | null, existed: boolean) =>
-      d ? `${label}="${d.title}" (${d.itemCount} items)` : `${label}=${existed ? "exists" : "empty"}`;
-    console.log(
-      `[scheduler] digest: ${part("midday", r.midday, r.middayExisted)}, ` +
-        `${part("evening", r.evening, r.eveningExisted)}, swept=${r.swept}` +
-        (r.sweepSkippedReason ? `, sweep-skipped=${r.sweepSkippedReason}` : ""),
-    );
-  } catch (err) {
-    console.error("[scheduler] digest failed:", err);
+    console.error("[scheduler] boundary task could not start:", err);
   }
 }
 

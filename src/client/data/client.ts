@@ -10,6 +10,7 @@ import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
 import type { ArticleContentMeta } from "../../shared/articleContent.js";
+import type { BoundaryRun } from "../../shared/boundaryRun.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -169,14 +170,17 @@ export interface DataApi {
   /** Starts generation in the BACKGROUND (returns immediately); poll the digest
    *  list for the result. (A full-day map-reduce outlasts the HTTP timeout.) */
   generateDigest(opts?: GenerateDigestOpts): Promise<{ started: boolean }>;
-  /** 경계 루틴 실행. **무거워서 백그라운드로 돈다** — 즉시 `started`를 반환하고 결과는
-   *  다이제스트 목록 폴링으로 확인한다(동기로 await하면 모바일에서 타임아웃 "Load failed"). */
+  /** Persisted status for this boundary task; defaults to the current KST date. */
+  boundaryStatus(date?: string): Promise<BoundaryRun | null>;
+  /** 경계 루틴 실행. 즉시 작업 상태를 반환하며 boundaryStatus로 완료까지 확인한다. */
   runEveningDigest(): Promise<{
     date: string;
     /** True = refused: pressed before the boundary hour (would close the window + sweep early). */
     tooEarly: boolean;
     /** True = 백그라운드 실행 시작됨(tooEarly면 false). */
     started?: boolean;
+    job?: BoundaryRun;
+    reused?: boolean;
     diag: { start: string; end: string; nowUtc: string; rawInWindow: number; latestCreatedAt: string | Date | null };
   }>;
   /** 낮분(어제21시~오늘14시) 다이제스트만 생성 — sweep 없음. 14시 전엔 거부(tooEarly). */
@@ -338,6 +342,7 @@ function makeTrpcApi(): DataApi {
     generateDigest: (opts) =>
       client.digest.generate.mutate(opts ?? {}) as Promise<{ started: boolean }>,
     runEveningDigest: () => client.digest.runEvening.mutate() as ReturnType<DataApi["runEveningDigest"]>,
+    boundaryStatus: (date) => client.digest.boundaryStatus.query(date ? { date } : undefined) as ReturnType<DataApi["boundaryStatus"]>,
     runMiddayDigest: () => client.digest.runMidday.mutate() as ReturnType<DataApi["runMiddayDigest"]>,
     deleteDigest: async (id) => { await client.digest.delete.mutate({ id }); },
     restoreDigest: async (id) => { await client.digest.restore.mutate({ id }); },
@@ -562,6 +567,9 @@ function makeStaticApi(): DataApi {
         started: false, // 데모에는 백그라운드 작업이 없다
         diag: { start: now, end: now, nowUtc: now, rawInWindow: 0, latestCreatedAt: null },
       };
+    },
+    async boundaryStatus() {
+      return null;
     },
     async runMiddayDigest() {
       return { date: new Date().toLocaleDateString("en-CA"), tooEarly: false, existed: false, started: false };
