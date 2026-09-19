@@ -1,8 +1,10 @@
 import { LlmDiagnosticsPanel } from "../components/LlmDiagnosticsPanel.js";
 import { BoundaryRunPanel } from "../components/BoundaryRunPanel.js";
+import { ManualDigestRunPanel } from "../components/ManualDigestRunPanel.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { TRPCClientError } from "@trpc/client";
 import { api } from "../data/client.js";
 import type { DigestSummary } from "../data/client.js";
 import { renderMarkdown } from "../markdown.js";
@@ -62,10 +64,40 @@ export function DigestPage() {
   const [title, setTitle] = useState("");
   const [fromDigests, setFromDigests] = useState(false);
 
-  // Manual generate runs in the background (long map-reduce > HTTP timeout); while
-  // pending we poll the list and grab the new digest when it appears.
-  const [genState, setGenState] = useState<"idle" | "pending" | "timeout">("idle");
-  const genSnapshot = useRef<Set<number>>(new Set());
+  // The ordinary Generate button follows its own persisted job, including empty
+  // inputs and failures before the first LLM call. A new unrelated report cannot
+  // complete this job, and a long LLM response does not imply failure.
+  const manualTransitionEpoch = useRef(0);
+  const manualStatus = useQuery({
+    queryKey: ["manualDigestRun"],
+    queryFn: () => api.manualDigestStatus(),
+    refetchInterval: (query) => query.state.data?.state === "running" ? 3000 : 15000,
+    refetchIntervalInBackground: true,
+    retry: 1,
+  });
+  const manualJob = manualStatus.data;
+  const observedManualResult = useRef("");
+  const followedManualJobs = useRef(new Set<string>());
+  useEffect(() => {
+    if (!manualJob) return;
+    const signature = `${manualJob.id}:${manualJob.state}:${manualJob.digestId ?? ""}`;
+    if (observedManualResult.current === signature) return;
+    observedManualResult.current = signature;
+    if (manualJob.state === "running") followedManualJobs.current.add(manualJob.id);
+    // An old completed manual job on page load must not replace the latest
+    // saved report. Follow only a job we started or actually observed running.
+    if (manualJob.digestId !== undefined && followedManualJobs.current.has(manualJob.id)) {
+      setSelectedId(manualJob.digestId);
+      followedManualJobs.current.delete(manualJob.id);
+    }
+    if (manualJob.state !== "running") followedManualJobs.current.delete(manualJob.id);
+    qc.invalidateQueries({ queryKey: ["digests"] });
+    qc.invalidateQueries({ queryKey: ["digest"] });
+  }, [manualJob, qc]);
+
+  // The separate midday button still uses its existing list polling flow.
+  const [middayState, setMiddayState] = useState<"idle" | "pending" | "timeout">("idle");
+  const middaySnapshot = useRef<Set<number>>(new Set());
 
   // Default to the newest saved digest once loaded.
   useEffect(() => {
@@ -101,33 +133,47 @@ export function DigestPage() {
         title: title || undefined,
         fromDigests,
       }),
-    onMutate: () => {
-      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
-      setGenState("pending");
+    onMutate: () => { manualTransitionEpoch.current += 1; },
+    onSuccess: async (res) => {
+      const epoch = ++manualTransitionEpoch.current;
+      // Cancel the previous GET before applying this acknowledgement. Its stale
+      // response must not replace the newly started or reused job.
+      await qc.cancelQueries({ queryKey: ["manualDigestRun"], exact: true });
+      if (epoch !== manualTransitionEpoch.current) return;
+      if (res.job) {
+        followedManualJobs.current.add(res.job.id);
+        qc.setQueryData(["manualDigestRun"], res.job);
+      }
+      qc.invalidateQueries({ queryKey: ["manualDigestRun"], exact: true });
     },
-    onError: () => setGenState("idle"),
+    // The request may have reached the server even if the acknowledgement was lost.
+    onError: (error) => {
+      if (error instanceof TRPCClientError && error.data?.code === "BAD_REQUEST") return;
+      qc.invalidateQueries({ queryKey: ["manualDigestRun"], exact: true });
+    },
   });
+  const manualBusy = generate.isPending || manualJob?.state === "running";
+  const manualInputError = generate.error instanceof TRPCClientError && generate.error.data?.code === "BAD_REQUEST";
 
-  // While a background generate is running, poll the list; when a digest we didn't
-  // have before appears, select it. Give up after a few minutes (still logs server-side).
+  // Existing polling applies only to the separate midday button.
   useEffect(() => {
-    if (genState !== "pending") return;
+    if (middayState !== "pending") return;
     qc.invalidateQueries({ queryKey: ["digests"] }); // check once right away (fast/small ones)
     const poll = setInterval(() => qc.invalidateQueries({ queryKey: ["digests"] }), 4000);
-    const giveUp = setTimeout(() => setGenState("timeout"), 240_000);
+    const giveUp = setTimeout(() => setMiddayState("timeout"), 240_000);
     return () => {
       clearInterval(poll);
       clearTimeout(giveUp);
     };
-  }, [genState, qc]);
+  }, [middayState, qc]);
   useEffect(() => {
-    if (genState !== "pending" || !list.data) return;
-    const fresh = list.data.find((d) => !genSnapshot.current.has(d.id));
+    if (middayState !== "pending" || !list.data) return;
+    const fresh = list.data.find((d) => !middaySnapshot.current.has(d.id));
     if (fresh) {
       setSelectedId(fresh.id);
-      setGenState("idle");
+      setMiddayState("idle");
     }
-  }, [list.data, genState]);
+  }, [list.data, middayState]);
   const remove = useMutation({
     mutationFn: (id: number) => api.deleteDigest(id),
     onSuccess: () => {
@@ -139,12 +185,12 @@ export function DigestPage() {
   const runMidday = useMutation({
     mutationFn: () => api.runMiddayDigest(),
     onMutate: () => {
-      genSnapshot.current = new Set((list.data ?? []).map((d) => d.id));
+      middaySnapshot.current = new Set((list.data ?? []).map((d) => d.id));
     },
     onSuccess: (res) => {
       invalidate();
-      // 백그라운드 실행 — 새 다이제스트가 목록에 뜰 때까지 폴링(생성 버튼과 같은 방식).
-      if (res?.started) setGenState("pending");
+      // 기존 낮분 경로의 목록 폴링. 일반 생성 버튼의 작업 상태와는 별개다.
+      if (res?.started) setMiddayState("pending");
     },
   });
   // Run the boundary routine now (auto-digest + that window's feed sweep + memo).
@@ -506,10 +552,10 @@ export function DigestPage() {
           </label>
           <button
             onClick={() => generate.mutate()}
-            disabled={generate.isPending || genState === "pending"}
+            disabled={manualBusy}
             className="rounded bg-slate-900 px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
           >
-            {genState === "pending" ? "생성 중…" : "생성"}
+            {manualBusy ? "생성 중…" : "생성"}
           </button>
         </div>
         {/* 빠른 선택 — "오늘 모인 글"을 보려면 아직 열려 있는 창을 골라야 한다.
@@ -552,18 +598,33 @@ export function DigestPage() {
           ⚠️ <strong>{evH} 경계 루틴은 최종 모델이 정상 완성한 창만 휴지통으로 정리</strong>하므로, 이미 정리된 날을 고르면
           피드가 비어 저장된 다이제스트로 대체 종합됩니다. <strong>오늘 모인 글로 만들려면 위 “오늘 모인 글”</strong>을 누르세요.
         </p>
-        {genState === "pending" && (
-          <p className="mt-2 text-xs text-blue-600">
-            백그라운드에서 생성 중… 완성되면 자동으로 열립니다. (글이 많으면 1~2분 걸릴 수 있어요)
-          </p>
+        {generate.isPending && (
+          <p className="mt-2 text-xs text-blue-700" role="status">서버에서 생성 요청을 확인하고 있습니다…</p>
         )}
-        {genState === "timeout" && (
-          <p className="mt-2 text-xs text-amber-600">
-            생성이 오래 걸리거나 종합할 글이 없었을 수 있어요. 잠시 후 “저장된 다이제스트” 목록을 확인하세요.
+        {manualJob && (
+          <ManualDigestRunPanel
+            run={manualJob}
+            windowLabel={`${mdy(prevDay(manualJob.request.start))} ${evH} ~ ${mdy(manualJob.request.end)} ${evH}`}
+            onOpenDigest={setSelectedId}
+          />
+        )}
+        {generate.data?.reused && manualJob?.state === "running" && (
+          <p className="mt-2 text-xs text-blue-700">이미 진행 중인 생성을 계속 확인합니다. 완료 후 다른 기간을 생성할 수 있습니다.</p>
+        )}
+        {manualStatus.isError && (
+          <p className="mt-2 text-xs text-amber-700" role="status">
+            생성 상태를 조회하지 못했습니다. 실제 작업의 성공·실패는 아직 확인되지 않았으며, 자동으로 다시 조회합니다.
           </p>
         )}
         {generate.error && (
-          <p className="mt-2 text-xs text-red-600">{(generate.error as Error).message}</p>
+          <p className="mt-2 text-xs text-amber-700" role="status">
+            {manualInputError
+              ? "입력한 날짜를 확인하세요. 종료일은 시작일보다 빠를 수 없습니다. 요청한 생성은 시작되지 않았습니다."
+              : "생성 요청의 응답을 확인하지 못했습니다. 서버에 저장된 실행 상태를 다시 확인하고 있습니다."}
+          </p>
+        )}
+        {generate.data && !manualJob && api.mode === "static" && (
+          <p className="mt-2 text-xs text-slate-600">데모에서는 서버 작업을 실행하지 않습니다.</p>
         )}
 
         <div className="mt-3 border-t border-slate-100 pt-3">
@@ -584,6 +645,14 @@ export function DigestPage() {
                 : runMidday.data.existed
                   ? `${runMidday.data.date} 낮분이 이미 있습니다.`
                   : `${runMidday.data.date} 낮분 생성을 시작했습니다 — 백그라운드로 돌며 완료되면 아래 목록에 나타납니다(1~3분).`}
+            </p>
+          )}
+          {middayState === "pending" && (
+            <p className="mt-2 text-xs text-blue-600">낮분 보고서가 저장되는지 목록을 확인하고 있습니다.</p>
+          )}
+          {middayState === "timeout" && (
+            <p className="mt-2 text-xs text-amber-600">
+              아직 새 낮분 보고서가 확인되지 않았습니다. 저장된 다이제스트 목록을 확인하세요.
             </p>
           )}
           {runMidday.error && (

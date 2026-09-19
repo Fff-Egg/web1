@@ -1,10 +1,10 @@
 import { z } from "zod";
+import { TRPCError } from "@trpc/server";
 import { and, desc, eq, gte, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import { router, publicProcedure } from "../trpc.js";
 import { db, hasDb } from "../../db/client.js";
 import { digests, analyses, articles } from "../../db/schema.js";
 import {
-  generateDigest,
   kstToday,
   kstHour,
   kstRangeBounds,
@@ -18,6 +18,12 @@ import {
   slotBounds,
 } from "../../digest/digest.js";
 import { boundaryRunner, startBoundaryRun } from "../../digest/boundaryRun.js";
+import { manualDigestRunner } from "../../digest/manualRun.js";
+
+const digestDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).refine((date) => {
+  const parsed = new Date(`${date}T00:00:00Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === date;
+}, "올바른 날짜를 선택하세요.");
 
 const summarySelect = {
   id: digests.id,
@@ -69,27 +75,28 @@ export const digestRouter = router({
 
   /** Start generating a saved digest over a KST date range. Runs in the BACKGROUND
    *  (a full-day map-reduce outlasts the HTTP/edge timeout → "upstream error"); the
-   *  client polls the digest list for the result. */
+   *  client polls this exact job for progress, empty input, errors, and its saved ID. */
   generate: publicProcedure
     .input(
       z
         .object({
-          start: z.string().optional(),
-          end: z.string().optional(),
+          start: digestDate.optional(),
+          end: digestDate.optional(),
           title: z.string().optional(),
           /** Synthesize from saved digests in range instead of the feed (past dates). */
           fromDigests: z.boolean().optional(),
         })
         .optional(),
     )
-    .mutation(({ input }) => {
-      void generateDigest(input ?? {})
-        .then((r) =>
-          console.log(`[digest] manual: ${r ? `"${r.title}" (${r.itemCount} items)` : "nothing to generate"}`),
-        )
-        .catch((e) => console.error("[digest] manual generate failed:", e));
-      return { started: true };
+    .mutation(async ({ input }) => {
+      const start = input?.start ?? kstToday();
+      const end = input?.end ?? start;
+      if (end < start) throw new TRPCError({ code: "BAD_REQUEST", message: "종료일은 시작일보다 빠를 수 없습니다." });
+      const { job, reused } = await manualDigestRunner.start({ start, end, title: input?.title?.trim() || undefined, fromDigests: !!input?.fromDigests });
+      return { started: true, job, reused };
     }),
+
+  manualStatus: publicProcedure.query(() => manualDigestRunner.status()),
 
   /** Run the 21시 routine now for today: filter memo + digests (낮분 backfill +
    *  저녁분) + conditional whole-day sweep after primary-final success. Refused before 21시 — running early would close

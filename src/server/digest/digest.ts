@@ -1,4 +1,4 @@
-import { and, or, gte, lt, lte, ne, eq, desc, isNull, inArray } from "drizzle-orm";
+import { and, or, gte, lt, lte, ne, eq, desc, isNull, inArray, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
@@ -6,7 +6,9 @@ import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
-import { reportDigestProgress } from "./progress.js";
+import { reportDigestProgress, reportDigestSources } from "./progress.js";
+import { resolveDigestSources } from "./digestSources.js";
+import { shouldDeferAutomaticAnalysis, kstMinuteOfDay, ANALYSIS_PEAK_WINDOWS_KST } from "../analysis/schedule.js";
 import {
   hasLLM,
   ANALYSIS_MODEL,
@@ -519,6 +521,35 @@ async function fetchFeedRows(start: Date, end: Date): Promise<DigestItem[]> {
     .then((r) => r.map((x) => ({ ...x, source: x.source ?? "(출처 미상)" })));
 }
 
+/** Counts explain an empty feed lookup without changing its eligibility rules.
+ * Exclusions are disjoint within the selected analysis-time window; pending
+ * analysis has no analysis timestamp yet and is explicitly counted globally. */
+async function emptyFeedDiagnostics(start: Date, end: Date) {
+  const [[excluded], [pending]] = await Promise.all([
+    db.select({
+      review: sql<number>`count(case when ${articles.deletedAt} is null and ${analyses.needsSourceReview} = false and ${analyses.lowPriority} = true and ${analyses.saved} = false then 1 end)`,
+      sourceReview: sql<number>`count(case when ${articles.deletedAt} is null and ${analyses.needsSourceReview} = true then 1 end)`,
+      trashed: sql<number>`count(case when ${articles.deletedAt} is not null then 1 end)`,
+    }).from(analyses)
+      .innerJoin(articles, eq(analyses.articleId, articles.id))
+      .innerJoin(sources, eq(articles.sourceId, sources.id))
+      .where(and(eq(analyses.relevant, true), gte(analyses.createdAt, start), lt(analyses.createdAt, end))),
+    db.select({ n: sql<number>`count(*)` }).from(articles)
+      .leftJoin(analyses, eq(analyses.articleId, articles.id))
+      .where(and(isNull(analyses.id), isNull(articles.deletedAt))),
+  ]);
+  const now = new Date();
+  const deferred = shouldDeferAutomaticAnalysis(now);
+  const minute = kstMinuteOfDay(now);
+  const window = ANALYSIS_PEAK_WINDOWS_KST.find((w) => minute >= w.startMinute && minute < w.endMinute);
+  return {
+    excluded: { review: Number(excluded?.review ?? 0), sourceReview: Number(excluded?.sourceReview ?? 0), trashed: Number(excluded?.trashed ?? 0) },
+    pendingAnalysis: Number(pending?.n ?? 0),
+    automaticAnalysisDeferred: deferred,
+    ...(deferred && window ? { analysisResumeHour: window.endMinute / 60 } : {}),
+  };
+}
+
 interface SrcDigest {
   id: number;
   title: string | null;
@@ -652,6 +683,7 @@ async function synthesizeFromDigests(
 ): Promise<string> {
   const inputs: string[] = [];
   for (const [i, d] of src.entries()) {
+    await reportDigestProgress(`저장된 보고서 전체 읽기 ${i + 1}/${src.length} (보고서 #${d.id})`);
     const original = stripDigestHtml(d.markdown);
     const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel,
       thinking: cfg.digestMapThinking ?? "disabled", instructions: cfg.summaryInstructions }) : null;
@@ -668,6 +700,7 @@ async function synthesizeFromDigests(
     "이들을 종합해 기간 전체를 관통하는 상위 요약을 만든다. 중복은 합치고 흐름·변화·반복 주제를 정리하라. " +
     "원본 글 링크나 [N] 번호 인용은 쓰지 마라(소스가 다이제스트라 번호 매핑이 없다).";
   const user = `종합 기간: ${startDate} ~ ${endDate}\n\n이미 생성된 다이제스트 ${src.length}건:\n\n${body}`;
+  await reportDigestProgress("저장된 보고서를 종합하고 있습니다. 최종 API 응답을 기다리는 중입니다.");
   const report = await completeDigestStage(
     {
       model: finalModel,
@@ -780,28 +813,39 @@ export async function generateDigest(
   // even when the same model is used with different thinking settings.
   const trace = newModelTrace(mapModel, finalModel);
 
-  const rows = opts.fromDigests ? [] : await fetchFeedRows(start, end);
+  await reportDigestProgress("선택한 기간의 중요·저장 피드와 저장된 보고서를 확인하고 있습니다.");
+  const input = await resolveDigestSources({ ...opts, llmConfigured: hasLLM() }, {
+    feed: () => fetchFeedRows(start, end),
+    digests: () => fetchDigestsInRange(startDate, endDate),
+    emptyFeedDiagnostics: () => emptyFeedDiagnostics(start, end),
+  });
+  await reportDigestSources(input.counts);
+  if (input.counts.source === "none") {
+    await reportDigestProgress(opts.fromDigests
+      ? "선택한 기간에 저장된 다이제스트가 없어 API를 호출하지 않았습니다."
+      : "선택한 기간에 종합할 중요·저장 피드와 저장된 다이제스트가 없어 API를 호출하지 않았습니다.");
+    console.log(`[digest] ${title}: no eligible inputs, skipping.`);
+    return null;
+  }
+  const rows = input.feed;
   // Existing feed rows are upgraded on demand. Never feed only the head of a
   // long body to synthesis or silently skip a failed whole-article reading.
   if (hasLLM()) {
     for (const [index, row] of rows.entries()) {
-      await reportDigestProgress(`${startDate} ${opts.slot === "midday" ? "낮분" : "아침분"}: 원문 전체 읽기 ${index + 1}/${rows.length} (글 #${row.id})`);
+      const label = opts.slot === "midday" ? "낮분" : opts.slot === "evening" ? "아침분" : "수동 생성";
+      await reportDigestProgress(`${startDate} ${label}: 원문 수집·전체 읽기 준비 ${index + 1}/${rows.length} (글 #${row.id})`);
       const prepared = await prepareStoredArticle(row.id, cfg);
       row.body = prepared.text;
     }
   }
   // Past dates: the window's feed was swept to trash, so fall back to saved
   // digests. (The auto cron never falls back — it just skips an empty day.)
-  const useDigests = !!opts.fromDigests || (rows.length === 0 && !opts.auto);
+  const useDigests = input.counts.source === "digests";
 
   let markdown: string;
   let meta: Record<string, unknown>;
   if (useDigests) {
-    const src = await fetchDigestsInRange(startDate, endDate);
-    if (src.length === 0) {
-      console.log(`[digest] ${title}: no feed picks and no saved digests in range, skipping.`);
-      return null;
-    }
+    const src = input.digests;
     markdown = await synthesizeFromDigests(src, startDate, endDate, cfg, mapModel, finalModel, trace);
     meta = {
       itemCount: src.length,
@@ -813,10 +857,6 @@ export async function generateDigest(
       ...(opts.slot ? { slot: opts.slot } : {}),
     };
   } else {
-    if (rows.length === 0) {
-      console.log(`[digest] ${title}: no relevant picks, skipping.`);
-      return null;
-    }
     markdown = await synthesizeFromFeed(rows, startDate, endDate, title, cfg, mapModel, finalModel, trace);
     meta = {
       itemCount: rows.length,

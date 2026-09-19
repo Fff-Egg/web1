@@ -11,6 +11,7 @@ import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
 import type { ResearchList } from "../../shared/research.js";
 import type { ArticleContentMeta } from "../../shared/articleContent.js";
 import type { BoundaryRun } from "../../shared/boundaryRun.js";
+import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -167,9 +168,9 @@ export interface DataApi {
   listDigests(): Promise<DigestSummary[]>;
   trashDigests(): Promise<DigestSummary[]>;
   getDigest(id?: number): Promise<DigestFull | null>;
-  /** Starts generation in the BACKGROUND (returns immediately); poll the digest
-   *  list for the result. (A full-day map-reduce outlasts the HTTP timeout.) */
-  generateDigest(opts?: GenerateDigestOpts): Promise<{ started: boolean }>;
+  /** Starts or reuses the active manual job; follow its persisted status and exact result ID. */
+  generateDigest(opts?: GenerateDigestOpts): Promise<{ started: boolean; job?: ManualDigestRun; reused?: boolean }>;
+  manualDigestStatus(): Promise<ManualDigestRun | null>;
   /** Persisted status for this boundary task; defaults to the current KST date. */
   boundaryStatus(date?: string): Promise<BoundaryRun | null>;
   /** 경계 루틴 실행. 즉시 작업 상태를 반환하며 boundaryStatus로 완료까지 확인한다. */
@@ -340,7 +341,8 @@ function makeTrpcApi(): DataApi {
     trashDigests: () => client.digest.trash.query() as Promise<DigestSummary[]>,
     getDigest: (id) => client.digest.get.query({ id }) as Promise<DigestFull | null>,
     generateDigest: (opts) =>
-      client.digest.generate.mutate(opts ?? {}) as Promise<{ started: boolean }>,
+      client.digest.generate.mutate(opts ?? {}) as ReturnType<DataApi["generateDigest"]>,
+    manualDigestStatus: () => client.digest.manualStatus.query() as ReturnType<DataApi["manualDigestStatus"]>,
     runEveningDigest: () => client.digest.runEvening.mutate() as ReturnType<DataApi["runEveningDigest"]>,
     boundaryStatus: (date) => client.digest.boundaryStatus.query(date ? { date } : undefined) as ReturnType<DataApi["boundaryStatus"]>,
     runMiddayDigest: () => client.digest.runMidday.mutate() as ReturnType<DataApi["runMiddayDigest"]>,
@@ -557,7 +559,10 @@ function makeStaticApi(): DataApi {
       return SAMPLE_DIGEST;
     },
     async generateDigest() {
-      return { started: true };
+      return { started: false };
+    },
+    async manualDigestStatus() {
+      return null;
     },
     async runEveningDigest() {
       const now = new Date().toISOString();
