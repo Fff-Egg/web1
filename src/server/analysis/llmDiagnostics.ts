@@ -24,6 +24,9 @@ export class LlmCallProbe {
     const parsed = JSON.parse(body);
     this.data.stream = parsed.stream === true;
     if (typeof parsed.max_tokens === "number") this.data.effectiveMaxTokens = parsed.max_tokens;
+    if (typeof parsed.model === "string" && /^[\w./:-]{1,160}$/.test(parsed.model)) this.data.effectiveModel = parsed.model;
+    this.data.effectiveThinking = parsed.thinking?.type === "enabled" ? "enabled"
+      : parsed.thinking?.type === "disabled" ? "disabled" : "unknown";
     this.data.stage = "awaiting_headers";
   }
   async *chunks(res: Response): AsyncGenerator<string> {

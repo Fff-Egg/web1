@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { settingsRepo } from "../../repo/settings.js";
+import { getRuntimeSchedule } from "../../runtimeSchedule.js";
+import { getLlmUsageReport } from "../../repo/llmUsage.js";
 import {
   ANALYSIS_MODEL,
   FILTER_MODEL,
@@ -46,6 +48,8 @@ function configuredModel(
 
 /** settings router — edit the analysis instructions ("지침") from the dashboard. */
 export const settingsRouter = router({
+  getRuntimeSchedule: publicProcedure.query(() => getRuntimeSchedule()),
+  getLlmUsage: publicProcedure.query(() => getLlmUsageReport()),
   getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),
   /** Non-secret, effective model plan after Settings/env/provider remapping. */
   getModelPlan: publicProcedure.query(async () => {

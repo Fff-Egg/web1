@@ -30,6 +30,11 @@ export interface LlmCallDiagnostics {
   finishReason?: string;
   promptTokens?: number;
   completionTokens?: number;
+  cacheHitTokens?: number;
+  cacheMissTokens?: number;
+  reasoningTokens?: number;
+  effectiveModel?: string;
+  effectiveThinking?: "enabled" | "disabled" | "unknown";
   reasoningChars?: number;
   contentChars?: number;
   effectiveMaxTokens?: number;

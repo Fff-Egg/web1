@@ -103,6 +103,63 @@ export function outboundLinks(body: string, supplied: string[] = []): string[] {
   });
 }
 
+// Compare formatting only. Do not remove punctuation, spaces inside numbers,
+// change case, or use similarity scores: small changes can reverse an article's facts.
+function comparableText(text: string): string { return text.replace(/\s+/gu, " ").trim(); }
+
+function containsText(whole: string, part: string): boolean {
+  if (!part) return true;
+  for (let start = whole.indexOf(part); start !== -1; start = whole.indexOf(part, start + 1)) {
+    const end = start + part.length;
+    // Require complete whitespace-delimited spans. “10”, “100”, “10.5” and
+    // “-10” are different facts, even when one is a literal substring of another.
+    if (start > 0 && whole[start - 1] !== " ") continue;
+    if (end < whole.length && whole[end] !== " ") continue;
+    return true;
+  }
+  return false;
+}
+
+function leadingTitle(text: string, titles: Array<string | null | undefined>): { title: string; text: string } {
+  const firstBreak = text.indexOf("\n");
+  if (firstBreak < 0) return { title: "", text };
+  const firstLine = text.slice(0, firstBreak).trim();
+  if (firstLine && titles.some(title => title && comparableText(title) === comparableText(firstLine))) {
+    return { title: firstLine, text: text.slice(firstBreak + 1).trim() };
+  }
+  return { title: "", text };
+}
+
+function mergeFeedBody(original: string, extracted: string, titles: Array<string | null | undefined>): string {
+  const originalKey = comparableText(original), extractedKey = comparableText(extracted);
+  if (containsText(originalKey, extractedKey)) return original;
+  if (containsText(extractedKey, originalKey)) return extracted;
+  // Some feeds and pages prepend different, known title lines. Compare their
+  // bodies, but retain any distinct title rather than duplicating the whole article.
+  const feed = leadingTitle(original, titles), page = leadingTitle(extracted, titles);
+  const feedKey = comparableText(feed.text), pageKey = comparableText(page.text);
+  if (feedKey && pageKey) {
+    if (containsText(feedKey, pageKey)) {
+      return page.title && !containsText(originalKey, comparableText(page.title)) ? `${page.title}\n\n${original}` : original;
+    }
+    if (containsText(pageKey, feedKey)) {
+      return feed.title && !containsText(extractedKey, comparableText(feed.title)) ? `${extracted}\n\n[피드 제공 제목]\n${feed.title}` : extracted;
+    }
+  }
+  return `${extracted}\n\n[피드 제공 본문 — 원문 추출과 대조용]\n${original}`;
+}
+
+function articleUrlKey(raw: string): string {
+  const url = new URL(raw);
+  // Only established tracking parameters. Keep functional queries (id, page,
+  // lang, ref, etc.), query order and fragments so distinct content stays distinct.
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^utm_(?:source|medium|campaign|term|content|id|source_platform|creative_format|marketing_tactic)$/i.test(key) ||
+      /^(?:fbclid|gclid|dclid|msclkid|mc_cid|mc_eid)$/i.test(key)) url.searchParams.delete(key);
+  }
+  return url.href;
+}
+
 export async function enrichArticle(item: NormalizedArticle, source: Source, fetchPage = fetchArticlePage): Promise<NormalizedArticle> {
   const original = htmlToText(item.body ?? "");
   const social = source.provider === "x" || source.provider === "telegram";
@@ -117,26 +174,26 @@ export async function enrichArticle(item: NormalizedArticle, source: Source, fet
         if (frame) page = await fetchPage(new URL(frame, page.url).href);
       }
       const extracted = extractArticle(page.html, page.url, source.config?.bodySelector);
-      if (!extracted.partial || !useSession || !hasSession(source.id)) return extracted;
+      if (!extracted.partial || !useSession || !hasSession(source.id)) return { ...extracted, url: page.url };
     } catch (err) { if (!useSession || !hasSession(source.id)) throw err; }
     await publicTarget(url);
     const text = await fetchWithSession({ sourceId: source.id, url, bodySelector: source.config?.bodySelector, allowUrl: publicTarget });
     if (!text || text.length < 80) throw Error("로그인 원문 본문을 추출하지 못함");
-    return { text, title: item.title ?? "", partial: /구독.{0,20}(?:필요|계속 읽)|subscribe to continue/i.test(text), session: true };
+    return { text, title: item.title ?? "", partial: /구독.{0,20}(?:필요|계속 읽)|subscribe to continue/i.test(text), session: true, url };
   };
   if (!social && item.url) {
     try {
       const full = await read(item.url, true);
       // A public paywall preview must never overwrite a fuller authenticated/RSS body.
-      if (original.includes(full.text)) body = original;
-      else if (full.text.includes(original)) body = full.text;
-      else body = `${full.text}\n\n[피드 제공 본문 — 원문 추출과 대조용]\n${original}`;
+      body = mergeFeedBody(original, full.text, [item.title, full.title]);
       meta.status = full.partial ? "partial" : "extracted";
       meta.method = "session" in full ? "session" : "page";
       if (full.partial) meta.reason = "접근 가능한 내용만 확보";
     } catch (err) { meta.status = "partial"; meta.reason = err instanceof Error ? err.message : "원문 수집 실패"; }
   } else if (!social) { meta.reason = "원문 주소 없음"; }
   if (social) {
+    const pages = new Map<string, Awaited<ReturnType<typeof read>>>();
+    const bodies = new Set<string>();
     const urls = outboundLinks(item.body ?? "", item.linkedUrls).filter(url => {
       const host = new URL(url).hostname.toLowerCase();
       return url !== item.url && !(host === "t.co" && item.linkedUrls?.length);
@@ -144,11 +201,19 @@ export async function enrichArticle(item: NormalizedArticle, source: Source, fet
     for (const url of urls) {
       const link: ContentLink = { url, status: "unavailable" };
       try {
-        const full = await read(url, false);
+        const key = articleUrlKey(url);
+        const full = pages.get(key) ?? await read(url, false);
+        pages.set(key, full);
+        pages.set(articleUrlKey(full.url), full);
         if (full.partial) link.reason = "연결 원문 일부만 확보";
         else link.status = "extracted";
         link.title = full.title;
-        body += `\n\n[연결 원문 — 게시글 작성자의 말과 구분]\n제목: ${full.title}\n주소: ${url}\n${full.text}`;
+        const textKey = comparableText(leadingTitle(full.text, [full.title]).text);
+        const duplicate = bodies.has(textKey);
+        bodies.add(textKey);
+        // Keep every submitted and resolved reference even when its article body
+        // was already included through a tracking variant, redirect or mirror.
+        body += `\n\n[${duplicate ? "동일 연결 원문 참조" : "연결 원문 — 게시글 작성자의 말과 구분"}]\n제목: ${full.title}\n주소: ${url}${full.url !== url ? `\n원문 주소: ${full.url}` : ""}${duplicate ? "" : `\n${full.text}`}`;
       } catch (err) { link.reason = err instanceof Error ? err.message : "연결 원문 수집 실패"; }
       meta.links.push(link);
     }

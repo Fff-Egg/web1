@@ -24,6 +24,7 @@ async function summarize(title: string, body: string): Promise<string | null> {
   if (!hasLLM() || body.trim().length < 40) return null;
   try {
     const out = await complete({
+      usage: { stage: "research_summary" },
       model: FILTER_MODEL(),
       system:
         "너는 증권사 리포트를 핵심만 요약하는 한국어 어시스턴트다. 광고·메뉴·네비게이션·면책문구는 무시하고, " +

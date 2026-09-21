@@ -4,7 +4,7 @@ import { db, hasDb } from "../db/client.js";
 import { sources, articles } from "../db/schema.js";
 import type { Source } from "../db/schema.js";
 import { getAdapter, SessionRequiredError } from "../adapters/index.js";
-import { enrichArticle } from "../adapters/fullText.js";
+import { enrichStoredArticle } from "../repo/articleContent.js";
 
 /**
  * Collection worker. Iterates every enabled source, resolves the adapter for
@@ -89,9 +89,9 @@ export async function collectSource(source: Source): Promise<number> {
   // Persist the whole fetched batch (including hidden/expanded links) before
   // any slow enrichment; cursor-based sources can then resume from the DB.
   for (const item of pending) {
-    const enriched = await enrichArticle(item, source);
-    await db.update(articles).set({ body: enriched.body ?? null, contentMeta: enriched.contentMeta, readingCache: null })
-      .where(and(eq(articles.sourceId, source.id), eq(articles.externalId, item.externalId), isNull(articles.deletedAt)));
+    const [stored] = await db.select({ id: articles.id }).from(articles)
+      .where(and(eq(articles.sourceId, source.id), eq(articles.externalId, item.externalId), isNull(articles.deletedAt))).limit(1);
+    if (stored) await enrichStoredArticle(stored.id);
   }
   return inserted;
 }

@@ -227,6 +227,7 @@ export async function filterRelevant(
   const filterModel = cfg.filterModel || FILTER_MODEL();
   const thinking = supportsThinkingControl(filterModel) ? cfg.filterThinking ?? "disabled" : undefined;
   const text = await complete({
+    usage: { stage: "filter", articleId: article.id },
     model: filterModel,
     system,
     user,
@@ -266,6 +267,7 @@ export async function filterRelevant(
   if (relevant && summary.trim() && !hasKorean(summary)) {
     try {
       const re = await complete({
+        usage: { stage: "filter", articleId: article.id },
         model: cfg.filterModel || FILTER_MODEL(),
         system: "너는 한국어 요약가다. 반드시 한국어로만 2~3문장 요약한다. 중국어·일본어는 절대 쓰지 않는다.",
         user: `다음 글을 한국어로만 2~3문장으로 요약:\n${article.body ?? ""}`,
@@ -300,6 +302,7 @@ export async function deepAnalyze(
     `출처: ${article.url ?? ""}\n\n` +
     `본문 또는 전체 구간 요약:\n${article.body ?? ""}`;
   const text = await complete({
+    usage: { stage: "deep_analysis", articleId: article.id },
     model: cfg.analysisModel || ANALYSIS_MODEL(),
     system,
     user,

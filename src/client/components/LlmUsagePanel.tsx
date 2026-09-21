@@ -1,0 +1,77 @@
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "../data/client.js";
+import { discountedFlashEstimate, LLM_STAGE_LABELS } from "../../shared/llmUsageView.js";
+
+const count = (n: number | null) => n === null ? "미수신" : n.toLocaleString("ko-KR");
+const hour = (n: number) => `${String(n).padStart(2, "0")}시`;
+const minute = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
+
+export function LlmUsagePanel() {
+  const [day, setDay] = useState("");
+  const usage = useQuery({ queryKey: ["llmUsage"], queryFn: () => api.getLlmUsage(), refetchInterval: 60_000 });
+  const schedule = useQuery({ queryKey: ["runtimeSchedule"], queryFn: () => api.getRuntimeSchedule(), refetchInterval: 60_000 });
+  const rows = (usage.data?.rows ?? []).filter(row => !day || row.day === day);
+  const days = [...new Set((usage.data?.rows ?? []).map(row => row.day))].sort().reverse();
+  const totals = rows.reduce((sum, row) => {
+    const estimate = discountedFlashEstimate(row);
+    return { requests: sum.requests + row.requests, output: sum.output + (row.outputTokens ?? 0),
+      outputKnown: sum.outputKnown + row.outputKnown, unknown: sum.unknown + row.unknownUsage,
+      cost: sum.cost + (estimate?.usd ?? 0), costRequests: sum.costRequests + (estimate?.requests ?? 0) };
+  }, { requests: 0, output: 0, outputKnown: 0, unknown: 0, cost: 0, costRequests: 0 });
+  const s = schedule.data;
+  return <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h2 className="text-lg font-semibold">API 사용량과 실행 시간</h2>
+      <button type="button" onClick={() => { void usage.refetch(); void schedule.refetch(); }}
+        disabled={usage.isFetching || schedule.isFetching}
+        className="rounded border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50">새로고침</button>
+    </div>
+    {s && <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm space-y-1">
+      <p className="font-medium">현재 서버 적용 시간 · 한국시간</p>
+      <p>아침 보고서 {hour(s.digestHour)} · 낮 보고서 {hour(s.middayHour)}
+        <span className="ml-2 text-xs text-slate-500">{s.digestHourSource === "railway" ? "서버 설정" : "기본값"} / {s.middayHourSource === "railway" ? "서버 설정" : "기본값"}</span></p>
+      {!s.automaticEnabled && <p className="text-amber-700">자동 실행이 꺼져 있습니다.</p>}
+      <p>글 자동 분석 절약 대기: <strong>{s.peakAvoidanceEnabled ? "켜짐" : "꺼짐"}</strong>
+        {s.peakAvoidanceEnabled && ` · 매일 ${s.pauseWindows.map(w => `${minute(w.startMinute)}~${minute(w.endMinute)}`).join(" · ")}`}</p>
+      {s.peakAvoidanceEnabled && <p className="text-xs text-slate-500">{s.resumeHours.map(hour).join("·")}에 대기 글 분석을 재개합니다. 수집은 계속되며 수동 실행에는 이 대기 규칙이 적용되지 않습니다. 현재 앱은 주말에도 같은 시간에 대기합니다.</p>}
+      {s.automaticEnabled && s.analysisDeferred && <p className="text-amber-700">현재는 글 자동 분석 대기 시간입니다.</p>}
+    </div>}
+    {schedule.error && <p className="text-sm text-red-600">서버 실행 시간을 불러오지 못했습니다. 새로고침해주세요.</p>}
+    <p className="text-xs text-slate-500">이 기능 배포 이후에 기록한 최근 7일입니다. 조회·새로고침은 AI를 호출하지 않습니다. 기록 시도는 성공·실패를 모두 포함하며, 저장된 요약을 재사용해 API를 호출하지 않은 경우는 제외합니다.</p>
+    {usage.isPending && <p className="text-sm text-slate-500">사용량을 불러오는 중…</p>}
+    {usage.error && <p className="text-sm text-red-600">사용량 기록을 불러오지 못했습니다. 새로고침해주세요.</p>}
+    {usage.data && <>
+      {!usage.data.persisted && <p className="text-xs text-amber-700">DB가 연결되지 않아 사용량을 저장하지 않습니다.</p>}
+      <label className="flex items-center gap-2 text-sm">기간
+        <select value={day} onChange={event => setDay(event.target.value)} className="rounded border border-slate-300 px-2 py-1">
+          <option value="">최근 7일 전체</option>{days.map(d => <option key={d} value={d}>{d}</option>)}
+        </select>
+      </label>
+      <div className="grid gap-3 sm:grid-cols-3 text-sm">
+        <div className="rounded bg-slate-50 p-3">기록된 요청<strong className="block text-lg">{count(totals.requests)}회</strong></div>
+        <div className="rounded bg-slate-50 p-3">확인된 출력 토큰<strong className="block text-lg">{totals.outputKnown ? count(totals.output) : "미수신"}</strong><span className="text-xs text-slate-500">출력 수신 {count(totals.outputKnown)} / {count(totals.requests)}회</span></div>
+        <div className="rounded bg-slate-50 p-3">할인 단가 기준 추정<strong className="block text-lg">{totals.costRequests ? `$${totals.cost.toFixed(4)}` : "계산할 기록 없음"}</strong><span className="text-xs text-slate-500">계산 가능 {count(totals.costRequests)} / {count(totals.requests)}회</span></div>
+      </div>
+      {totals.unknown > 0 && <p className="text-xs text-amber-700">입력 또는 출력 사용량을 받지 못한 요청이 {count(totals.unknown)}회 있습니다. 연결 중단 등으로 제공자가 사용량을 보내지 않은 경우이며 비용이 0이라는 뜻은 아닙니다.</p>}
+      {rows.length ? <div className="max-h-[30rem] overflow-auto">
+        <table className="w-full text-xs whitespace-nowrap text-left">
+          <thead className="sticky top-0 bg-slate-100"><tr>{["날짜", "작업 / 모델", "Thinking", "요청 / 실패", "입력 적중 / 미적중", "출력 토큰", "할인 기준 추정"].map(label => <th key={label} className="p-2 font-medium">{label}</th>)}</tr></thead>
+          <tbody>{rows.map((row, i) => {
+            const estimate = discountedFlashEstimate(row);
+            return <tr key={`${row.day}-${row.stage}-${row.model}-${row.thinking}-${i}`} className="border-b border-slate-100 align-top">
+              <td className="p-2">{row.day.slice(5)}</td>
+              <td className="p-2">{LLM_STAGE_LABELS[row.stage] ?? row.stage}<span className="block text-[10px] text-slate-500">{row.model}</span></td>
+              <td className="p-2">{row.thinking === "enabled" ? "ON" : row.thinking === "disabled" ? "OFF" : "미확인"}</td>
+              <td className="p-2 text-right">{count(row.requests)} / <span className={row.failed ? "text-red-600" : ""}>{count(row.failed)}</span></td>
+              <td className="p-2 text-right">{count(row.cacheHitTokens)} / {count(row.cacheMissTokens)}<span className="block text-[10px] text-slate-500">수신 {row.cacheHitKnown} / {row.cacheMissKnown}회</span></td>
+              <td className="p-2 text-right">{count(row.outputTokens)}<span className="block text-[10px] text-slate-500">수신 {row.outputKnown}회{row.reasoningKnown > 0 && ` · 확인된 생각 ${count(row.reasoningTokens)} (${row.reasoningKnown}회)`}</span></td>
+              <td className="p-2 text-right">{estimate ? `$${estimate.usd.toFixed(4)}` : "미계산"}{estimate && <span className="block text-[10px] text-slate-500">{estimate.requests}회분</span>}</td>
+            </tr>;
+          })}</tbody>
+        </table>
+      </div> : <p className="text-sm text-slate-500">아직 기록된 API 요청이 없습니다. 다음 분석부터 표시됩니다.</p>}
+      <p className="text-xs leading-relaxed text-slate-500">추정 비용은 공식 DeepSeek Flash의 입력 캐시 적중·미적중·출력 사용량을 모두 받은 요청만 계산합니다. 100만 토큰당 $0.003 / $0.15 / $0.60을 적용한 참고값이며 실제 청구액은 아닙니다. 혼잡 시간에는 2배입니다. 제공자 요금 변경·사용량 미수신·다른 모델 비용은 반영하지 않습니다. 입력 캐시 할인과 완성된 요약 재사용은 다릅니다. 입력이 할인되어도 새 출력에는 비용이 발생합니다. <a className="underline" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noreferrer">공식 요금표</a> (2026-09-21 확인)</p>
+    </>}
+  </section>;
+}

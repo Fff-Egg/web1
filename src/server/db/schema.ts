@@ -15,6 +15,29 @@ import {
 } from "drizzle-orm/mysql-core";
 import { relations } from "drizzle-orm";
 import type { ArticleContentMeta, ReadingCache } from "../../shared/articleContent.js";
+import type { LlmThinking, LlmUsageStage } from "../../shared/llmUsage.js";
+
+/** Usage metadata only. No prompt, generated text, credentials or provider error bodies. */
+export const llmUsage = mysqlTable("llm_usage", {
+  id: bigint("id", { mode: "number", unsigned: true }).autoincrement().primaryKey(),
+  requestId: varchar("request_id", { length: 64 }).notNull(),
+  startedAt: timestamp("started_at", { fsp: 3 }).notNull(),
+  stage: varchar("stage", { length: 32 }).$type<LlmUsageStage>().notNull(),
+  model: varchar("model", { length: 160 }).notNull(),
+  endpointHost: varchar("endpoint_host", { length: 255 }),
+  thinking: varchar("thinking", { length: 16 }).$type<LlmThinking>().notNull(),
+  articleId: bigint("article_id", { mode: "number", unsigned: true }),
+  runId: varchar("run_id", { length: 160 }),
+  success: boolean("success").notNull(),
+  durationMs: int("duration_ms", { unsigned: true }).notNull(),
+  finishReason: varchar("finish_reason", { length: 40 }),
+  httpStatus: int("http_status", { unsigned: true }),
+  inputTokens: bigint("input_tokens", { mode: "number", unsigned: true }),
+  cacheHitTokens: bigint("cache_hit_tokens", { mode: "number", unsigned: true }),
+  cacheMissTokens: bigint("cache_miss_tokens", { mode: "number", unsigned: true }),
+  outputTokens: bigint("output_tokens", { mode: "number", unsigned: true }),
+  reasoningTokens: bigint("reasoning_tokens", { mode: "number", unsigned: true }),
+}, t => ({ requestUnique: uniqueIndex("llm_usage_request_unq").on(t.requestId), startedIdx: index("llm_usage_started_idx").on(t.startedAt) }));
 
 /**
  * Provider identifiers — the kind of source. Each provider has a dedicated

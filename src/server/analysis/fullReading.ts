@@ -10,6 +10,7 @@ const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 export async function readWholeArticle(opts: {
   body: string; meta?: ArticleContentMeta | null; model: string; thinking?: "enabled" | "disabled";
   instructions?: string; cache?: ReadingCache | null;
+  articleId?: number; runId?: string;
   checkpoint?: (cache: ReadingCache) => Promise<void>;
   invoke?: typeof complete;
 }): Promise<ReadingCache> {
@@ -32,6 +33,7 @@ export async function readWholeArticle(opts: {
       let summary = cache.chunks[chunkKey];
       if (!summary) {
         summary = (await (opts.invoke ?? complete)({ model, thinking, system,
+          usage: { stage: "whole_reading", articleId: opts.articleId, runId: opts.runId },
           user: `전체 ${parts.length}개 구간 중 ${i + 1}번째. ${level ? "앞 단계에서 전체를 읽고 만든 요약을 다시 압축한다." : "원문을 빠짐없이 나눈 구간이다."}\n\n${parts[i]}`,
           maxTokens: thinkingTokenBudget(3200, thinking),
         })).trim();

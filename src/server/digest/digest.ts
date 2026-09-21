@@ -6,6 +6,7 @@ import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
+import { withLlmUsageContext } from "../analysis/usageObservation.js";
 import { reportDigestProgress, reportDigestSources } from "./progress.js";
 import { resolveDigestSources } from "./digestSources.js";
 import { shouldDeferAutomaticAnalysis, kstMinuteOfDay, ANALYSIS_PEAK_WINDOWS_KST } from "../analysis/schedule.js";
@@ -685,7 +686,7 @@ async function synthesizeFromDigests(
   for (const [i, d] of src.entries()) {
     await reportDigestProgress(`저장된 보고서 전체 읽기 ${i + 1}/${src.length} (보고서 #${d.id})`);
     const original = stripDigestHtml(d.markdown);
-    const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel,
+    const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel, runId: trace.runId,
       thinking: cfg.digestMapThinking ?? "disabled", instructions: cfg.summaryInstructions }) : null;
     inputs.push(`### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n${reading?.text ?? original}`);
   }
@@ -834,7 +835,7 @@ export async function generateDigest(
     for (const [index, row] of rows.entries()) {
       const label = opts.slot === "midday" ? "낮분" : opts.slot === "evening" ? "아침분" : "수동 생성";
       await reportDigestProgress(`${startDate} ${label}: 원문 수집·전체 읽기 준비 ${index + 1}/${rows.length} (글 #${row.id})`);
-      const prepared = await prepareStoredArticle(row.id, cfg);
+      const prepared = await withLlmUsageContext({ runId: trace.runId }, () => prepareStoredArticle(row.id, cfg));
       row.body = prepared.text;
     }
   }

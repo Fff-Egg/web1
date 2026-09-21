@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { AnalysisConfig, ModelPlan } from "../data/client.js";
+import { LlmUsagePanel } from "../components/LlmUsagePanel.js";
 
 /**
  * Settings — edit the analysis instructions ("지침"). This text is used as the
@@ -38,6 +39,7 @@ export function SettingsPage() {
 
   return (
     <div className="space-y-6">
+      <LlmUsagePanel />
       <section className="rounded-lg border border-slate-200 bg-white p-5 space-y-5">
         <div>
           <h2 className="text-lg font-semibold">분석 지침</h2>

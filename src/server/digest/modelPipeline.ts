@@ -307,7 +307,8 @@ export async function completeDigestStage(
     const label = `[digest:${trace.runId}] ${policy.stage} attempt=${attempt} phase=${phase}`;
     console.info(`${label} llm_start model=${call.model} input_chars=${call.system.length + call.user.length}`);
     try {
-      const result = await invoke({ ...call, onDiagnostics: (d) => {
+      const result = await invoke({ ...call, usage: { ...call.usage, runId: trace.runId,
+        stage: phase === "fallback" ? "digest_fallback" : policy.stage === "map" ? "digest_map" : "digest_final" }, onDiagnostics: (d) => {
         diagnostics = d;
         try { call.onDiagnostics?.(d); } catch { /* observation only */ }
       } });

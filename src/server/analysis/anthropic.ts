@@ -3,6 +3,9 @@ import { LlmCallProbe } from "./llmDiagnostics.js";
 import { readChatCompletionStream } from "./chatCompletionStream.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { supportsDeepSeekThinking } from "../../shared/deepseekModels.js";
+import type { LlmUsageContext, LlmUsageEvent } from "../../shared/llmUsage.js";
+import { currentLlmUsageContext, observeLlmUsage } from "./usageObservation.js";
+import { recordProviderUsage, tokenCount } from "./providerUsage.js";
 
 let _client: Anthropic | null = null;
 
@@ -116,6 +119,8 @@ function extraBody(): Record<string, unknown> {
 }
 
 export interface CompleteOpts {
+  /** Attribution only; never sent to the provider. */
+  usage?: LlmUsageContext;
   /** Observation only; never changes model parameters or retries. */
   onDiagnostics?: (diagnostics: LlmCallDiagnostics) => void;
   model: string;
@@ -138,17 +143,57 @@ export async function complete(opts: CompleteOpts): Promise<string> {
 }
 
 async function completeAnthropic(opts: CompleteOpts): Promise<string> {
-  const res = await getAnthropic().messages.create({
-    model: opts.model,
-    max_tokens: opts.maxTokens ?? 1024,
-    system: stripLoneSurrogates(opts.system),
-    messages: [{ role: "user", content: stripLoneSurrogates(opts.user) }],
-  });
-  return res.content
-    .filter((b): b is Anthropic.TextBlock => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
+  const probe = new LlmCallProbe(opts.system, opts.user);
+  probe.data.endpointHost = "api.anthropic.com";
+  probe.data.effectiveModel = opts.model;
+  probe.data.effectiveThinking = "disabled";
+  let success = false;
+  try {
+    const res = await getAnthropic().messages.create({
+      model: opts.model,
+      max_tokens: opts.maxTokens ?? 1024,
+      system: stripLoneSurrogates(opts.system),
+      messages: [{ role: "user", content: stripLoneSurrogates(opts.user) }],
+    });
+    // Anthropic input_tokens excludes cache reads/writes: keep cache misses unknown
+    // because cache-creation tokens have their own pricing, unlike DeepSeek misses.
+    const usage = res.usage;
+    const hit = tokenCount(usage.cache_read_input_tokens);
+    const creation = tokenCount(usage.cache_creation_input_tokens);
+    const input = tokenCount(usage.input_tokens);
+    if (input !== undefined && hit !== undefined && creation !== undefined) probe.data.promptTokens = input + hit + creation;
+    probe.data.cacheHitTokens = hit;
+    probe.data.completionTokens = tokenCount(usage.output_tokens);
+    probe.data.finishReason = res.stop_reason ?? undefined;
+    const text = res.content
+      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .map((b) => b.text)
+      .join("\n")
+      .trim();
+    probe.data.stage = "complete";
+    success = true;
+    return text;
+  } catch (error) { probe.failure(error); throw error; }
+  finally { probe.publish(opts.onDiagnostics); await recordAttempt(opts, probe.data, success); }
+}
+
+/** Whitelisted metadata shape: no prompts, text, secrets or raw error strings. */
+async function recordAttempt(opts: CompleteOpts, d: LlmCallDiagnostics, success: boolean): Promise<void> {
+  try {
+    const identifier = (value: string | undefined, max = 160) => value && value.length <= max && /^[\w./:-]+$/.test(value) ? value : null;
+    const context = currentLlmUsageContext();
+    const event: LlmUsageEvent = {
+      requestId: d.requestId, startedAt: d.startedAt, stage: opts.usage?.stage ?? context.stage ?? "unknown",
+      model: identifier(d.effectiveModel) ?? "unknown", endpointHost: identifier(d.endpointHost, 255),
+      thinking: d.effectiveThinking ?? "unknown", articleId: tokenCount(opts.usage?.articleId ?? context.articleId) ?? null,
+      runId: identifier(opts.usage?.runId ?? context.runId), success, durationMs: Math.min(d.durationMs, 4294967295),
+      finishReason: identifier(d.finishReason, 40), httpStatus: d.httpStatus ?? null,
+      inputTokens: tokenCount(d.promptTokens) ?? null, cacheHitTokens: tokenCount(d.cacheHitTokens) ?? null,
+      cacheMissTokens: tokenCount(d.cacheMissTokens) ?? null, outputTokens: tokenCount(d.completionTokens) ?? null,
+      reasoningTokens: tokenCount(d.reasoningTokens) ?? null,
+    };
+    await observeLlmUsage(event);
+  } catch { /* No observer failure may alter a result or initiate a paid retry. */ }
 }
 
 /**
@@ -160,6 +205,7 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
  */
 async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   const probe = new LlmCallProbe(opts.system, opts.user);
+  let success = false;
   try {
     const base = process.env.LLM_BASE_URL!.replace(/\/+$/, "");
     const configuredExtra = extraBody();
@@ -225,16 +271,16 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       try { data = JSON.parse(raw); } catch { throw new Error("LLM invalid JSON response"); }
     }
     probe.data.stage = "validating_response";
+    // Billing metadata can be valid even when the generated message is malformed.
+    const u = data?.usage;
+    recordProviderUsage(probe.data, u);
     const choice = data.choices?.[0];
     const text = (choice?.message?.content ?? "").trim();
     const reason = choice?.finish_reason ?? "?";
     const reasoning = streamedReasoning ?? (choice?.message?.reasoning_content ?? "").length;
-    const u = data.usage;
     probe.data.finishReason = /^[a-z_]{1,40}$/.test(reason) ? reason : "unknown";
     probe.data.reasoningChars = reasoning;
     probe.data.contentChars = text.length;
-    if (typeof u?.prompt_tokens === "number") probe.data.promptTokens = u.prompt_tokens;
-    if (typeof u?.completion_tokens === "number") probe.data.completionTokens = u.completion_tokens;
     const detail =
       `finish_reason=${reason}` +
       (reasoning > 0 ? ` reasoning_len=${reasoning}` : "") +
@@ -259,7 +305,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
     if (probe.data.stream && reason !== "stop") {
       throw new Error(`LLM 불완전 스트림 (finish_reason=${probe.data.finishReason}) — 부분 결과는 저장하지 않습니다.`);
     }
-    if (text) { probe.data.stage = "complete"; return text; }
+    if (text) { probe.data.stage = "complete"; success = true; return text; }
 
     // ⚠️ 200인데 본문이 빈 경우 — 예전엔 빈 문자열을 그대로 돌려줘 **조용히 통과**했다.
     // 그러면 다이제스트 맵 단계가 빈 청크를 만들고, 최종 종합은 "입력이 비어 있다"는
@@ -276,7 +322,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
   } catch (error) {
     probe.failure(error);
     throw error;
-  } finally { probe.publish(opts.onDiagnostics); }
+  } finally { probe.publish(opts.onDiagnostics); await recordAttempt(opts, probe.data, success); }
 }
 
 /** Strip ```json fences / prose and parse the first JSON object. Returns null on failure. */

@@ -12,6 +12,8 @@ import type { ResearchList } from "../../shared/research.js";
 import type { ArticleContentMeta } from "../../shared/articleContent.js";
 import type { BoundaryRun } from "../../shared/boundaryRun.js";
 import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
+import type { RuntimeSchedule } from "../../shared/runtimeSchedule.js";
+import type { LlmUsageReport } from "../../shared/llmUsage.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -142,6 +144,8 @@ export interface DataApi {
   ): Promise<{ ok: boolean; inserted: number; error: string | null; suggestedFeedUrl?: string | null }>;
   getAnalysisConfig(): Promise<AnalysisConfig>;
   getModelPlan(): Promise<ModelPlan>;
+  getRuntimeSchedule(): Promise<RuntimeSchedule>;
+  getLlmUsage(): Promise<LlmUsageReport>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
   setFilterGuidance(text: string): Promise<void>;
@@ -303,6 +307,8 @@ function makeTrpcApi(): DataApi {
       client.sources.collectNow.mutate({ id }) as ReturnType<DataApi["collectSourceNow"]>,
     getAnalysisConfig: () => client.settings.getAnalysisConfig.query(),
     getModelPlan: () => client.settings.getModelPlan.query() as Promise<ModelPlan>,
+    getRuntimeSchedule: () => client.settings.getRuntimeSchedule.query(),
+    getLlmUsage: () => client.settings.getLlmUsage.query(),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
@@ -485,6 +491,16 @@ function makeStaticApi(): DataApi {
         finalAttempts: 1,
         finalFallbackTokens: thinkingTokenBudget(8192, mapThinking),
       };
+    },
+    async getRuntimeSchedule() {
+      return { timezone: "Asia/Seoul", automaticEnabled: false, digestHour: 7, middayHour: 14,
+        digestHourSource: "default", middayHourSource: "default", peakAvoidanceEnabled: true,
+        analysisDeferred: false, pauseWindows: [{ startMinute: 600, endMinute: 780 }, { startMinute: 900, endMinute: 1140 }],
+        resumeHours: [13, 19], checkedAt: new Date().toISOString() };
+    },
+    async getLlmUsage() {
+      const now = new Date().toISOString();
+      return { timezone: "Asia/Seoul", since: now, until: now, generatedAt: now, persisted: false, rows: [] };
     },
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));

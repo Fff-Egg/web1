@@ -1,4 +1,5 @@
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
+import { recordProviderUsage } from "./providerUsage.js";
 
 export interface ChatCompletionStreamResult {
   content: string;
@@ -37,6 +38,7 @@ export async function readChatCompletionStream(
   const updateUsage = (value: unknown): void => {
     if (value === undefined || value === null) return;
     if (!isRecord(value)) throw invalid("invalid usage");
+    recordProviderUsage(diagnostics, value);
     for (const key of ["prompt_tokens", "completion_tokens"] as const) {
       const tokens = value[key];
       if (tokens === undefined) continue;
@@ -65,9 +67,9 @@ export async function readChatCompletionStream(
     let parsed: unknown;
     try { parsed = JSON.parse(data); } catch { throw invalid("malformed event JSON"); }
     if (!isRecord(parsed)) throw invalid("invalid completion event");
+    updateUsage(parsed.usage);
     if (parsed.error !== undefined) throw invalid("provider stream error");
     if (!Array.isArray(parsed.choices)) throw invalid("missing completion choices");
-    updateUsage(parsed.usage);
     // Only the first choice is requested. Accept usage-only chunks as well, so
     // an OpenAI-compatible gateway may send usage separately from its last delta.
     const choice = parsed.choices.find((candidate: unknown) =>

@@ -18,7 +18,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - **소스 수집**: twitter-scraper(X 쿠키) · gramjs(텔레그램 MTProto) · ws(TradingView) · rss-parser · playwright · marked(다이제스트 렌더)
 - **배포**: Railway(앱 web1 + MySQL). `start = db:migrate && tsx src/server/index.ts`. `claude/focused-planck-m3wgbz` 푸시 = 자동 재배포. 사용자 요청에 따라 이후 코드 변경과 인수인계 기록도 이 브랜치에 함께 커밋·푸시한다. 아웃바운드 개방(외부 수집은 프로덕션에서만).
 
-**규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0014(15개).
+**규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0015(16개).
 
 ---
 
@@ -89,6 +89,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - generic_rss는 홈페이지 URL만 넣어도 피드 자동 탐지 제안('이 주소로 저장하고 수집'). X 직접수집 상태 배너. 인증 필요 소스는 로그인 안내.
 
 **Settings** (`SettingsPage.tsx`)
+- **API 사용량과 실행 시간**: 현재 서버의 아침·낮 보고서 시각과 자동 선별 절약 대기 설정을 조회한다. 배포 후 최근 한국시간 7일간 단계·모델·Thinking별 요청/실패·입력 캐시·출력·추론 토큰과 Flash 비혼잡 단가 기준 추정 비용을 표시한다. 과거 청구 데이터를 복원하거나 실청구액을 표시하는 기능은 아니다. 상세는 `docs/LLM_USAGE.md`.
 - 지침 4종 편집: `relevanceCriteria`(1차 필터) · `importanceCriteria`(중요/검토 분리) · `summaryInstructions`(요약) · `digestInstructions`(2차 다이제스트).
 - 고급(접힘): DEEP_ANALYSIS 지침 · 1차 글 선별 / 다이제스트 자료 정리 / 최종 연결 모델을 독립 설정. 현재 서버의 실제 모델 흐름과 Settings·Railway 우선순위 표시.
 - **학습 메모(자동)**: 피드백으로 매일 distill되는 중요도 메모 보기·편집·비우기(`settings.filterGuidance`, `importanceCriteria`와 별개).
