@@ -19,7 +19,25 @@ export interface LlmUsageBucket {
   /** Only attempts with all three billing quantities supplied by the provider. */
   costBasis: { requests: number; cacheHitTokens: number; cacheMissTokens: number; outputTokens: number };
 }
+export interface LlmUsageFailureGroup extends Pick<LlmUsageBucket, "day" | "stage" | "model" | "endpointHost" | "thinking" | "outputKnown" | "outputTokens" | "costBasis"> {
+  httpStatus: number | null;
+  finishReason: string | null;
+  /** Failed attempts only, including failures that still consumed tokens. */
+  requests: number;
+}
+export interface LlmUsageRepeatedArticle {
+  articleId: number;
+  stage: LlmUsageStage;
+  httpStatus: number | null;
+  finishReason: string | null;
+  failures: number;
+  lastAt: string;
+}
 export interface LlmUsageReport {
   timezone: "Asia/Seoul"; since: string; until: string; generatedAt: string; persisted: boolean;
   rows: LlmUsageBucket[];
+  failureGroups?: LlmUsageFailureGroup[];
+  /** Top 20 article/stage/reason combinations with multiple failures in the full report window.
+   * An article can have several chunks; this does not prove the same chunk was retried. */
+  repeatedArticles?: LlmUsageRepeatedArticle[];
 }

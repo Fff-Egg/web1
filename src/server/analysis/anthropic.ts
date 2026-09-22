@@ -6,6 +6,7 @@ import { supportsDeepSeekThinking } from "../../shared/deepseekModels.js";
 import type { LlmUsageContext, LlmUsageEvent } from "../../shared/llmUsage.js";
 import { currentLlmUsageContext, observeLlmUsage } from "./usageObservation.js";
 import { recordProviderUsage, tokenCount } from "./providerUsage.js";
+import { LlmOutputLimitError } from "./llmErrors.js";
 
 let _client: Anthropic | null = null;
 
@@ -297,7 +298,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         `[llm] 불완전 응답 폐기 (model=${opts.model}) ${detail}` +
           (text ? ` partial_chars=${text.length}` : ""),
       );
-      throw new Error(
+      throw new LlmOutputLimitError(
         `LLM 응답 잘림 (${detail}${text ? ` partial_chars=${text.length}` : ""})` +
           " — 부분 결과는 저장하지 않습니다.",
       );

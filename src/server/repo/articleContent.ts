@@ -4,7 +4,7 @@ import { articles, sources, type Article, type AnalysisConfig } from "../db/sche
 import { enrichArticle } from "../adapters/fullText.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
 import { FILTER_MODEL } from "../analysis/anthropic.js";
-import { contentScope } from "../../shared/articleContent.js";
+import { contentScope, resetReadingRecovery } from "../../shared/articleContent.js";
 
 const jobs = new Map<number, Promise<unknown>>();
 class ContentChangedError extends Error {}
@@ -60,16 +60,35 @@ export async function enrichStoredArticle(id: number): Promise<void> {
   }
 }
 
-export async function prepareStoredArticle(id: number, cfg: AnalysisConfig, refresh = false): Promise<{ article: Article; text: string }> {
+/** Explicit retry resets only the bounded recovery budget/hold, never completed chunks. */
+export async function resetStoredReadingRecovery(id: number): Promise<void> {
+  await withArticleContent(id, async () => {
+    const [article] = await db.select().from(articles).where(and(eq(articles.id, id), isNull(articles.deletedAt))).limit(1);
+    if (!article?.readingCache) return;
+    await db.update(articles).set({ readingCache: resetReadingRecovery(article.readingCache) }).where(contentSnapshot(article));
+  });
+}
+
+export async function prepareStoredArticle(id: number, cfg: AnalysisConfig, refresh = false, beforeReading?: (article: Article) => Promise<void>): Promise<{ article: Article; text: string }> {
   return withArticleContent(id, async () => {
-    const article = await enrichCurrentArticle(id, refresh);
+    let article = await enrichCurrentArticle(id, refresh);
     if (!article) throw Error("원문이 없거나 휴지통으로 이동했습니다.");
+    // Feed's explicit refresh also releases a digest reading hold on an already
+    // analysed article. Automatic callers never reset the bounded recovery budget.
+    if (refresh && article.readingCache?.recovery) {
+      const readingCache = resetReadingRecovery(article.readingCache);
+      const result = await db.update(articles).set({ readingCache }).where(contentSnapshot(article));
+      if (!result[0].affectedRows) throw new ContentChangedError("원문이 변경되었거나 휴지통으로 이동했습니다. 다시 시도해 주세요.");
+      article = { ...article, readingCache };
+    }
+    await beforeReading?.(article);
+    const preparedArticle = article;
     const reading = await readWholeArticle({ body: article.body ?? "", meta: article.contentMeta,
       articleId: id,
       model: cfg.digestMapModel || cfg.filterModel || FILTER_MODEL(), thinking: cfg.digestMapThinking ?? "disabled",
       instructions: cfg.summaryInstructions, cache: article.readingCache,
       checkpoint: async readingCache => {
-        const result = await db.update(articles).set({ readingCache }).where(contentSnapshot(article));
+        const result = await db.update(articles).set({ readingCache }).where(contentSnapshot(preparedArticle));
         if (!result[0].affectedRows) throw Error("원문이 변경되었거나 휴지통으로 이동해 전체 읽기를 중단했습니다.");
       },
     });

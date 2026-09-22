@@ -18,7 +18,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - **소스 수집**: twitter-scraper(X 쿠키) · gramjs(텔레그램 MTProto) · ws(TradingView) · rss-parser · playwright · marked(다이제스트 렌더)
 - **배포**: Railway(앱 web1 + MySQL). `start = db:migrate && tsx src/server/index.ts`. `claude/focused-planck-m3wgbz` 푸시 = 자동 재배포. 사용자 요청에 따라 이후 코드 변경과 인수인계 기록도 이 브랜치에 함께 커밋·푸시한다. 아웃바운드 개방(외부 수집은 프로덕션에서만).
 
-**규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0015(16개).
+**규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0016(17개).
 
 ---
 
@@ -89,7 +89,8 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - generic_rss는 홈페이지 URL만 넣어도 피드 자동 탐지 제안('이 주소로 저장하고 수집'). X 직접수집 상태 배너. 인증 필요 소스는 로그인 안내.
 
 **Settings** (`SettingsPage.tsx`)
-- **API 사용량과 실행 시간**: 현재 서버의 아침·낮 보고서 시각과 자동 선별 절약 대기 설정을 조회한다. 배포 후 최근 한국시간 7일간 단계·모델·Thinking별 요청/실패·입력 캐시·출력·추론 토큰과 Flash 비혼잡 단가 기준 추정 비용을 표시한다. 과거 청구 데이터를 복원하거나 실청구액을 표시하는 기능은 아니다. 상세는 `docs/LLM_USAGE.md`.
+- **API 사용량과 실행 시간**: 현재 서버의 아침·낮 보고서 시각과 자동 선별 절약 대기 설정을 조회한다. 배포 후 최근 한국시간 7일간 단계·모델·Thinking별 요청/실패·입력 캐시·출력·추론 토큰과 Flash 비혼잡 단가 기준 추정 비용을 표시하며 기본 선택은 오늘이다. 선택 기간의 실패 원인 표는 전체 합계에 이미 포함된 부분집합이다. 별도의 최근 7일 반복 실패 글 목록은 같은 글의 여러 구간도 합산하므로 동일 구간 재호출을 뜻하지 않는다. 과거 청구 데이터를 복원하거나 실청구액을 표시하는 기능은 아니다. 상세는 `docs/LLM_USAGE.md`.
+- **자동 분석 재시도 관리**: 미분석·분석 가능·시간 대기·보류 건수와 최근 20개 대기/보류 글의 원인·실패 횟수·다음 시각을 표시한다. 개별/전체 재시도 허용은 확인 후 제한과 전체 분석 대기를 해제한다. 완료된 요약·분할 계획을 유지하고 즉시 LLM을 호출하지 않으며 다음 분석에서 재개한다.
 - 지침 4종 편집: `relevanceCriteria`(1차 필터) · `importanceCriteria`(중요/검토 분리) · `summaryInstructions`(요약) · `digestInstructions`(2차 다이제스트).
 - 고급(접힘): DEEP_ANALYSIS 지침 · 1차 글 선별 / 다이제스트 자료 정리 / 최종 연결 모델을 독립 설정. 현재 서버의 실제 모델 흐름과 Settings·Railway 우선순위 표시.
 - **학습 메모(자동)**: 피드백으로 매일 distill되는 중요도 메모 보기·편집·비우기(`settings.filterGuidance`, `importanceCriteria`와 별개).
@@ -162,7 +163,7 @@ MEGA 배지  = VIX ≥ 40
 ## 5. 백엔드 파이프라인 (수집 → 분석 → 종합, 4단계)
 
 1. **수집** (`workers/collect.ts` collectAll): 소스별 어댑터로 fetch → 제공 본문과 직접 연결 URL을 먼저 `articles`에 저장 → RSS 원문 페이지 및 X·텔레그램의 직접 연결 기사를 추가 추출한다. 같은 (source,url/externalId) 글은 삭제됐어도 재생성 안 함. 페이지 접근 실패 시 제공 본문을 유지하며 `contentMeta`에 일부 수집 상태를 기록한다. 로그인 권한·이미지·PDF 등으로 확보하지 못한 내용을 확보했다고 표시하지 않는다.
-2. **전체 읽기 + 1차 분석** (`repo/articleContent.ts`, `analysis/fullReading.ts`, `analysis/analyze.ts`): 수집된 본문 12,000자 이하는 그대로 사용하며 초과 글은 처음부터 끝까지 구간별로 읽어 요약한다. 완료 구간·최종 요약은 `readingCache`에 저장해 재개·재사용한다. 그 후 LLM 1콜로 관련성·중요도·요약 + 논지 신호를 산출한다. 다이제스트도 이 전체 읽기 결과를 쓰며 앞 2,500/4,000자 자르기는 제거했다. 기존 글은 다음 분석·종합·수동 갱신 시 준비한다. 본문 미수집 shell의 원문확인 분류는 유지한다. 배치(50)×동시성(3), 429 감지 시 사이클 중단 후 재개. 자세한 범위·비용·운영은 [전체 본문 읽기](FULL_ARTICLE_READING.md).
+2. **전체 읽기 + 1차 분석** (`repo/articleContent.ts`, `analysis/fullReading.ts`, `analysis/analyze.ts`): 수집된 본문 12,000자 이하는 그대로 사용하며 초과 글은 처음부터 끝까지 구간별로 읽어 요약한다. 완료 구간·최종 요약은 `readingCache`에 저장해 재개·재사용한다. 그 후 관련성·중요도·요약 + 논지 신호를 산출한다. 다이제스트도 이 전체 읽기 결과를 쓰며 앞 2,500/4,000자 자르기는 제거했다. 기존 글은 다음 분석·종합·수동 갱신 시 준비한다. 본문 미수집 shell의 원문확인 분류는 유지한다. 배치(50)×동시성(3), 같은 프로세스의 분석 호출은 실행 중인 배치를 공유한다. 9/22 사용량·운영 로그로 확인한 출력 제한 반복 실패를 막기 위해 전체 읽기는 실패 구간을 무손실 이등분하고 분할 계획·성공 구간을 저장한다(최대 3단계·추가 호출 24회, 기존 캐시 키 유지). 선별은 출력 제한 보정을 한 번만 시도한다. 결정적인 실패는 보류, 일시 오류는 30분·2시간 대기 후 3회째 보류한다. 401·402·403은 전체 글 분석 1시간, 429는 30분 대기한다. 본문·완료 구간은 보존하며 미완성 결과를 다이제스트에 사용하지 않는다. 자세한 범위는 [전체 본문 읽기](FULL_ARTICLE_READING.md), 재시도·비용 운영은 [LLM 사용량](LLM_USAGE.md).
 3. **피드백 학습** (`feedback.ts` refreshGuidance): 사용자 액션(휴지통=중요↓/남기기·복원=중요↑)만 `filter_feedback`에 기록. 경계 루틴에서 새 피드백만 distill해 '학습 메모'에 누적 통합 → 1차 필터 중요도에만 재주입(관련성 게이트 불변).
 4. **다이제스트** (`digest/digest.ts`): 경계 07시(아침분+조건부 하루 sweep+피드백 distill) · 낮분(코드 기본 17시, 현재 운영 14시). 큰 창은 자료 정리 모델로 청크 압축 후 최종 모델로 종합한다. 2026-09-10 사용자가 세 모델 모두 **`deepseek-flash`(V4.1 Flash)**로 저장했다. 공식 DeepSeek 엔드포인트에서는 모델 이름과 무관하게 **선별 OFF·정리 OFF·최종 ON**을 기본으로 적용하며 Settings에서 단계별 Thinking을 바꿀 수 있다. 최종 ON은 SSE·최소 49,152의 최대 토큰 설정으로 1회 실행한다(고정 사용량 아님). 실패하면 자료 정리 설정으로 최대 1회 대체하며 동일 ID는 ON→OFF 전환일 때만 허용한다. 부분 응답은 폐기하고 대체본의 원문 피드 정리는 보류한다. 전역 각주 [N] 유지. [N]은 각주 링크로 연결(일반=원문 URL, 텔레그램=`?article`). 과거일은 저장 다이제스트 재종합.
 
@@ -183,9 +184,10 @@ MEGA 배지  = VIX ≥ 40
 
 **DB 테이블** (`db/schema.ts`):
 - `sources` · `articles`(soft-delete deletedAt · tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText/tickers/themes/impact) · `digests`(periodStart/End · meta · slot) · `settings`(key/value JSON KV — 지침·filterGuidance·marketSnapshot 등) · `filter_feedback` · `research_reports` · `threads`+`signals`(논지지도, signals unique(article_id,thread_id), thread_id NULL=신규후보)
+- `llm_usage`(호출별 단계·실제 모델/Thinking·확보한 토큰·성공/실패 메타데이터) · `analysis_retries`(글별 본문/설정 지문·실패 횟수·다음 재시도·보류·선별 보정 여부). 전체 분석 대기는 `settings.analysisRetryPause`, 구간별 분할·복구 상태는 `articles.readingCache.recovery`에 저장한다.
 
 **마이그레이션**(수동 작성 — drizzle-kit generate는 대화형이라 이 환경서 막힘):
-0000 초기 · 0001 settings · 0002 full_text · 0003 trash+digest 기간화 · 0004 low_priority · 0005 saved · 0006 text→mediumtext · 0007 filter_feedback · 0008 research_reports · 0009 research summary/marketCap · 0010 thesis_map. 컬럼 추가는 nullable/default로.
+0000 초기 · 0001 settings · 0002 full_text · 0003 trash+digest 기간화 · 0004 low_priority · 0005 saved · 0006 text→mediumtext · 0007 filter_feedback · 0008 research_reports · 0009 research summary/marketCap · 0010 thesis_map · 0011 source_review · 0012 원문확인 재분류 · 0013 실질 정보 중요도 복구 · 0014 전체 본문/읽기 캐시 · 0015 LLM 사용량 · 0016 분석 재시도. 컬럼 추가는 nullable/default로.
 
 **주요 env**: `DATABASE_URL`, `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`, `X_AUTH_TOKEN/X_CT0`, `TELEGRAM_API_ID/HASH/SESSION`, `DIGEST_HOUR`(7)/`DIGEST_MIDDAY_HOUR`(17), `COLLECT_INTERVAL_MIN`, `MARKET_HOUR`(7)/`RESEARCH_HOUR`(8), `ANALYZE_BATCH/CONCURRENCY`, `DIGEST_MAX_TOKENS` 등.
 
@@ -205,7 +207,7 @@ src/server/repo/      — thesis.ts 등 저장소 레이어
 src/server/trpc/routers/ — 8개 라우터
 src/server/scheduler.ts  — node-cron 오케스트레이션
 src/shared/           — analysis.ts(지침 기본값·프롬프트) · market.ts · providers.ts · research.ts
-drizzle/              — 0000~0010 마이그레이션 SQL
+drizzle/              — 0000~0016 마이그레이션 SQL
 CLAUDE.md             — 전체 인수인계(가장 상세)
 ```
 

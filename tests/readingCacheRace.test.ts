@@ -218,3 +218,18 @@ test("empty provider bodies retain null snapshot guards and can be prepared", as
   assert.equal(state.calls, 0);
   assert.ok(state.article.readingCache?.completedAt);
 });
+
+test("explicit refresh releases a reading hold while preserving completed chunks", async () => {
+  const state = fixture();
+  await collectSource(source);
+  await prepareStoredArticle(1, cfg);
+  const cache = structuredClone(state.article.readingCache!);
+  state.article.readingCache = { ...cache, recovery: { version: 1, splits: { first: true }, calls: 36,
+    held: { reason: "recovery_budget", at: "2026-09-22T00:00:00Z" } } };
+  await prepareStoredArticle(1, cfg, true);
+  assert.equal(state.calls, 2, "reset must not generate paid duplicates of completed chunks");
+  assert.deepEqual(state.article.readingCache?.chunks, cache.chunks);
+  assert.deepEqual(state.article.readingCache?.recovery?.splits, { first: true });
+  assert.equal(state.article.readingCache?.recovery?.calls, 0);
+  assert.equal(state.article.readingCache?.recovery?.held, undefined);
+});

@@ -14,6 +14,7 @@ import type { BoundaryRun } from "../../shared/boundaryRun.js";
 import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
 import type { RuntimeSchedule } from "../../shared/runtimeSchedule.js";
 import type { LlmUsageReport } from "../../shared/llmUsage.js";
+import type { AnalysisRetryStatus } from "../../shared/analysisRetry.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -146,6 +147,8 @@ export interface DataApi {
   getModelPlan(): Promise<ModelPlan>;
   getRuntimeSchedule(): Promise<RuntimeSchedule>;
   getLlmUsage(): Promise<LlmUsageReport>;
+  getAnalysisRetryStatus(): Promise<AnalysisRetryStatus>;
+  resetAnalysisRetry(articleId?: number): Promise<{ reset: number }>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
   setFilterGuidance(text: string): Promise<void>;
@@ -309,6 +312,8 @@ function makeTrpcApi(): DataApi {
     getModelPlan: () => client.settings.getModelPlan.query() as Promise<ModelPlan>,
     getRuntimeSchedule: () => client.settings.getRuntimeSchedule.query(),
     getLlmUsage: () => client.settings.getLlmUsage.query(),
+    getAnalysisRetryStatus: () => client.settings.getAnalysisRetryStatus.query(),
+    resetAnalysisRetry: (articleId) => client.settings.resetAnalysisRetry.mutate({ articleId }),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
@@ -502,6 +507,10 @@ function makeStaticApi(): DataApi {
       const now = new Date().toISOString();
       return { timezone: "Asia/Seoul", since: now, until: now, generatedAt: now, persisted: false, rows: [] };
     },
+    async getAnalysisRetryStatus() {
+      return { persisted: false, totalPending: 0, eligible: 0, held: 0, waiting: 0, globalPause: null, items: [] };
+    },
+    async resetAnalysisRetry() { return { reset: 0 }; },
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
     },

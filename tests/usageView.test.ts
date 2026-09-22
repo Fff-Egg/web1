@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
-import { discountedFlashEstimate } from "../src/shared/llmUsageView.js";
+import { discountedFlashEstimate, usageKstDay, usageFailureLabel } from "../src/shared/llmUsageView.js";
 import type { LlmUsageBucket } from "../src/shared/llmUsage.js";
 import { getRuntimeSchedule } from "../src/server/runtimeSchedule.js";
 
@@ -18,6 +18,17 @@ test("unknown, other providers and unpriced models never get a fabricated zero b
   assert.equal(discountedFlashEstimate({ ...row, model: "deepseek-v4-pro" }), null);
   assert.equal(discountedFlashEstimate({ ...row, costBasis: { ...row.costBasis, outputTokens: -1 } }), null);
   assert.deepEqual(discountedFlashEstimate({ ...row, costBasis: { requests: 1, cacheHitTokens: 0, cacheMissTokens: 0, outputTokens: 0 } }), { usd: 0, requests: 1 });
+});
+
+test("today follows the server report's KST date, including the UTC day boundary", () => {
+  assert.equal(usageKstDay("2026-09-21T14:59:59.999Z"), "2026-09-21");
+  assert.equal(usageKstDay("2026-09-21T15:00:00.000Z"), "2026-09-22");
+});
+test("failure labels distinguish known truncation and HTTP errors without guessing unknown causes", () => {
+  assert.equal(usageFailureLabel({ httpStatus: 200, finishReason: "length" }), "출력 한도 초과 (응답 잘림)");
+  assert.equal(usageFailureLabel({ httpStatus: null, finishReason: "max_tokens" }), "출력 한도 초과 (응답 잘림)");
+  assert.equal(usageFailureLabel({ httpStatus: 400, finishReason: null }), "요청 오류 (HTTP 400)");
+  assert.equal(usageFailureLabel({ httpStatus: 200, finishReason: null }), "응답 처리 실패 (상세 미확인)");
 });
 
 const keys = ["DIGEST_HOUR", "DIGEST_MIDDAY_HOUR", "ANALYSIS_AVOID_PEAK", "DISABLE_SCHEDULERS"] as const;

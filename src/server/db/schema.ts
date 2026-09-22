@@ -16,6 +16,7 @@ import {
 import { relations } from "drizzle-orm";
 import type { ArticleContentMeta, ReadingCache } from "../../shared/articleContent.js";
 import type { LlmThinking, LlmUsageStage } from "../../shared/llmUsage.js";
+import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 
 /** Usage metadata only. No prompt, generated text, credentials or provider error bodies. */
 export const llmUsage = mysqlTable("llm_usage", {
@@ -171,6 +172,19 @@ export const articles = mysqlTable(
     publishedIdx: index("articles_published_idx").on(t.publishedAt),
   }),
 );
+
+/** Bounded, restart-safe retry state. Contains hashes and categories, never prompts/errors. */
+export const analysisRetries = mysqlTable("analysis_retries", {
+  articleId: bigint("article_id", { mode: "number", unsigned: true }).primaryKey().references(() => articles.id, { onDelete: "cascade" }),
+  configKey: varchar("config_key", { length: 64 }).notNull(),
+  contentKey: varchar("content_key", { length: 64 }).notNull(),
+  attempts: int("attempts", { unsigned: true }).notNull().default(0),
+  reason: varchar("reason", { length: 32 }).$type<AnalysisRetryReason>().notNull(),
+  held: boolean("held").notNull().default(false),
+  nextRetryAt: timestamp("next_retry_at", { fsp: 3 }),
+  filterCorrected: boolean("filter_corrected").notNull().default(false),
+  updatedAt: timestamp("updated_at", { fsp: 3 }).notNull(),
+}, t => ({ retryIdx: index("analysis_retries_next_idx").on(t.held, t.nextRetryAt) }));
 
 /**
  * analyses — Claude output for an article. 1st-pass filter writes only

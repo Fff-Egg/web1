@@ -2,11 +2,21 @@ import type { LlmUsageBucket } from "./llmUsage.js";
 
 // Official Flash rates checked 2026-09-21. Reference estimates, not billing-time prices.
 export const FLASH_OFFPEAK_RATES = { hit: 0.003, miss: 0.15, output: 0.6 } as const;
-export function discountedFlashEstimate(row: LlmUsageBucket): { usd: number; requests: number } | null {
+export function discountedFlashEstimate(row: Pick<LlmUsageBucket, "model" | "endpointHost" | "costBasis">): { usd: number; requests: number } | null {
   if (row.endpointHost !== "api.deepseek.com" || !["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"].includes(row.model)) return null;
   const b = row.costBasis;
   if (!b || b.requests <= 0 || ![b.cacheHitTokens, b.cacheMissTokens, b.outputTokens].every(n => Number.isFinite(n) && n >= 0)) return null;
   return { usd: (b.cacheHitTokens * FLASH_OFFPEAK_RATES.hit + b.cacheMissTokens * FLASH_OFFPEAK_RATES.miss + b.outputTokens * FLASH_OFFPEAK_RATES.output) / 1_000_000, requests: b.requests };
+}
+
+export function usageKstDay(iso: string): string {
+  return new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+export function usageFailureLabel(row: { httpStatus: number | null; finishReason: string | null }): string {
+  if (row.httpStatus !== null && row.httpStatus >= 400) return `요청 오류 (HTTP ${row.httpStatus})`;
+  if (row.finishReason === "length" || row.finishReason === "max_tokens") return "출력 한도 초과 (응답 잘림)";
+  return "응답 처리 실패 (상세 미확인)";
 }
 
 export const LLM_STAGE_LABELS: Record<string, string> = {

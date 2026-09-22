@@ -24,6 +24,22 @@ export interface ReadingCache {
   inputChars: number;
   chunkCount: number;
   completedAt?: string;
+  /** Recovery metadata contains hashes/counters only, never rejected partial output. */
+  recovery?: {
+    version: 1;
+    splits: Record<string, true>;
+    calls: number;
+    held?: { reason: "output_limit" | "recovery_budget" | "not_compressed" | "too_many_levels"; at: string };
+  };
+}
+
+/** Explicit retry retains successful work and skips parents already known to truncate. */
+export function resetReadingRecovery(cache: ReadingCache | null | undefined): ReadingCache | null {
+  if (!cache) return null;
+  if (!cache.recovery) return { ...cache, chunks: { ...cache.chunks } };
+  return { ...cache, chunks: { ...cache.chunks }, recovery: {
+    version: 1, splits: { ...cache.recovery.splits }, calls: 0,
+  } };
 }
 
 export function contentScope(meta?: ArticleContentMeta | null): string {

@@ -3,6 +3,7 @@ import { router, publicProcedure } from "../trpc.js";
 import { settingsRepo } from "../../repo/settings.js";
 import { getRuntimeSchedule } from "../../runtimeSchedule.js";
 import { getLlmUsageReport } from "../../repo/llmUsage.js";
+import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
 import {
   ANALYSIS_MODEL,
   FILTER_MODEL,
@@ -50,6 +51,9 @@ function configuredModel(
 export const settingsRouter = router({
   getRuntimeSchedule: publicProcedure.query(() => getRuntimeSchedule()),
   getLlmUsage: publicProcedure.query(() => getLlmUsageReport()),
+  getAnalysisRetryStatus: publicProcedure.query(() => getAnalysisRetryStatus()),
+  resetAnalysisRetry: publicProcedure.input(z.object({ articleId: z.number().int().positive().optional() }))
+    .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
   getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),
   /** Non-secret, effective model plan after Settings/env/provider remapping. */
   getModelPlan: publicProcedure.query(async () => {

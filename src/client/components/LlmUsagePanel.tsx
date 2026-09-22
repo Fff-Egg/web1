@@ -1,18 +1,22 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../data/client.js";
-import { discountedFlashEstimate, LLM_STAGE_LABELS } from "../../shared/llmUsageView.js";
+import { discountedFlashEstimate, LLM_STAGE_LABELS, usageFailureLabel, usageKstDay } from "../../shared/llmUsageView.js";
 
 const count = (n: number | null) => n === null ? "미수신" : n.toLocaleString("ko-KR");
 const hour = (n: number) => `${String(n).padStart(2, "0")}시`;
 const minute = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
 
 export function LlmUsagePanel() {
-  const [day, setDay] = useState("");
+  const [day, setDay] = useState("today");
   const usage = useQuery({ queryKey: ["llmUsage"], queryFn: () => api.getLlmUsage(), refetchInterval: 60_000 });
   const schedule = useQuery({ queryKey: ["runtimeSchedule"], queryFn: () => api.getRuntimeSchedule(), refetchInterval: 60_000 });
-  const rows = (usage.data?.rows ?? []).filter(row => !day || row.day === day);
-  const days = [...new Set((usage.data?.rows ?? []).map(row => row.day))].sort().reverse();
+  const today = usageKstDay(usage.data?.generatedAt ?? new Date().toISOString());
+  const selectedDay = day === "today" ? today : day;
+  const rows = (usage.data?.rows ?? []).filter(row => !selectedDay || row.day === selectedDay);
+  const failures = (usage.data?.failureGroups ?? []).filter(row => !selectedDay || row.day === selectedDay);
+  const repeated = usage.data?.repeatedArticles ?? [];
+  const days = [...new Set((usage.data?.rows ?? []).map(row => row.day))].filter(d => d !== today).sort().reverse();
   const totals = rows.reduce((sum, row) => {
     const estimate = discountedFlashEstimate(row);
     return { requests: sum.requests + row.requests, output: sum.output + (row.outputTokens ?? 0),
@@ -45,9 +49,10 @@ export function LlmUsagePanel() {
       {!usage.data.persisted && <p className="text-xs text-amber-700">DB가 연결되지 않아 사용량을 저장하지 않습니다.</p>}
       <label className="flex items-center gap-2 text-sm">기간
         <select value={day} onChange={event => setDay(event.target.value)} className="rounded border border-slate-300 px-2 py-1">
-          <option value="">최근 7일 전체</option>{days.map(d => <option key={d} value={d}>{d}</option>)}
+          <option value="today">오늘 ({today} · 진행 중)</option><option value="">최근 7일 전체</option>{days.map(d => <option key={d} value={d}>{d}</option>)}
         </select>
       </label>
+      <p className="text-xs text-slate-500">{selectedDay || "최근 7일"} 합계 · 수정 전에 발생한 요청과 비용도 포함합니다.</p>
       <div className="grid gap-3 sm:grid-cols-3 text-sm">
         <div className="rounded bg-slate-50 p-3">기록된 요청<strong className="block text-lg">{count(totals.requests)}회</strong></div>
         <div className="rounded bg-slate-50 p-3">확인된 출력 토큰<strong className="block text-lg">{totals.outputKnown ? count(totals.output) : "미수신"}</strong><span className="text-xs text-slate-500">출력 수신 {count(totals.outputKnown)} / {count(totals.requests)}회</span></div>
@@ -71,6 +76,27 @@ export function LlmUsagePanel() {
           })}</tbody>
         </table>
       </div> : <p className="text-sm text-slate-500">아직 기록된 API 요청이 없습니다. 다음 분석부터 표시됩니다.</p>}
+      {failures.length > 0 && <details className="rounded border border-amber-200 bg-amber-50/40 p-3" open>
+        <summary className="cursor-pointer text-sm font-medium">선택 기간의 실패 원인 · 실패한 응답에도 토큰 비용이 발생할 수 있습니다</summary>
+        <div className="mt-2 overflow-auto"><table className="w-full text-left text-xs whitespace-nowrap">
+          <thead><tr>{["날짜 / 작업", "실패 원인", "요청", "확인된 출력", "할인 기준 추정"].map(label => <th key={label} className="p-2 font-medium">{label}</th>)}</tr></thead>
+          <tbody>{failures.map((row, i) => {
+            const estimate = discountedFlashEstimate(row);
+            return <tr key={i} className="border-t border-amber-100 align-top">
+              <td className="p-2">{row.day.slice(5)} · {LLM_STAGE_LABELS[row.stage] ?? row.stage}<span className="block text-[10px] text-slate-500">{row.model} · Thinking {row.thinking === "enabled" ? "ON" : row.thinking === "disabled" ? "OFF" : "미확인"}</span></td>
+              <td className="p-2">{usageFailureLabel(row)}</td><td className="p-2 text-right">{count(row.requests)}회</td>
+              <td className="p-2 text-right">{count(row.outputTokens)}<span className="block text-[10px] text-slate-500">수신 {count(row.outputKnown)} / {count(row.requests)}회</span></td>
+              <td className="p-2 text-right">{estimate ? `$${estimate.usd.toFixed(4)}` : "미계산"}{estimate && <span className="block text-[10px] text-slate-500">{count(estimate.requests)}회분</span>}</td>
+            </tr>;
+          })}</tbody>
+        </table></div>
+        <p className="mt-2 text-xs text-slate-500">위 사용량 합계에 이미 포함된 내역입니다. 미계산은 비용 0을 뜻하지 않습니다.</p>
+      </details>}
+      {repeated.length > 0 && <details className="rounded border border-slate-200 p-3">
+        <summary className="cursor-pointer text-sm">최근 7일 반복 실패 글 (상위 20항목)</summary>
+        <p className="mt-2 text-xs text-slate-500">기간 선택과 별개인 최근 7일 기록입니다. 같은 글의 여러 구간 실패도 합산하며, 현재 보류 상태는 아래에서 확인합니다.</p>
+        <ul className="mt-2 space-y-1 text-xs text-slate-600">{repeated.map((row, i) => <li key={i}>글 #{row.articleId} · {LLM_STAGE_LABELS[row.stage] ?? row.stage} · {usageFailureLabel(row)} · {count(row.failures)}회 · 마지막 {new Date(row.lastAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</li>)}</ul>
+      </details>}
       <p className="text-xs leading-relaxed text-slate-500">추정 비용은 공식 DeepSeek Flash의 입력 캐시 적중·미적중·출력 사용량을 모두 받은 요청만 계산합니다. 100만 토큰당 $0.003 / $0.15 / $0.60을 적용한 참고값이며 실제 청구액은 아닙니다. 혼잡 시간에는 2배입니다. 제공자 요금 변경·사용량 미수신·다른 모델 비용은 반영하지 않습니다. 입력 캐시 할인과 완성된 요약 재사용은 다릅니다. 입력이 할인되어도 새 출력에는 비용이 발생합니다. <a className="underline" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noreferrer">공식 요금표</a> (2026-09-21 확인)</p>
     </>}
   </section>;

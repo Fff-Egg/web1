@@ -1,6 +1,6 @@
-import { sql, asc, desc, and, isNull } from "drizzle-orm";
+import { sql, asc, desc, and, eq, isNull } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
-import { articles, analyses } from "../db/schema.js";
+import { articles, analyses, analysisRetries } from "../db/schema.js";
 import type { Article, AnalysisConfig, Impact } from "../db/schema.js";
 import { settingsRepo } from "../repo/settings.js";
 import { thesisRepo } from "../repo/thesis.js";
@@ -21,6 +21,9 @@ import {
 import { needsSourceReview, sourceReviewSummary } from "../../shared/sourceReview.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
+import { isLlmOutputLimitError } from "./llmErrors.js";
+import { analysisConfigFingerprint, correctedFilterTokenLimit, filterTokenLimit } from "./retryPolicy.js";
+import { analysisRetryEligible, clearAnalysisFailure, getAnalysisPause, markAnalysisFilterCorrection, matchingAnalysisRetry, recordAnalysisFailure, reserveAnalysisAttempt } from "../repo/analysisRetry.js";
 
 // Articles analyzed per pass, and how many LLM calls run concurrently within a
 // pass. Raise ANALYZE_BATCH (and/or ANALYZE_CONCURRENCY) to drain a backlog
@@ -30,11 +33,6 @@ const CONCURRENCY = Math.max(1, Number(process.env.ANALYZE_CONCURRENCY ?? 3));
 
 export function analysisBatchSize(): number {
   return BATCH;
-}
-
-/** Rate-limit / quota errors (e.g. Groq free-tier daily token cap). */
-function isRateLimit(msg: string): boolean {
-  return msg.includes("429") || /rate limit|quota|TPD|tokens per day/i.test(msg);
 }
 
 /** True if the text contains Hangul (i.e., it's actually Korean). */
@@ -177,6 +175,7 @@ export async function filterRelevant(
   cfg: AnalysisConfig,
   guidance?: string,
   threads: ThreadBrief[] = [],
+  retry?: { corrected: boolean; onCorrection: () => Promise<void> },
 ): Promise<Classification> {
   // Never let an LLM throw away a source shell it had no chance to read. This
   // bucket is persistent, excluded from the digest, and resolved by the user.
@@ -226,16 +225,28 @@ export async function filterRelevant(
   const user = `제목: ${article.title ?? ""}\n원문 URL: ${article.url ?? ""}\n본문 또는 전체 구간 요약:\n${article.body ?? ""}`;
   const filterModel = cfg.filterModel || FILTER_MODEL();
   const thinking = supportsThinkingControl(filterModel) ? cfg.filterThinking ?? "disabled" : undefined;
-  const text = await complete({
+  const initialLimit = filterTokenLimit(threads.length > 0);
+  let corrected = retry?.corrected ?? false;
+  const request = () => complete({
     usage: { stage: "filter", articleId: article.id },
     model: filterModel,
-    system,
+    system: system + (corrected ? "\n[완전한 JSON 출력 길이 관리]\n앞 응답이 출력 한도에 걸렸다. 같은 판단 기준과 요약 지침을 유지하되 반복 표현과 불필요한 서론을 줄여 간결하게 작성한다. 모든 필수 JSON 필드와 닫는 괄호를 반드시 완성하고, signals의 근거는 한 줄로 쓴다. JSON 밖의 설명은 쓰지 않는다." : ""),
     user,
     thinking,
     // The thesis fields (signals[] + newThread) can add several hundred tokens on
     // top of the summary — 600 truncated the JSON and silently dropped summaries.
-    maxTokens: thinkingTokenBudget(Number(process.env.FILTER_MAX_TOKENS ?? (threads.length > 0 ? 1400 : 600)), thinking),
+    maxTokens: thinkingTokenBudget(corrected ? correctedFilterTokenLimit(initialLimit) : initialLimit, thinking),
   });
+  let text: string;
+  try { text = await request(); }
+  catch (error) {
+    if (corrected || !isLlmOutputLimitError(error)) throw error;
+    // Persist the revised strategy BEFORE a paid correction. A later transient
+    // failure/restart must not issue the already-failed original request again.
+    await retry?.onCorrection();
+    corrected = true;
+    text = await request();
+  }
   let parsed = parseJsonLoose<Record<string, unknown>>(text);
   if (!parsed) {
     parsed = salvageClassification(text);
@@ -328,7 +339,17 @@ export async function deepAnalyze(
  * Process articles that have no analysis yet. For each: 1st-pass filter; if
  * relevant, 2nd-pass deep analysis. Writes one row to `analyses` per article.
  */
-export async function runAnalysis(
+let activeAnalysis: Promise<{ analyzed: number; relevant: number; errors: number }> | null = null;
+/** CLI/manual/scheduled callers share one batch in this process. */
+export function runAnalysis(opts: { oldestFirst?: boolean } = {}) {
+  if (activeAnalysis) return activeAnalysis;
+  const task = runAnalysisBatch(opts);
+  activeAnalysis = task;
+  void task.finally(() => { if (activeAnalysis === task) activeAnalysis = null; }).catch(() => {});
+  return task;
+}
+
+async function runAnalysisBatch(
   opts: { oldestFirst?: boolean } = {},
 ): Promise<{ analyzed: number; relevant: number; errors: number }> {
   if (!hasDb) {
@@ -339,22 +360,30 @@ export async function runAnalysis(
     console.warn("[analyze] no LLM configured (ANTHROPIC_API_KEY or LLM_BASE_URL+LLM_API_KEY) — skipping.");
     return { analyzed: 0, relevant: 0, errors: 0 };
   }
+  const pause = await getAnalysisPause();
+  if (pause) {
+    console.warn(`[analyze] provider cooldown (${pause.reason}) until ${pause.until}.`);
+    return { analyzed: 0, relevant: 0, errors: 0 };
+  }
 
   const cfg = await settingsRepo.getAnalysisConfig();
   // Cumulative memo learned from the user's feed interactions (refreshed daily).
   const guidance = (await settingsRepo.getFilterGuidance()).text;
   // Active 논지 지도 threads — injected into the SAME 1st-pass call (no extra LLM call).
   const threadList = await thesisRepo.listBrief();
+  const configKey = analysisConfigFingerprint(cfg, threadList.length > 0);
 
   // Articles with no analysis row yet — newest first, so fresh posts get
   // analyzed before an old backlog (and aren't starved by it).
   const pending = await db
-    .select()
+    .select({ article: articles, retry: analysisRetries })
     .from(articles)
+    .leftJoin(analysisRetries, matchingAnalysisRetry(configKey))
     .where(
       and(
         sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`,
         isNull(articles.deletedAt),
+        analysisRetryEligible(),
       ),
     )
     .orderBy(opts.oldestFirst ? asc(articles.id) : desc(articles.id))
@@ -369,10 +398,19 @@ export async function runAnalysis(
   // synthesis. Set DEEP_ANALYSIS=1 to also analyze each article individually.
   const deepPerArticle = process.env.DEEP_ANALYSIS === "1";
 
-  const processOne = async (article: Article): Promise<void> => {
+  const processOne = async ({ article, retry }: typeof pending[number]): Promise<void> => {
     if (rateLimited) return;
+    let failureArticle = article;
+    let filterCorrected = retry?.filterCorrected ?? false;
+    let reservedAttempts = 0;
     try {
-      const prepared = await prepareStoredArticle(article.id, cfg);
+      const prepared = await prepareStoredArticle(article.id, cfg, false, async current => {
+        failureArticle = current;
+        const reservation = await reserveAnalysisAttempt(current, configKey);
+        reservedAttempts = reservation.attempts;
+        filterCorrected = reservation.filterCorrected;
+      });
+      failureArticle = prepared.article;
       const analysisArticle = needsSourceReview(prepared.article) ? prepared.article : { ...prepared.article, body: prepared.text };
       const {
         relevant: isRelevant,
@@ -380,7 +418,10 @@ export async function runAnalysis(
         needsSourceReview: sourceReview,
         summary,
         thesis,
-      } = await filterRelevant(analysisArticle, cfg, guidance, threadList);
+      } = await filterRelevant(analysisArticle, cfg, guidance, threadList, { corrected: filterCorrected, onCorrection: async () => {
+        await markAnalysisFilterCorrection(prepared.article, configKey);
+        filterCorrected = true;
+      } });
       if (!isRelevant) {
         await db.insert(analyses).values({
           articleId: article.id,
@@ -388,6 +429,7 @@ export async function runAnalysis(
           model: cfg.filterModel || FILTER_MODEL(),
         });
         analyzed++;
+        await clearAnalysisFailure(article.id);
         return;
       }
       // 1st-pass pick (with its summary). Deep analysis only when enabled.
@@ -413,15 +455,27 @@ export async function runAnalysis(
       }
       analyzed++;
       relevant++;
+      await clearAnalysisFailure(article.id);
     } catch (err) {
       errors++;
       const msg = err instanceof Error ? err.message : String(err);
       console.error(`[analyze] article ${article.id} failed:`, msg);
-      // Hit the provider's rate/quota limit — stop scheduling more this cycle
-      // instead of hammering it (each call just re-fails).
-      if (isRateLimit(msg)) {
+      try {
+        // Preparation can update the row before failing; bind the retry to that
+        // prepared content so the next poll cannot mistake it for a changed input.
+        if (failureArticle === article) {
+          const [current] = await db.select().from(articles).where(eq(articles.id, article.id)).limit(1);
+          if (current) failureArticle = current;
+        }
+        const failure = await recordAnalysisFailure(failureArticle, configKey, err, filterCorrected, reservedAttempts);
+        if (failure.stopBatch) {
+          rateLimited = true;
+          console.warn(`[analyze] provider cooldown recorded (${failure.reason}); remaining batch paused.`);
+        }
+      } catch {
+        // Do not issue more paid calls when durable retry state cannot be saved.
         rateLimited = true;
-        console.warn("[analyze] rate/quota limit hit — pausing analysis until next cycle.");
+        console.error("[analyze] retry state could not be saved; remaining batch stopped.");
       }
     }
   };
