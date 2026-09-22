@@ -5,6 +5,7 @@ import { getRuntimeSchedule } from "../../runtimeSchedule.js";
 import { getLlmUsageReport } from "../../repo/llmUsage.js";
 import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
 import { runArticleAnalysis } from "../../analysis/analyze.js";
+import { getArticleAnalysisDiagnostics } from "../../repo/analysisDiagnostics.js";
 import {
   ANALYSIS_MODEL,
   FILTER_MODEL,
@@ -53,6 +54,8 @@ export const settingsRouter = router({
   getRuntimeSchedule: publicProcedure.query(() => getRuntimeSchedule()),
   getLlmUsage: publicProcedure.query(() => getLlmUsageReport()),
   getAnalysisRetryStatus: publicProcedure.query(() => getAnalysisRetryStatus()),
+  getArticleAnalysisDiagnostics: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
+    .query(({ input }) => getArticleAnalysisDiagnostics(input.articleId)),
   resetAnalysisRetry: publicProcedure.input(z.object({ articleId: z.number().int().positive().optional() }))
     .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
   // Like every settings mutation, protected by the app's Basic Auth middleware.

@@ -54,6 +54,19 @@ export async function readWholeArticle(opts: {
     await opts.checkpoint?.(cache);
   }
   if (cache.recovery?.held) throw new WholeReadingHeldError();
+  const inputLimit = () => Math.max(2, Math.min(READING_REQUEST_CHARS, recovery().inputCharLimit ?? READING_REQUEST_CHARS));
+  const halfLimit = (part: string) => Math.max(2, ...splitRecoveryText(part).map(child => child.length));
+  // Hashes and successful parent/child summaries stay unchanged. Even a cached
+  // parent can contain a known rejected descendant, so inspect its saved plan
+  // before skipping its completed result. No source or summary is regenerated.
+  const plannedLimit = (part: string, chunkKey: string, limit: number): number => {
+    if (!cache.recovery?.splits[chunkKey] || part.length <= 2) return limit;
+    if (!cache.recovery.proactiveSplits?.[chunkKey]) limit = Math.min(limit, halfLimit(part));
+    for (const [index, child] of splitRecoveryText(part).entries()) {
+      limit = plannedLimit(child, hash(`recovery-v1:${chunkKey}:${index}:${child}`), limit);
+    }
+    return limit;
+  };
   const hold = async (reason: NonNullable<NonNullable<ReadingCache["recovery"]>["held"]>["reason"]): Promise<never> => {
     recovery().held = { reason, at: new Date().toISOString() };
     await opts.checkpoint?.(cache);
@@ -62,7 +75,7 @@ export async function readWholeArticle(opts: {
   const summarize = async (part: string, chunkKey: string, heading: string, depth = 0, corrective = false): Promise<string> => {
     const saved = cache.chunks[chunkKey];
     if (saved) return saved;
-    if (!cache.recovery?.splits[chunkKey] && part.length > READING_REQUEST_CHARS) {
+    if (!cache.recovery?.splits[chunkKey] && part.length > inputLimit()) {
       const state = recovery();
       state.splits[chunkKey] = true;
       (state.proactiveSplits ??= {})[chunkKey] = true;
@@ -88,6 +101,11 @@ export async function readWholeArticle(opts: {
         return summary;
       } catch (error) {
         if (!isLlmOutputLimitError(error)) throw error;
+        // This article has demonstrated that the current input can overflow.
+        // Carry its lossless half-size bound forward to all unfinished siblings,
+        // including after a process restart, instead of paying for the same
+        // oversized experiment independently for every source segment.
+        recovery().inputCharLimit = Math.min(inputLimit(), halfLimit(part));
         if (depth >= RECOVERY_MAX_DEPTH || part.length < RECOVERY_MIN_SPLIT_CHARS) return hold("output_limit");
         // Never retry the rejected parent. Save its plan before attempting children.
         recovery().splits[chunkKey] = true;
@@ -100,7 +118,7 @@ export async function readWholeArticle(opts: {
     for (const [index, child] of parts.entries()) {
       const childKey = hash(`recovery-v1:${chunkKey}:${index}:${child}`);
       summaries.push(await summarize(child, childKey, `${heading}\n${proactive ? "사전 분할" : "재분할"} ${index + 1}/${parts.length}`,
-        depth + (proactive ? 0 : 1), corrective || !proactive));
+        depth + (proactive ? 0 : 1), !proactive));
     }
     const summary = summaries.join("\n\n");
     cache.chunks[chunkKey] = summary;
@@ -111,10 +129,15 @@ export async function readWholeArticle(opts: {
   for (let level = 0; text.length > READING_CHUNK_CHARS; level++) {
     if (level >= 12) return hold("too_many_levels");
     const parts = splitWholeText(text, READING_CHUNK_CHARS);
+    const chunkKeys = parts.map((part, i) => hash(`${level}:${i}:${parts.length}:${part}`));
+    const learnedLimit = parts.reduce((limit, part, i) => plannedLimit(part, chunkKeys[i], limit), inputLimit());
+    if (learnedLimit < inputLimit()) {
+      recovery().inputCharLimit = learnedLimit;
+      await opts.checkpoint?.(cache);
+    }
     const summaries: string[] = [];
     for (let i = 0; i < parts.length; i++) {
-      const chunkKey = hash(`${level}:${i}:${parts.length}:${parts[i]}`);
-      const summary = await summarize(parts[i], chunkKey,
+      const summary = await summarize(parts[i], chunkKeys[i],
         `전체 ${parts.length}개 구간 중 ${i + 1}번째. ${level ? "앞 단계에서 전체를 읽고 만든 요약을 다시 압축한다." : "원문을 빠짐없이 나눈 구간이다."}`);
       summaries.push(`[구간 ${i + 1}/${parts.length}]\n${summary}`);
     }

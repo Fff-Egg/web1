@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
+import { ArticleAnalysisDiagnostics } from "./ArticleAnalysisDiagnostics.js";
 
 const reasons: Record<AnalysisRetryReason, string> = {
   output_limit: "출력 제한 보정 후에도 응답이 잘림", reading_held: "전체 읽기 복구 한도 도달",
@@ -13,6 +14,7 @@ const time = (iso: string) => new Date(iso).toLocaleString("ko-KR", { timeZone: 
 export function AnalysisRetryPanel() {
   const status = useQuery({ queryKey: ["analysisRetryStatus"], queryFn: () => api.getAnalysisRetryStatus(), refetchInterval: 60_000 });
   const [confirmation, setConfirmation] = useState<number | "all" | null>(null);
+  const [diagnosticArticleId, setDiagnosticArticleId] = useState<number | null>(null);
   const reset = useMutation({
     mutationFn: (id: number | "all") => api.resetAnalysisRetry(id === "all" ? undefined : id),
     onSuccess: async () => { setConfirmation(null); await status.refetch(); },
@@ -40,11 +42,16 @@ export function AnalysisRetryPanel() {
           <td className="p-2 max-w-xs break-words">{row.title || `글 #${row.articleId}`}<span className="block text-slate-400">#{row.articleId}</span></td>
           <td className="p-2">{reasons[row.reason]}<span className="block text-slate-500">{row.held ? "자동 재시도 보류" : row.nextRetryAt ? `${time(row.nextRetryAt)} 이후 재시도` : "대기 중"}</span></td>
           <td className="p-2 whitespace-nowrap">{row.attempts}회</td>
-          <td className="p-2"><button type="button" onClick={() => setConfirmation(row.articleId)} disabled={reset.isPending}
-            className="rounded border border-slate-300 px-2 py-1 whitespace-nowrap disabled:opacity-50">재시도 허용</button></td>
+          <td className="p-2"><div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setDiagnosticArticleId(current => current === row.articleId ? null : row.articleId)}
+              aria-expanded={diagnosticArticleId === row.articleId} className="rounded border border-slate-300 px-2 py-1 whitespace-nowrap">처리 내역</button>
+            <button type="button" onClick={() => setConfirmation(row.articleId)} disabled={reset.isPending}
+              className="rounded border border-slate-300 px-2 py-1 whitespace-nowrap disabled:opacity-50">재시도 허용</button>
+          </div></td>
         </tr>)}</tbody>
       </table></div>}
       {s.items.length > 0 && <p className="text-xs text-slate-400">보류·대기 글 중 최근 20건까지 표시합니다.</p>}
+      {diagnosticArticleId !== null && <ArticleAnalysisDiagnostics key={diagnosticArticleId} articleId={diagnosticArticleId} />}
       {(s.held > 0 || s.waiting > 0 || s.globalPause) && <button type="button" onClick={() => setConfirmation("all")} disabled={reset.isPending}
         className="rounded border border-slate-300 px-3 py-1.5 text-sm disabled:opacity-50">전체 대기·보류 해제</button>}
     </>}

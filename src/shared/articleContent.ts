@@ -32,6 +32,8 @@ export interface ReadingCache {
     splits: Record<string, true>;
     /** Planned input bounds are ordinary work, not paid output-limit corrections. */
     proactiveSplits?: Record<string, true>;
+    /** Monotonically smaller request bound learned from this article's truncated inputs. */
+    inputCharLimit?: number;
     calls: number;
     held?: { reason: "output_limit" | "recovery_budget" | "not_compressed" | "too_many_levels"; at: string };
   };
@@ -45,6 +47,7 @@ export function resetReadingRecovery(cache: ReadingCache | null | undefined): Re
     version: 1, ...(cache.recovery.policy ? { policy: cache.recovery.policy } : {}),
     splits: { ...cache.recovery.splits },
     ...(cache.recovery.proactiveSplits ? { proactiveSplits: { ...cache.recovery.proactiveSplits } } : {}), calls: 0,
+    ...(cache.recovery.inputCharLimit !== undefined ? { inputCharLimit: cache.recovery.inputCharLimit } : {}),
   } };
 }
 

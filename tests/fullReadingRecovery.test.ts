@@ -88,7 +88,7 @@ test("exhausted smallest chunk is held across polls until explicit retry; reset 
   const retryInputs: string[] = [];
   const result = await readWholeArticle({ body, model: "deepseek-flash", cache: reset, checkpoint,
     invoke: async call => { retryInputs.push(input(call)); return "완료된 사실"; } });
-  assert.equal(retryInputs[0].length, 1500); // Skip all failed ancestors.
+  assert.equal(retryInputs[0].length, 750); // Learned bound also skips the final rejected leaf.
   assert.ok(result.completedAt);
 });
 
@@ -223,6 +223,100 @@ test("changed reading instructions release a held cache, without treating it as 
   const result = await readWholeArticle({ body, model: "deepseek-flash", instructions: "수치와 조건 위주로 간결하게", cache: saved,
     invoke: async () => { calls++; return "완료"; } });
   assert.ok(calls > 0); assert.ok(result.completedAt); assert.notEqual(result.key, saved!.key);
+});
+
+test("one dense segment teaches the whole article a smaller bound instead of paying for every oversized sibling", async () => {
+  for (const chars of [72000, 78000]) {
+    const body = "원".repeat(chars);
+    const successful: string[] = [];
+    let saved: ReadingCache | undefined, calls = 0, failed = 0;
+    const result = await readWholeArticle({ body, model: "deepseek-flash", thinking: "disabled",
+      checkpoint: async c => { saved = structuredClone(c); }, invoke: async call => {
+        calls++;
+        const part = input(call);
+        if (part.length > 3000) { failed++; throw limit(); }
+        assert.equal(saved?.recovery?.inputCharLimit, 3000, "persist the learned cap before any child call");
+        successful.push(part); return "완료된 사실";
+      },
+    });
+    assert.equal(failed, 1, "only the first 6000-character experiment may truncate");
+    assert.equal(calls, chars / 3000 + 1);
+    assert.equal(successful.join(""), body);
+    assert.equal(result.recovery?.calls, 2, "successful later siblings use the learned ordinary plan");
+    assert.equal(result.recovery?.inputCharLimit, 3000);
+    assert.ok(result.completedAt); assert.equal(result.recovery?.held, undefined);
+    await readWholeArticle({ body, model: "deepseek-flash", thinking: "disabled", cache: result,
+      invoke: async () => { throw Error("completed result must be reused"); } });
+  }
+});
+
+test("a later dense failure lowers the cap despite earlier large successes and keeps every emoji and character", async () => {
+  const body = "S".repeat(6000) + "D".repeat(5999) + "🚀" + "끝".repeat(6000);
+  const successful: string[] = [], requested: number[] = [];
+  let saved: ReadingCache | undefined, failed = 0;
+  const result = await readWholeArticle({ body, model: "deepseek-flash", checkpoint: async c => { saved = structuredClone(c); },
+    invoke: async call => {
+      const part = input(call); requested.push(part.length);
+      assert.doesNotMatch(part, /^[\uDC00-\uDFFF]|[\uD800-\uDBFF]$/);
+      if (part.startsWith("D") && part.length > 3000) { failed++; throw limit(); }
+      if (failed) assert.ok(part.length <= saved!.recovery!.inputCharLimit!);
+      successful.push(part); return "완료된 구간";
+    },
+  });
+  assert.equal(requested[0], 6000, "first large success must not imply all later input is safe");
+  assert.equal(failed, 1); assert.equal(successful.join(""), body);
+  assert.equal(result.recovery?.inputCharLimit, 3000); assert.ok(result.completedAt);
+});
+
+test("resume infers a learned bound from rejected descendants inside completed legacy parents", async () => {
+  const body = "A".repeat(12000) + "B".repeat(12000) + "C".repeat(12000);
+  let saved: ReadingCache | undefined;
+  const successful: string[] = [];
+  await assert.rejects(readWholeArticle({ body, model: "deepseek-flash", checkpoint: async c => { saved = structuredClone(c); },
+    invoke: async call => {
+      const part = input(call);
+      if (part.startsWith("B")) throw Error("interrupted before the next article segment");
+      if (part.length > 3000) throw limit();
+      successful.push(part); return "먼저 완료한 사실";
+    },
+  }), /interrupted/);
+  assert.equal(successful.join(""), body.slice(0, 12000));
+  const legacy = structuredClone(saved!);
+  delete legacy.recovery!.inputCharLimit;
+  const oldKey = legacy.key, existingChunks = { ...legacy.chunks };
+  const result = await readWholeArticle({ body, model: "deepseek-flash", cache: legacy,
+    checkpoint: async c => { saved = structuredClone(c); }, invoke: async call => {
+      const part = input(call);
+      assert.ok(part.length <= 3000, "known failed parents must never be paid for again");
+      assert.equal(saved?.recovery?.inputCharLimit, 3000);
+      successful.push(part); return "추가 완료한 사실";
+    },
+  });
+  assert.equal(successful.join(""), body); assert.equal(result.key, oldKey);
+  for (const [key, value] of Object.entries(existingChunks)) assert.equal(result.chunks[key], value);
+  assert.equal(legacy.recovery?.inputCharLimit, undefined, "caller cache stays unchanged");
+  assert.equal(result.recovery?.calls, legacy.recovery?.calls, "resuming proactive siblings is ordinary work");
+  assert.ok(result.completedAt);
+});
+
+test("learned caps decrease across dense failures, survive reset, and never reopen current holds automatically", async () => {
+  const body = "원".repeat(13000);
+  let saved: ReadingCache | undefined, calls = 0;
+  await assert.rejects(readWholeArticle({ body, model: "deepseek-flash", checkpoint: async c => { saved = structuredClone(c); },
+    invoke: async () => { calls++; throw limit(); },
+  }), WholeReadingHeldError);
+  assert.equal(saved?.recovery?.inputCharLimit, 750);
+  const held = structuredClone(saved!);
+  await assert.rejects(readWholeArticle({ body, model: "deepseek-flash", cache: held,
+    checkpoint: async () => { throw Error("held input should not be altered automatically"); },
+    invoke: async () => { calls++; return "must not call"; },
+  }), WholeReadingHeldError);
+  assert.equal(calls, 3);
+  const reset = resetReadingRecovery(held)!;
+  assert.equal(reset.recovery?.inputCharLimit, 750);
+  assert.equal(reset.recovery?.policy, 2);
+  assert.equal(reset.recovery?.held, undefined);
+  assert.equal(held.recovery?.held?.reason, "output_limit");
 });
 
 test("transport returns typed output-limit errors while still recording consumed tokens", async () => {

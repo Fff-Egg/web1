@@ -15,6 +15,7 @@ import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
 import type { RuntimeSchedule } from "../../shared/runtimeSchedule.js";
 import type { LlmUsageReport } from "../../shared/llmUsage.js";
 import type { AnalysisRetryStatus } from "../../shared/analysisRetry.js";
+import type { ArticleAnalysisDiagnosticsResponse } from "../../shared/analysisDiagnostics.js";
 import type { runArticleAnalysis } from "../../server/analysis/analyze.js";
 
 export type { AnalysisConfig, Verdict, Tier };
@@ -149,6 +150,7 @@ export interface DataApi {
   getRuntimeSchedule(): Promise<RuntimeSchedule>;
   getLlmUsage(): Promise<LlmUsageReport>;
   getAnalysisRetryStatus(): Promise<AnalysisRetryStatus>;
+  getArticleAnalysisDiagnostics(articleId: number): Promise<ArticleAnalysisDiagnosticsResponse>;
   resetAnalysisRetry(articleId?: number): Promise<{ reset: number }>;
   runArticleAnalysis(articleId: number): ReturnType<typeof runArticleAnalysis>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
@@ -315,6 +317,7 @@ function makeTrpcApi(): DataApi {
     getRuntimeSchedule: () => client.settings.getRuntimeSchedule.query(),
     getLlmUsage: () => client.settings.getLlmUsage.query(),
     getAnalysisRetryStatus: () => client.settings.getAnalysisRetryStatus.query(),
+    getArticleAnalysisDiagnostics: (articleId) => client.settings.getArticleAnalysisDiagnostics.query({ articleId }),
     resetAnalysisRetry: (articleId) => client.settings.resetAnalysisRetry.mutate({ articleId }),
     runArticleAnalysis: (articleId) => client.settings.runArticleAnalysis.mutate({ articleId }),
     updateAnalysisConfig: async (cfg) => {
@@ -514,6 +517,7 @@ function makeStaticApi(): DataApi {
       return { persisted: false, totalPending: 0, eligible: 0, held: 0, waiting: 0, globalPause: null, items: [] };
     },
     async resetAnalysisRetry() { return { reset: 0 }; },
+    async getArticleAnalysisDiagnostics() { return { persisted: false, article: null }; },
     async runArticleAnalysis() { return { analyzed: 0, relevant: 0, errors: 0, busy: false }; },
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
