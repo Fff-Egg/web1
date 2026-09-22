@@ -23,7 +23,7 @@ import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { isLlmOutputLimitError } from "./llmErrors.js";
 import { analysisConfigFingerprint, correctedFilterTokenLimit, filterTokenLimit } from "./retryPolicy.js";
-import { analysisRetryEligible, clearAnalysisFailure, getAnalysisPause, markAnalysisFilterCorrection, matchingAnalysisRetry, recordAnalysisFailure, reserveAnalysisAttempt } from "../repo/analysisRetry.js";
+import { analysisRetryEligible, clearAnalysisFailure, getAnalysisPause, markAnalysisFilterCorrection, matchingAnalysisRetry, recordAnalysisFailure, reserveAnalysisAttempt, resetAnalysisRetry } from "../repo/analysisRetry.js";
 
 // Articles analyzed per pass, and how many LLM calls run concurrently within a
 // pass. Raise ANALYZE_BATCH (and/or ANALYZE_CONCURRENCY) to drain a backlog
@@ -214,6 +214,9 @@ export async function filterRelevant(
     `그때만 lowReason에 해당 단어 하나를 쓰고, important=true이면 lowReason은 null로 쓴다. 애매하면 important=true다.\n` +
     threadsBlock(threads) +
     `\n[요약 지침]\n${summaryGuide}\n\n` +
+    `[응답 구성]\n요약 지침과 서로 다른 사건·수치·조건은 보존하되 같은 내용을 반복 설명하지 않는다. ` +
+    `불필요한 서론·맺음말을 쓰지 않고, signals의 각 근거는 한 줄로 쓴다. ` +
+    `모든 필수 JSON 필드와 닫는 괄호를 완성한다. JSON 밖의 설명은 쓰지 않는다.\n` +
     `위 기준으로: (1) 관련 있는지 relevant, (2) 중요한지 important, ` +
     `(3) 관련 있으면 [요약 지침]대로 summary(반드시 한국어). ` +
     `JSON 하나로만 답한다: {"relevant": true 또는 false, "important": true 또는 false, ` +
@@ -233,8 +236,8 @@ export async function filterRelevant(
     system: system + (corrected ? "\n[완전한 JSON 출력 길이 관리]\n앞 응답이 출력 한도에 걸렸다. 같은 판단 기준과 요약 지침을 유지하되 반복 표현과 불필요한 서론을 줄여 간결하게 작성한다. 모든 필수 JSON 필드와 닫는 괄호를 반드시 완성하고, signals의 근거는 한 줄로 쓴다. JSON 밖의 설명은 쓰지 않는다." : ""),
     user,
     thinking,
-    // The thesis fields (signals[] + newThread) can add several hundred tokens on
-    // top of the summary — 600 truncated the JSON and silently dropped summaries.
+    responseFormat: supportsThinkingControl(filterModel) ? "json_object" : undefined,
+    // Budget for the full-body evidence packet and optional thesis fields.
     maxTokens: thinkingTokenBudget(corrected ? correctedFilterTokenLimit(initialLimit) : initialLimit, thinking),
   });
   let text: string;
@@ -349,8 +352,31 @@ export function runAnalysis(opts: { oldestFirst?: boolean } = {}) {
   return task;
 }
 
+/** Explicit operator retry of one pending article; never drains the surrounding queue. */
+export function runArticleAnalysis(articleId: number): Promise<{ analyzed: number; relevant: number; errors: number; busy: boolean }> {
+  const empty = { analyzed: 0, relevant: 0, errors: 0 };
+  if (activeAnalysis) return Promise.resolve({ ...empty, busy: true });
+  // Acquire the shared guard before even the preflight/reset, so repeated clicks
+  // cannot clear a running job's reservation or start a second paid attempt.
+  const task = Promise.resolve().then(async () => {
+    if (!hasDb) return empty;
+    const [pending] = await db.select({ id: articles.id }).from(articles).where(and(
+      eq(articles.id, articleId), isNull(articles.deletedAt),
+      sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`,
+    )).limit(1);
+    // Old failure history for an already completed/deleted article must not
+    // clear the provider cooldown or any other article's retry state.
+    if (!pending) return empty;
+    await resetAnalysisRetry(articleId, { preservePause: true });
+    return runAnalysisBatch({ articleId, ignorePause: true });
+  });
+  activeAnalysis = task;
+  void task.finally(() => { if (activeAnalysis === task) activeAnalysis = null; }).catch(() => {});
+  return task.then(result => ({ ...result, busy: false }));
+}
+
 async function runAnalysisBatch(
-  opts: { oldestFirst?: boolean } = {},
+  opts: { oldestFirst?: boolean; articleId?: number; ignorePause?: boolean } = {},
 ): Promise<{ analyzed: number; relevant: number; errors: number }> {
   if (!hasDb) {
     console.warn("[analyze] no DATABASE_URL — skipping.");
@@ -361,7 +387,7 @@ async function runAnalysisBatch(
     return { analyzed: 0, relevant: 0, errors: 0 };
   }
   const pause = await getAnalysisPause();
-  if (pause) {
+  if (pause && !(opts.ignorePause && opts.articleId !== undefined)) {
     console.warn(`[analyze] provider cooldown (${pause.reason}) until ${pause.until}.`);
     return { analyzed: 0, relevant: 0, errors: 0 };
   }
@@ -383,6 +409,7 @@ async function runAnalysisBatch(
       and(
         sql`${articles.id} NOT IN (SELECT ${analyses.articleId} FROM ${analyses})`,
         isNull(articles.deletedAt),
+        opts.articleId === undefined ? undefined : eq(articles.id, opts.articleId),
         analysisRetryEligible(),
       ),
     )

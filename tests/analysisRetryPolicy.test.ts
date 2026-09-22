@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test, { afterEach } from "node:test";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
-import { analysisConfigFingerprint, articleContentFingerprint, analysisFailureReason, correctedFilterTokenLimit, globalPauseMinutes, nextAnalysisRetry } from "../src/server/analysis/retryPolicy.js";
+import { analysisConfigFingerprint, articleContentFingerprint, analysisFailureReason, filterTokenLimit, correctedFilterTokenLimit, globalPauseMinutes, nextAnalysisRetry } from "../src/server/analysis/retryPolicy.js";
 import { analysisRetryEligible, articleContentFingerprintSql, matchingAnalysisRetry } from "../src/server/repo/analysisRetry.js";
 import { filterRelevant } from "../src/server/analysis/analyze.js";
 import { isLlmOutputLimitError, WholeReadingHeldError } from "../src/server/analysis/llmErrors.js";
@@ -38,7 +38,7 @@ test("retry signatures change for actual content and effective settings but not 
   assert.equal(articleContentFingerprint({ ...article, readingCache: { completedAt: "later" } } as Article), content);
   assert.notEqual(analysisConfigFingerprint({ ...cfg, filterThinking: "enabled" }, true), config);
   assert.notEqual(analysisConfigFingerprint({ ...cfg, summaryInstructions: "수정한 지침" }, true), config);
-  process.env.FILTER_MAX_TOKENS = "2800";
+  process.env.FILTER_MAX_TOKENS = "3000";
   assert.notEqual(analysisConfigFingerprint(cfg, true), config);
   const dialect = new MySqlDialect();
   assert.match(dialect.sqlToQuery(articleContentFingerprintSql()).sql, /OCTET_LENGTH/);
@@ -57,6 +57,23 @@ test("filter retries a length response once with preserved instructions, bounded
   assert.ok(requests[1].messages[0].content.startsWith(requests[0].messages[0].content));
   assert.deepEqual(requests.map(request => request.thinking.type), ["disabled", "disabled"]);
   assert.equal(correctedFilterTokenLimit(5000), 6000);
+});
+
+test("full-body filter starts with room for complete JSON while preserving user settings and explicit limits", async () => {
+  provider(); delete process.env.FILTER_MAX_TOKENS;
+  assert.equal(filterTokenLimit(false), 1600);
+  assert.equal(filterTokenLimit(true), 2800);
+  const requests: any[] = [];
+  globalThis.fetch = async (_url, init) => { requests.push(JSON.parse(String(init?.body))); return response(ok, "stop"); };
+  await withLlmUsageSink(() => {}, () => filterRelevant(article, { ...cfg, relevanceCriteria: "전부" }));
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].max_tokens, 1600);
+  assert.deepEqual(requests[0].response_format, { type: "json_object" });
+  assert.ok(requests[0].messages[0].content.includes(cfg.summaryInstructions));
+  assert.match(requests[0].messages[0].content, /관련성 판단 기준\]\n전부/);
+  assert.ok(requests[0].messages[1].content.includes(article.body));
+  process.env.FILTER_MAX_TOKENS = "4200";
+  assert.equal(filterTokenLimit(false), 4200);
 });
 
 test("corrected filter strategy survives a later transient failure and does not repeat the old request", async () => {

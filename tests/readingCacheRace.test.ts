@@ -108,7 +108,7 @@ test("collection finishing after analysis preserves its completed reading withou
   await prepareStoredArticle(1, cfg);
   const cache = structuredClone(state.article.readingCache);
   const calls = state.calls;
-  assert.equal(calls, 2); assert.ok(cache?.completedAt);
+  assert.equal(calls, 3); assert.ok(cache?.completedAt);
   release.resolve(); await collection;
   assert.deepEqual(state.article.readingCache, cache);
   await prepareStoredArticle(1, cfg);
@@ -130,9 +130,9 @@ test("analysis waits for collector enrichment instead of reading and then losing
   release.resolve();
   await Promise.all([collection, reading]);
   assert.ok(state.article.readingCache?.completedAt);
-  assert.equal(state.calls, 2);
+  assert.equal(state.calls, 3);
   await prepareStoredArticle(1, cfg);
-  assert.equal(state.calls, 2);
+  assert.equal(state.calls, 3);
 });
 
 test("refresh preserves completed and partial caches for unchanged body/scope", async () => {
@@ -144,10 +144,10 @@ test("refresh preserves completed and partial caches for unchanged body/scope", 
   assert.equal(state.article.readingCache?.completedAt, undefined);
   state.invoke = undefined;
   await prepareStoredArticle(1, cfg, true);
-  assert.equal(state.calls, 3, "only the failed second chunk is generated again");
+  assert.equal(state.calls, 4, "resume the interrupted child and remaining root, preserving the successful child");
   const complete = structuredClone(state.article.readingCache);
   await prepareStoredArticle(1, cfg, true);
-  assert.equal(state.calls, 3);
+  assert.equal(state.calls, 4);
   assert.deepEqual(state.article.readingCache, complete);
   assert.ok(state.patches.filter(patch => "body" in patch).slice(1).every(patch => !("readingCache" in patch)));
 });
@@ -159,12 +159,12 @@ test("refresh invalidates a reading when the provider body or collection scope c
   const oldKey = state.article.readingCache!.key;
   state.article.sourceBody = body + "\n추가된 결론";
   await prepareStoredArticle(1, cfg, true);
-  assert.equal(state.calls, 4);
+  assert.equal(state.calls, 6);
   assert.notEqual(state.article.readingCache!.key, oldKey);
   assert.match(state.article.body!, /추가된 결론$/);
   state.article.contentMeta = { ...state.article.contentMeta!, status: "partial", reason: "예전 수집 제한" };
   await prepareStoredArticle(1, cfg, true);
-  assert.equal(state.calls, 6);
+  assert.equal(state.calls, 9);
   assert.equal(state.patches.filter(patch => "body" in patch && patch.readingCache === null).length, 3);
 });
 
@@ -188,10 +188,16 @@ test("a collector cannot overwrite replacement content or revive a row deleted d
 test("a reading interrupted by deletion stops before the next chunk and writes no stale cache", async () => {
   const state = fixture();
   await collectSource(source);
-  state.invoke = async () => { state.article.deletedAt = new Date(); return "삭제 중 응답한 구간"; };
+  let beforeDeletion: Article["readingCache"] = null;
+  state.invoke = async () => {
+    beforeDeletion = structuredClone(state.article.readingCache);
+    state.article.deletedAt = new Date(); return "삭제 중 응답한 구간";
+  };
   await assert.rejects(prepareStoredArticle(1, cfg), /전체 읽기를 중단/);
   assert.equal(state.calls, 1);
-  assert.equal(state.article.readingCache, null);
+  assert.deepEqual(state.article.readingCache?.chunks, {});
+  assert.equal(state.article.readingCache?.completedAt, undefined);
+  assert.deepEqual(state.article.readingCache, beforeDeletion, "deletion may retain the pre-call split plan, but no response is stored afterwards");
 });
 
 test("a case-only source replacement rejects a stale enrichment snapshot", async () => {
@@ -227,7 +233,7 @@ test("explicit refresh releases a reading hold while preserving completed chunks
   state.article.readingCache = { ...cache, recovery: { version: 1, splits: { first: true }, calls: 36,
     held: { reason: "recovery_budget", at: "2026-09-22T00:00:00Z" } } };
   await prepareStoredArticle(1, cfg, true);
-  assert.equal(state.calls, 2, "reset must not generate paid duplicates of completed chunks");
+  assert.equal(state.calls, 3, "reset must not generate paid duplicates of completed chunks");
   assert.deepEqual(state.article.readingCache?.chunks, cache.chunks);
   assert.deepEqual(state.article.readingCache?.recovery?.splits, { first: true });
   assert.equal(state.article.readingCache?.recovery?.calls, 0);

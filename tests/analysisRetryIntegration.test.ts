@@ -12,7 +12,8 @@ process.env.LLM_API_KEY = "synthetic-only";
 process.env.ANALYZE_BATCH = "2"; process.env.ANALYZE_CONCURRENCY = "1"; delete process.env.LLM_EXTRA_BODY;
 const { db, pool } = await import("../src/server/db/client.js");
 const schema = await import("../src/server/db/schema.js");
-const { runAnalysis } = await import("../src/server/analysis/analyze.js");
+const { runAnalysis, runArticleAnalysis } = await import("../src/server/analysis/analyze.js");
+const { settingsRouter } = await import("../src/server/trpc/routers/settings.js");
 const { articleContentFingerprint, analysisConfigFingerprint } = await import("../src/server/analysis/retryPolicy.js");
 const { resetAnalysisRetry, reserveAnalysisAttempt, markAnalysisFilterCorrection } = await import("../src/server/repo/analysisRetry.js");
 const { withLlmUsageSink } = await import("../src/server/analysis/usageObservation.js");
@@ -46,7 +47,9 @@ function fixture() {
       if (shape && "retry" in shape) {
         assert.match(q.sql, /`analysis_retries`\.`held` = \?/);
         const configKey = query(join).params.find(value => typeof value === "string" && /^[a-f0-9]{64}$/.test(value));
-        return pending().sort((a, b) => b.id - a.id).map(article => {
+        const selectedId = /`articles`\.`id` = \?/.exec(q.sql);
+        const articleId = selectedId ? q.params[(q.sql.slice(0, selectedId.index).match(/\?/g) ?? []).length] : undefined;
+        return pending().filter(article => articleId === undefined || article.id === articleId).sort((a, b) => b.id - a.id).map(article => {
           const stored = retries.get(article.id);
           const retry = stored && stored.configKey === configKey && stored.contentKey === articleContentFingerprint(article) ? stored : null;
           return { article: structuredClone(article), retry: retry ? structuredClone(retry) : null };
@@ -55,6 +58,9 @@ function fixture() {
       if (shape && "id" in shape && q.sql.includes("analysis_retries")) {
         const id = q.params.find(value => typeof value === "number");
         return pending().filter(article => (id === undefined || article.id === id) && (retries.has(article.id) || article.readingCache?.recovery?.held)).map(article => ({ id: article.id }));
+      }
+      if (shape && "id" in shape && q.sql.includes("NOT IN")) {
+        return pending().filter(article => article.id === q.params[0]).slice(0, limit).map(article => ({ id: article.id }));
       }
       const article = articles.get(Number(q.params[0]));
       if (!article || q.sql.includes("deleted_at` is null") && article.deletedAt) return [];
@@ -152,4 +158,90 @@ test("interrupted paid attempts leave durable reservations and the third reserva
   assert.equal((await resetAnalysisRetry(1)).reset, 1);
   assert.equal((await reserveAnalysisAttempt(article, configKey)).attempts, 1);
   assert.equal(state.calls.length, 0);
+});
+
+test("manual retry runs only the selected pending article and leaves other holds untouched", async () => {
+  const state = fixture(); state.add(1); state.add(2); state.add(3, false);
+  const configKey = analysisConfigFingerprint({ instructions: "실적과 근거를 요약한다", filterModel: "deepseek-flash" }, false);
+  for (const id of [1, 2]) {
+    for (let attempt = 0; attempt < 3; attempt++) await reserveAnalysisAttempt(state.articles.get(id)!, configKey);
+  }
+  state.settings.set("analysisRetryPause", { reason: "balance", until: new Date(Date.now() + 3600_000).toISOString() });
+  const other = structuredClone(state.retries.get(2));
+  const result = await withLlmUsageSink(() => {}, () => settingsRouter.createCaller({}).runArticleAnalysis({ articleId: 1 }));
+  assert.deepEqual(result, { analyzed: 0, relevant: 0, errors: 1, busy: false });
+  assert.deepEqual(state.calls, [1], "ID selection happens before the batch limit; no other article is called");
+  assert.deepEqual(state.retries.get(2), other);
+  assert.equal(state.analyses.has(3), false);
+  assert.equal(state.retries.get(1)?.attempts, 1, "only selected article received an explicit reset");
+  assert.equal(state.settings.has("analysisRetryPause"), true, "selected retry preserves the global provider cooldown");
+  await withLlmUsageSink(() => {}, () => runAnalysis());
+  assert.deepEqual(state.calls, [1], "subsequent scheduled work remains paused");
+});
+
+test("single-article route rejects missing, invalid and bulk IDs before any retry reset or API call", async () => {
+  const state = fixture(); state.add(1, false);
+  const pause = { reason: "balance", until: new Date(Date.now() + 3600_000).toISOString() };
+  state.settings.set("analysisRetryPause", pause);
+  const caller = settingsRouter.createCaller({});
+  for (const invalid of [{}, { articleId: 0 }, { articleId: -1 }, { articleId: 1.5 }, { articleId: "1" }, { articleId: Number.MAX_SAFE_INTEGER + 1 }, { articleId: 1, articleIds: [1, 2] }]) {
+    await assert.rejects(caller.runArticleAnalysis(invalid as { articleId: number }), { code: "BAD_REQUEST" });
+  }
+  assert.deepEqual(state.calls, []);
+  assert.equal(state.retries.size, 0);
+  assert.deepEqual(state.settings.get("analysisRetryPause"), pause);
+});
+
+test("manual retry of completed/deleted/missing articles is empty and leaves provider cooldown unchanged", async () => {
+  const state = fixture(); state.add(1, false); state.add(2, false); state.add(3, false);
+  state.analyses.add(1);
+  state.articles.get(2)!.deletedAt = new Date();
+  const pause = { reason: "balance", until: new Date(Date.now() + 3600_000).toISOString() };
+  state.settings.set("analysisRetryPause", pause);
+  await withLlmUsageSink(() => {}, async () => {
+    for (const id of [1, 2, 999]) assert.deepEqual(await runArticleAnalysis(id), { analyzed: 0, relevant: 0, errors: 0, busy: false });
+  });
+  assert.deepEqual(state.calls, []);
+  assert.deepEqual(state.settings.get("analysisRetryPause"), pause);
+});
+
+test("concurrent manual retry clicks return busy without resetting or multiplying paid work", async () => {
+  const state = fixture(); state.add(1, false); state.add(2, false);
+  const provider = globalThis.fetch;
+  let started!: () => void; const began = new Promise<void>(resolve => { started = resolve; });
+  let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = async (url, init) => { started(); await wait; return provider(url, init); };
+  await withLlmUsageSink(() => {}, async () => {
+    const first = runArticleAnalysis(1);
+    assert.deepEqual(await runArticleAnalysis(1), { analyzed: 0, relevant: 0, errors: 0, busy: true }, "guard is acquired before preflight and reset");
+    await began;
+    try {
+      assert.deepEqual(await runArticleAnalysis(1), { analyzed: 0, relevant: 0, errors: 0, busy: true });
+      assert.deepEqual(await runArticleAnalysis(2), { analyzed: 0, relevant: 0, errors: 0, busy: true });
+      assert.equal(state.retries.get(1)?.attempts, 1);
+      assert.equal(state.retries.has(2), false);
+    } finally { release(); }
+    assert.deepEqual(await first, { analyzed: 1, relevant: 1, errors: 0, busy: false });
+  });
+  assert.deepEqual(state.calls, [1]);
+  assert.equal(state.analyses.has(2), false);
+});
+
+test("an active scheduled batch makes selected manual retry busy before it clears cooldown or reservations", async () => {
+  const state = fixture(); state.add(1, false);
+  const provider = globalThis.fetch;
+  let started!: () => void; const began = new Promise<void>(resolve => { started = resolve; });
+  let release!: () => void; const wait = new Promise<void>(resolve => { release = resolve; });
+  globalThis.fetch = async (url, init) => { started(); await wait; return provider(url, init); };
+  await withLlmUsageSink(() => {}, async () => {
+    const scheduled = runAnalysis();
+    await began;
+    try {
+      const reservation = structuredClone(state.retries.get(1));
+      assert.deepEqual(await runArticleAnalysis(1), { analyzed: 0, relevant: 0, errors: 0, busy: true });
+      assert.deepEqual(state.retries.get(1), reservation);
+    } finally { release(); }
+    assert.equal((await scheduled).analyzed, 1);
+  });
+  assert.deepEqual(state.calls, [1]);
 });

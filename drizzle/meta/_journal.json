@@ -120,6 +120,13 @@
       "when": 1790092800000,
       "tag": "0016_analysis_retries",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "5",
+      "when": 1790096400000,
+      "tag": "0017_llm_provider_error",
+      "breakpoints": true
     }
   ]
 }

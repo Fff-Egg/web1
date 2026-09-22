@@ -4,6 +4,7 @@ import { settingsRepo } from "../../repo/settings.js";
 import { getRuntimeSchedule } from "../../runtimeSchedule.js";
 import { getLlmUsageReport } from "../../repo/llmUsage.js";
 import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
+import { runArticleAnalysis } from "../../analysis/analyze.js";
 import {
   ANALYSIS_MODEL,
   FILTER_MODEL,
@@ -54,6 +55,9 @@ export const settingsRouter = router({
   getAnalysisRetryStatus: publicProcedure.query(() => getAnalysisRetryStatus()),
   resetAnalysisRetry: publicProcedure.input(z.object({ articleId: z.number().int().positive().optional() }))
     .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
+  // Like every settings mutation, protected by the app's Basic Auth middleware.
+  runArticleAnalysis: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
+    .mutation(({ input }) => runArticleAnalysis(input.articleId)),
   getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),
   /** Non-secret, effective model plan after Settings/env/provider remapping. */
   getModelPlan: publicProcedure.query(async () => {

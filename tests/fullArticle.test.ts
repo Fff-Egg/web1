@@ -84,13 +84,19 @@ test("long text is read fully once, checkpointed, reused, and invalidated when t
 });
 
 test("failed chunk checkpoints resume without re-reading successful chunks or saving partial completion", async () => {
-  let saved: ReadingCache | undefined; let calls = 0;
+  let saved: ReadingCache | undefined; let calls = 0, completedInput = "";
   const opts = { body, model: "deepseek-flash", checkpoint: async (c: ReadingCache) => { saved = structuredClone(c); } };
-  await assert.rejects(readWholeArticle({ ...opts, invoke: async () => { calls++; if (calls === 2) throw Error("temporary failure"); return "완료한 첫 구간"; } }), /temporary failure/);
+  await assert.rejects(readWholeArticle({ ...opts, invoke: async call => {
+    calls++; if (calls === 2) throw Error("temporary failure");
+    completedInput = call.user.slice(call.user.indexOf("\n\n") + 2); return "완료한 첫 구간";
+  } }), /temporary failure/);
   assert.equal(saved?.completedAt, undefined); assert.equal(saved?.text, undefined);
-  const totalChunks = splitWholeText(body).length; calls = 0;
-  const result = await readWholeArticle({ ...opts, cache: saved, invoke: async () => { calls++; return "나머지 구간"; } });
-  assert.equal(calls, totalChunks - 1); assert.match(result.text!, /완료한 첫 구간/); assert.ok(result.completedAt);
+  const resumedInputs: string[] = [];
+  const result = await readWholeArticle({ ...opts, cache: saved, invoke: async call => {
+    resumedInputs.push(call.user.slice(call.user.indexOf("\n\n") + 2)); return "나머지 구간";
+  } });
+  assert.equal(completedInput + resumedInputs.join(""), body);
+  assert.match(result.text!, /완료한 첫 구간/); assert.ok(result.completedAt);
 });
 
 test("short text bypasses extra LLM calls; classifier and digest packing no longer cut the tail", async () => {

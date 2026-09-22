@@ -27,7 +27,11 @@ export interface ReadingCache {
   /** Recovery metadata contains hashes/counters only, never rejected partial output. */
   recovery?: {
     version: 1;
+    /** Changes the unfinished-work strategy without invalidating completed fact summaries. */
+    policy?: 2;
     splits: Record<string, true>;
+    /** Planned input bounds are ordinary work, not paid output-limit corrections. */
+    proactiveSplits?: Record<string, true>;
     calls: number;
     held?: { reason: "output_limit" | "recovery_budget" | "not_compressed" | "too_many_levels"; at: string };
   };
@@ -38,7 +42,9 @@ export function resetReadingRecovery(cache: ReadingCache | null | undefined): Re
   if (!cache) return null;
   if (!cache.recovery) return { ...cache, chunks: { ...cache.chunks } };
   return { ...cache, chunks: { ...cache.chunks }, recovery: {
-    version: 1, splits: { ...cache.recovery.splits }, calls: 0,
+    version: 1, ...(cache.recovery.policy ? { policy: cache.recovery.policy } : {}),
+    splits: { ...cache.recovery.splits },
+    ...(cache.recovery.proactiveSplits ? { proactiveSplits: { ...cache.recovery.proactiveSplits } } : {}), calls: 0,
   } };
 }
 

@@ -30,7 +30,7 @@ app.get("/api/health", (_req, res) =>
   res.json({
     ok: true,
     revision: process.env.RAILWAY_GIT_COMMIT_SHA?.slice(0, 7) ?? null,
-    features: ["source-review", "deepseek-nonthinking-default", "pro-final-thinking", "importance-noise-guard", "offpeak-analysis-queue", "digest-failure-details", "pro-single-attempt-49k", "sweep-requires-primary-final", "pro-final-streaming", "llm-transport-diagnostics", "boundary-run-status", "manual-digest-status", "fulltext-dedupe", "reading-cache-guard", "llm-usage-ledger", "bounded-analysis-retry", "adaptive-reading-recovery"],
+    features: ["source-review", "deepseek-nonthinking-default", "pro-final-thinking", "importance-noise-guard", "offpeak-analysis-queue", "digest-failure-details", "pro-single-attempt-49k", "sweep-requires-primary-final", "pro-final-streaming", "llm-transport-diagnostics", "boundary-run-status", "manual-digest-status", "fulltext-dedupe", "reading-cache-guard", "llm-usage-ledger", "bounded-analysis-retry", "adaptive-reading-recovery", "compact-reading-policy", "provider-error-categories", "single-article-retry"],
   }),
 );
 

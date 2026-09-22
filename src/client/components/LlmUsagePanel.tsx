@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
 import { discountedFlashEstimate, LLM_STAGE_LABELS, usageFailureLabel, usageKstDay } from "../../shared/llmUsageView.js";
 
@@ -8,7 +8,19 @@ const hour = (n: number) => `${String(n).padStart(2, "0")}시`;
 const minute = (n: number) => `${String(Math.floor(n / 60)).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`;
 
 export function LlmUsagePanel() {
+  const queryClient = useQueryClient();
   const [day, setDay] = useState("today");
+  const [retryArticleId, setRetryArticleId] = useState<number | null>(null);
+  const retry = useMutation({
+    mutationFn: (articleId: number) => api.runArticleAnalysis(articleId),
+    retry: false,
+    onSettled: (_data, _error, articleId) => {
+      setRetryArticleId(null);
+      for (const queryKey of [["llmUsage"], ["analysisRetryStatus"], ["pending"], ["feed"], ["feedCounts"], ["feedItem", articleId]]) {
+        void queryClient.invalidateQueries({ queryKey });
+      }
+    },
+  });
   const usage = useQuery({ queryKey: ["llmUsage"], queryFn: () => api.getLlmUsage(), refetchInterval: 60_000 });
   const schedule = useQuery({ queryKey: ["runtimeSchedule"], queryFn: () => api.getRuntimeSchedule(), refetchInterval: 60_000 });
   const today = usageKstDay(usage.data?.generatedAt ?? new Date().toISOString());
@@ -95,7 +107,31 @@ export function LlmUsagePanel() {
       {repeated.length > 0 && <details className="rounded border border-slate-200 p-3">
         <summary className="cursor-pointer text-sm">최근 7일 반복 실패 글 (상위 20항목)</summary>
         <p className="mt-2 text-xs text-slate-500">기간 선택과 별개인 최근 7일 기록입니다. 같은 글의 여러 구간 실패도 합산하며, 현재 보류 상태는 아래에서 확인합니다.</p>
-        <ul className="mt-2 space-y-1 text-xs text-slate-600">{repeated.map((row, i) => <li key={i}>글 #{row.articleId} · {LLM_STAGE_LABELS[row.stage] ?? row.stage} · {usageFailureLabel(row)} · {count(row.failures)}회 · 마지막 {new Date(row.lastAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</li>)}</ul>
+        <ul className="mt-2 space-y-2 text-xs text-slate-600">{repeated.map((row, i) => <li key={i} className="flex flex-wrap items-center gap-2">
+          <span>글 #{row.articleId} · {LLM_STAGE_LABELS[row.stage] ?? row.stage} · {usageFailureLabel(row)} · {count(row.failures)}회 · 마지막 {new Date(row.lastAt).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" })}</span>
+          <button type="button" disabled={retry.isPending || api.mode === "static"}
+            onClick={() => { retry.reset(); setRetryArticleId(row.articleId); }}
+            className="rounded border border-slate-300 px-2 py-1 disabled:opacity-50">1건 다시 분석</button>
+        </li>)}</ul>
+        {retryArticleId !== null && !retry.isPending && <div className="mt-3 rounded border border-amber-200 bg-amber-50 p-3 text-sm space-y-2">
+          <p>글 #{retryArticleId} 한 건의 재시도 제한을 해제하고 지금 다시 분석합니다. 완료된 구간 요약은 재사용하며 <strong>추가 API 비용이 발생합니다.</strong></p>
+          <p className="text-xs text-slate-600">전체 API 오류 대기 중에도 선택한 한 건만 실행합니다. 다른 글의 재시도 제한과 전체 대기는 유지됩니다.</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => retry.mutate(retryArticleId)} className="rounded bg-slate-900 px-3 py-1.5 text-white">확인 · 1건 다시 분석</button>
+            <button type="button" onClick={() => setRetryArticleId(null)} className="rounded border border-slate-300 px-3 py-1.5">취소</button>
+          </div>
+        </div>}
+        <div aria-live="polite" className="mt-2 text-sm">
+          {retry.isPending && <p className="text-slate-600">글 #{retry.variables} 한 건을 분석 중입니다. 긴 글은 몇 분 걸릴 수 있습니다.</p>}
+          {retry.isError && <p className="text-red-700">분석 응답을 확인하지 못했습니다. 서버에서 작업이 계속될 수 있으니 사용량과 아래 재시도 상태를 새로고침해 확인해주세요. 자동으로 다시 요청하지 않습니다.</p>}
+          {retry.isSuccess && (retry.data.busy
+            ? <p className="text-amber-700">다른 분석이 실행 중입니다. 추가 작업을 시작하지 않았습니다. 완료 후 다시 시도해주세요.</p>
+            : retry.data.errors > 0
+              ? <p className="text-red-700">글 #{retry.variables} 분석이 완료되지 않았습니다. 위 실패 원인과 아래 재시도 상태를 확인해주세요.</p>
+              : retry.data.analyzed > 0
+                ? <p className="text-emerald-700">글 #{retry.variables} 분석을 완료했습니다.</p>
+                : <p className="text-slate-600">분석할 대기 글이 없어 추가 작업 없이 종료했습니다. 이미 분석되었거나 삭제된 글일 수 있습니다.</p>)}
+        </div>
       </details>}
       <p className="text-xs leading-relaxed text-slate-500">추정 비용은 공식 DeepSeek Flash의 입력 캐시 적중·미적중·출력 사용량을 모두 받은 요청만 계산합니다. 100만 토큰당 $0.003 / $0.15 / $0.60을 적용한 참고값이며 실제 청구액은 아닙니다. 혼잡 시간에는 2배입니다. 제공자 요금 변경·사용량 미수신·다른 모델 비용은 반영하지 않습니다. 입력 캐시 할인과 완성된 요약 재사용은 다릅니다. 입력이 할인되어도 새 출력에는 비용이 발생합니다. <a className="underline" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noreferrer">공식 요금표</a> (2026-09-21 확인)</p>
     </>}

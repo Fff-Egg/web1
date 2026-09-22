@@ -3,10 +3,13 @@ import type { AnalysisConfig, Article } from "../db/schema.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 import { FILTER_MODEL, ANALYSIS_MODEL, resolveModel } from "./anthropic.js";
 
-export const ANALYSIS_RETRY_VERSION = "2026-09-22-bounded-v1";
+export const ANALYSIS_RETRY_VERSION = "2026-09-22-compact-reading-v2";
 export function filterTokenLimit(hasThreads: boolean): number {
-  const value = Number(process.env.FILTER_MAX_TOKENS ?? (hasThreads ? 1400 : 600));
-  return Number.isFinite(value) && value > 0 ? Math.floor(value) : hasThreads ? 1400 : 600;
+  // Full article evidence and thesis fields need room to close the JSON. This
+  // is a ceiling, not a request to generate this many tokens.
+  const fallback = hasThreads ? 2800 : 1600;
+  const value = Number(process.env.FILTER_MAX_TOKENS ?? fallback);
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 export function correctedFilterTokenLimit(initial: number): number { return Math.max(initial, Math.min(6000, Math.max(1600, initial * 2))); }
 

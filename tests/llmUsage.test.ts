@@ -5,6 +5,8 @@ import { withLlmUsageSink, withLlmUsageContext, observeLlmUsage } from "../src/s
 import { completeDigestStage, newModelTrace } from "../src/server/digest/modelPipeline.js";
 import { usageDateRange } from "../src/server/repo/llmUsage.js";
 import type { LlmUsageEvent } from "../src/shared/llmUsage.js";
+import type { LlmCallDiagnostics } from "../src/shared/llmDiagnostics.js";
+import { LlmProviderError } from "../src/server/analysis/providerError.js";
 
 const originalFetch = globalThis.fetch;
 const keys = ["LLM_BASE_URL", "LLM_API_KEY", "LLM_EXTRA_BODY"] as const;
@@ -55,6 +57,51 @@ test("truncated response is a failed attempt but retains consumed tokens", async
   await withLlmUsageSink(e => { events.push(e); }, () => assert.rejects(complete(opts), /응답 잘림/));
   assert.equal(events.length, 1); assert.equal(events[0].success, false);
   assert.equal(events[0].outputTokens, 35); assert.equal(events[0].finishReason, "length");
+});
+
+test("HTTP rejection stores only a category and safe parameter, with one attempt and unknown billed counts", async () => {
+  const events: LlmUsageEvent[] = [], diagnostics: LlmCallDiagnostics[] = [];
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: {
+      message: "PRIVATE_KEY PRIVATE_INPUT invalid control character", code: "PRIVATE_CODE", param: "messages[1].content",
+    } }), { status: 400 });
+  };
+  await withLlmUsageSink(e => { events.push(e); }, () => assert.rejects(
+    complete({ ...opts, onDiagnostics: d => { diagnostics.push(d); } }),
+    error => error instanceof LlmProviderError && error.status === 400 && error.category === "invalid_unicode",
+  ));
+  assert.equal(calls, 1); assert.equal(events.length, 1); assert.equal(diagnostics.length, 1);
+  const event = events[0], diagnostic = diagnostics[0];
+  assert.equal(event.success, false); assert.equal(event.httpStatus, 400);
+  assert.equal(event.errorCategory, "invalid_unicode"); assert.equal(event.errorParam, "messages.content");
+  assert.equal(event.inputTokens, null); assert.equal(event.outputTokens, null);
+  assert.equal(event.stage, "filter"); assert.equal(event.model, "deepseek-flash"); assert.equal(event.thinking, "disabled");
+  assert.equal(diagnostic.errorCategory, "invalid_unicode"); assert.equal(diagnostic.errorParam, "messages.content");
+  assert.doesNotMatch(JSON.stringify({ events, diagnostics }), /PRIVATE_|Bearer|invalid control character/);
+});
+
+test("JSON response format is per-call, overrides stale extras, and leaves ordinary reading/report calls unchanged", async () => {
+  const requests: Array<Record<string, any>> = [];
+  const events: LlmUsageEvent[] = [];
+  globalThis.fetch = async (_url, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return response(counts);
+  };
+  await withLlmUsageSink(e => { events.push(e); }, async () => {
+    process.env.LLM_EXTRA_BODY = JSON.stringify({ response_format: { type: "text" }, thinking: { type: "enabled" } });
+    await complete({ ...opts, system: "Return JSON", responseFormat: "json_object" });
+    delete process.env.LLM_EXTRA_BODY;
+    await complete({ ...opts, usage: { stage: "whole_reading" } });
+    await complete({ ...opts, usage: { stage: "digest_final" } });
+  });
+  assert.deepEqual(requests[0].response_format, { type: "json_object" });
+  assert.equal(requests[0].thinking.type, "disabled");
+  assert.equal(requests[1].response_format, undefined);
+  assert.equal(requests[2].response_format, undefined);
+  assert.deepEqual(events.map(e => e.stage), ["filter", "whole_reading", "digest_final"]);
+  assert.ok(events.every(e => e.errorCategory === null && e.errorParam === null));
 });
 
 test("malformed JSON and SSE message shapes still retain valid billed usage", async () => {

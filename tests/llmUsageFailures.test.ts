@@ -16,7 +16,7 @@ test("failure diagnosis aggregates only failed attempts in the same seven KST da
   assert.match(sql, /`llm_usage`\.`success` = \?/);
   assert.deepEqual(params, ["2026-09-15 15:00:00.000", "2026-09-22 01:23:45.000", false]);
   const group = sql.slice(sql.indexOf("group by"));
-  for (const column of ["stage", "model", "endpoint_host", "thinking", "http_status", "finish_reason"]) {
+  for (const column of ["stage", "model", "endpoint_host", "thinking", "http_status", "finish_reason", "error_category", "error_param"]) {
     assert.ok(group.includes(`\`llm_usage\`.\`${column}\``), `must separate ${column}`);
   }
   assert.match(group, /DATE_FORMAT\(DATE_ADD\(`llm_usage`\.`started_at`, INTERVAL 9 HOUR\), '%Y-%m-%d'\)/);
@@ -33,7 +33,7 @@ test("repeat diagnosis requires an article and multiple failed attempts and appl
   const { sql, params } = failureUsageQueries(store, range.since, range.until).repeated.toSQL();
   assert.match(sql, /`llm_usage`\.`success` = \?/);
   assert.match(sql, /`llm_usage`\.`article_id` is not null/);
-  assert.match(sql, /group by `llm_usage`\.`article_id`, `llm_usage`\.`stage`, `llm_usage`\.`http_status`, `llm_usage`\.`finish_reason`/);
+  assert.match(sql, /group by `llm_usage`\.`article_id`, `llm_usage`\.`stage`, `llm_usage`\.`http_status`, `llm_usage`\.`finish_reason`, `llm_usage`\.`error_category`, `llm_usage`\.`error_param`/);
   assert.match(sql, /having COUNT\(\*\) > 1/);
   assert.match(sql, /order by COUNT\(\*\) desc, MAX\(`llm_usage`\.`started_at`\) desc/);
   assert.match(sql, /limit \?$/);
@@ -66,6 +66,6 @@ test("repeated article entries contain only the aggregate identity, count and UT
   const repeated = repeatedArticleFromRow({ articleId: "52", stage: "whole_reading", httpStatus: 200,
     finishReason: "length", failures: "7", lastAt: "2026-09-22T01:23:45Z" });
   assert.deepEqual(repeated, { articleId: 52, stage: "whole_reading", httpStatus: 200,
-    finishReason: "length", failures: 7, lastAt: "2026-09-22T01:23:45Z" });
+    finishReason: "length", errorCategory: null, errorParam: null, failures: 7, lastAt: "2026-09-22T01:23:45Z" });
   assert.equal(new Date(repeated.lastAt).toISOString(), "2026-09-22T01:23:45.000Z");
 });

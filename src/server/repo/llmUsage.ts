@@ -17,20 +17,20 @@ export function failureUsageQueries(store: Pick<typeof db, "select">, since: Dat
   const failedInRange = and(gte(u.startedAt, since), lte(u.startedAt, until), eq(u.success, false));
   const failures = store.select({
     day: usageDay, stage: u.stage, model: u.model, endpointHost: u.endpointHost, thinking: u.thinking,
-    httpStatus: u.httpStatus, finishReason: u.finishReason,
+    httpStatus: u.httpStatus, finishReason: u.finishReason, errorCategory: u.errorCategory, errorParam: u.errorParam,
     requests: sql<number>`COUNT(*)`, outputKnown: sql<number>`COUNT(${u.outputTokens})`,
     outputTokens: sql<number | null>`SUM(${u.outputTokens})`, ...costFields,
   }).from(u).where(failedInRange)
-    .groupBy(usageDay, u.stage, u.model, u.endpointHost, u.thinking, u.httpStatus, u.finishReason);
+    .groupBy(usageDay, u.stage, u.model, u.endpointHost, u.thinking, u.httpStatus, u.finishReason, u.errorCategory, u.errorParam);
   const repeated = store.select({
-    articleId: u.articleId, stage: u.stage, httpStatus: u.httpStatus, finishReason: u.finishReason,
+    articleId: u.articleId, stage: u.stage, httpStatus: u.httpStatus, finishReason: u.finishReason, errorCategory: u.errorCategory, errorParam: u.errorParam,
     failures: sql<number>`COUNT(*)`,
     // MySQL sessions are UTC. Emit an explicit timezone, independent of the browser's locale.
     lastAt: sql<string>`DATE_FORMAT(MAX(${u.startedAt}), '%Y-%m-%dT%H:%i:%sZ')`,
   }).from(u).where(and(failedInRange, isNotNull(u.articleId)))
-    .groupBy(u.articleId, u.stage, u.httpStatus, u.finishReason)
+    .groupBy(u.articleId, u.stage, u.httpStatus, u.finishReason, u.errorCategory, u.errorParam)
     .having(sql`COUNT(*) > 1`)
-    .orderBy(desc(sql`COUNT(*)`), desc(sql`MAX(${u.startedAt})`), u.articleId, u.stage, u.httpStatus, u.finishReason)
+    .orderBy(desc(sql`COUNT(*)`), desc(sql`MAX(${u.startedAt})`), u.articleId, u.stage, u.httpStatus, u.finishReason, u.errorCategory, u.errorParam)
     .limit(20);
   return { failures, repeated };
 }
@@ -45,7 +45,8 @@ export function failureGroupFromRow(row: Omit<LlmUsageFailureGroup, "costBasis" 
   requests: number | string; outputKnown: number | string; outputTokens: number | string | null;
 }): LlmUsageFailureGroup {
   return { day: row.day, stage: row.stage, model: row.model, endpointHost: row.endpointHost, thinking: row.thinking,
-    httpStatus: row.httpStatus, finishReason: row.finishReason, requests: Number(row.requests), outputKnown: Number(row.outputKnown),
+    httpStatus: row.httpStatus, finishReason: row.finishReason, errorCategory: row.errorCategory ?? null, errorParam: row.errorParam ?? null,
+    requests: Number(row.requests), outputKnown: Number(row.outputKnown),
     outputTokens: row.outputTokens === null ? null : Number(row.outputTokens), costBasis: costBasis(row) };
 }
 
@@ -53,7 +54,7 @@ export function repeatedArticleFromRow(row: Omit<LlmUsageRepeatedArticle, "artic
   articleId: number | string | null; failures: number | string;
 }): LlmUsageRepeatedArticle {
   return { articleId: Number(row.articleId), stage: row.stage, httpStatus: row.httpStatus, finishReason: row.finishReason,
-    failures: Number(row.failures), lastAt: row.lastAt };
+    errorCategory: row.errorCategory ?? null, errorParam: row.errorParam ?? null, failures: Number(row.failures), lastAt: row.lastAt };
 }
 
 export async function saveLlmUsageEvent(event: LlmUsageEvent): Promise<void> {

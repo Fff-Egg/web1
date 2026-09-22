@@ -17,6 +17,7 @@ import { relations } from "drizzle-orm";
 import type { ArticleContentMeta, ReadingCache } from "../../shared/articleContent.js";
 import type { LlmThinking, LlmUsageStage } from "../../shared/llmUsage.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
+import type { ProviderErrorCategory } from "../../shared/providerError.js";
 
 /** Usage metadata only. No prompt, generated text, credentials or provider error bodies. */
 export const llmUsage = mysqlTable("llm_usage", {
@@ -33,6 +34,8 @@ export const llmUsage = mysqlTable("llm_usage", {
   durationMs: int("duration_ms", { unsigned: true }).notNull(),
   finishReason: varchar("finish_reason", { length: 40 }),
   httpStatus: int("http_status", { unsigned: true }),
+  errorCategory: varchar("error_category", { length: 32 }).$type<ProviderErrorCategory>(),
+  errorParam: varchar("error_param", { length: 64 }),
   inputTokens: bigint("input_tokens", { mode: "number", unsigned: true }),
   cacheHitTokens: bigint("cache_hit_tokens", { mode: "number", unsigned: true }),
   cacheMissTokens: bigint("cache_miss_tokens", { mode: "number", unsigned: true }),

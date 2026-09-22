@@ -7,6 +7,7 @@ import type { LlmUsageContext, LlmUsageEvent } from "../../shared/llmUsage.js";
 import { currentLlmUsageContext, observeLlmUsage } from "./usageObservation.js";
 import { recordProviderUsage, tokenCount } from "./providerUsage.js";
 import { LlmOutputLimitError } from "./llmErrors.js";
+import { diagnoseProviderError, LlmProviderError } from "./providerError.js";
 
 let _client: Anthropic | null = null;
 
@@ -128,6 +129,8 @@ export interface CompleteOpts {
   system: string;
   user: string;
   maxTokens?: number;
+  /** Explicit JSON output for compatible endpoints; Anthropic ignores this option. */
+  responseFormat?: "json_object";
   /** DeepSeek V4 per-call thinking switch. Ignored by providers/models that do not support it. */
   thinking?: "enabled" | "disabled";
 }
@@ -189,6 +192,7 @@ async function recordAttempt(opts: CompleteOpts, d: LlmCallDiagnostics, success:
       thinking: d.effectiveThinking ?? "unknown", articleId: tokenCount(opts.usage?.articleId ?? context.articleId) ?? null,
       runId: identifier(opts.usage?.runId ?? context.runId), success, durationMs: Math.min(d.durationMs, 4294967295),
       finishReason: identifier(d.finishReason, 40), httpStatus: d.httpStatus ?? null,
+      errorCategory: d.errorCategory ?? null, errorParam: d.errorParam ?? null,
       inputTokens: tokenCount(d.promptTokens) ?? null, cacheHitTokens: tokenCount(d.cacheHitTokens) ?? null,
       cacheMissTokens: tokenCount(d.cacheMissTokens) ?? null, outputTokens: tokenCount(d.completionTokens) ?? null,
       reasoningTokens: tokenCount(d.reasoningTokens) ?? null,
@@ -240,6 +244,7 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
         ...costSafeExtra,
         ...configuredExtra,
         ...callExtra,
+        ...(opts.responseFormat ? { response_format: { type: opts.responseFormat } } : {}),
         ...(streamFinalThinking ? { stream: true } : {}),
       });
     probe.request(base, body);
@@ -249,9 +254,12 @@ async function completeOpenAI(opts: CompleteOpts): Promise<string> {
       body,
     });
     if (!res.ok) {
-      await probe.read(res);
-      // Provider error bodies can echo keys or prompts. Retain status, never that body.
-      throw new Error(`LLM API ${res.status}: provider request failed`);
+      const diagnosis = diagnoseProviderError(await probe.read(res), res.status);
+      // Provider bodies can echo keys/prompts. Keep only a finite category and
+      // exact allowlisted parameter, never the original message/body/code.
+      probe.data.errorCategory = diagnosis.category;
+      probe.data.errorParam = diagnosis.param;
+      throw new LlmProviderError(res.status, diagnosis);
     }
     type Completion = {
       choices?: {

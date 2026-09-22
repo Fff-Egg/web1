@@ -1,3 +1,4 @@
+import type { ProviderErrorCategory } from "./providerError.js";
 /** A paid attempt, not a feed item. Missing provider usage is never treated as zero. */
 export const LLM_USAGE_STAGES = ["filter", "whole_reading", "digest_map", "digest_final", "digest_fallback", "feedback", "deep_analysis", "research_summary", "unknown"] as const;
 export type LlmUsageStage = typeof LLM_USAGE_STAGES[number];
@@ -7,6 +8,7 @@ export interface LlmUsageEvent {
   requestId: string; startedAt: string; stage: LlmUsageStage; model: string;
   endpointHost: string | null; thinking: LlmThinking; articleId: number | null; runId: string | null;
   success: boolean; durationMs: number; finishReason: string | null; httpStatus: number | null;
+  errorCategory?: ProviderErrorCategory | null; errorParam?: string | null;
   inputTokens: number | null; cacheHitTokens: number | null; cacheMissTokens: number | null;
   outputTokens: number | null; reasoningTokens: number | null;
 }
@@ -22,6 +24,8 @@ export interface LlmUsageBucket {
 export interface LlmUsageFailureGroup extends Pick<LlmUsageBucket, "day" | "stage" | "model" | "endpointHost" | "thinking" | "outputKnown" | "outputTokens" | "costBasis"> {
   httpStatus: number | null;
   finishReason: string | null;
+  errorCategory?: ProviderErrorCategory | null;
+  errorParam?: string | null;
   /** Failed attempts only, including failures that still consumed tokens. */
   requests: number;
 }
@@ -30,6 +34,8 @@ export interface LlmUsageRepeatedArticle {
   stage: LlmUsageStage;
   httpStatus: number | null;
   finishReason: string | null;
+  errorCategory?: ProviderErrorCategory | null;
+  errorParam?: string | null;
   failures: number;
   lastAt: string;
 }

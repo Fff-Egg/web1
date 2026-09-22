@@ -90,7 +90,7 @@ export async function getAnalysisRetryStatus(now = new Date()): Promise<Analysis
 }
 
 /** Explicit operator action only. Clears holds/counters, keeps all completed reading chunks. */
-export async function resetAnalysisRetry(articleId?: number): Promise<{ reset: number }> {
+export async function resetAnalysisRetry(articleId?: number, opts: { preservePause?: boolean } = {}): Promise<{ reset: number }> {
   if (!hasDb) return { reset: 0 };
   const rows = await db.select({ id: articles.id }).from(articles).where(and(pendingArticles(), articleId === undefined ? undefined : eq(articles.id, articleId),
     or(sql`${articles.id} IN (SELECT ${retries.articleId} FROM ${retries})`, sql`JSON_EXTRACT(${articles.readingCache}, '$.recovery.held') IS NOT NULL`)));
@@ -98,6 +98,6 @@ export async function resetAnalysisRetry(articleId?: number): Promise<{ reset: n
     await resetStoredReadingRecovery(row.id);
     await clearAnalysisFailure(row.id);
   }
-  await db.delete(settings).where(eq(settings.key, PAUSE_KEY));
+  if (!opts.preservePause) await db.delete(settings).where(eq(settings.key, PAUSE_KEY));
   return { reset: rows.length };
 }

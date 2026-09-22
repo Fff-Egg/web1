@@ -28,6 +28,8 @@ test("failure labels distinguish known truncation and HTTP errors without guessi
   assert.equal(usageFailureLabel({ httpStatus: 200, finishReason: "length" }), "출력 한도 초과 (응답 잘림)");
   assert.equal(usageFailureLabel({ httpStatus: null, finishReason: "max_tokens" }), "출력 한도 초과 (응답 잘림)");
   assert.equal(usageFailureLabel({ httpStatus: 400, finishReason: null }), "요청 오류 (HTTP 400)");
+  assert.equal(usageFailureLabel({ httpStatus: 400, finishReason: null, errorCategory: "invalid_unicode", errorParam: "messages.content" }), "문자 인코딩 오류 (HTTP 400) · messages.content");
+  assert.equal(usageFailureLabel({ httpStatus: 400, finishReason: null, errorCategory: "context_limit" }), "입력·출력 합산 한도 초과 (HTTP 400)");
   assert.equal(usageFailureLabel({ httpStatus: 200, finishReason: null }), "응답 처리 실패 (상세 미확인)");
 });
 

@@ -15,6 +15,7 @@ import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
 import type { RuntimeSchedule } from "../../shared/runtimeSchedule.js";
 import type { LlmUsageReport } from "../../shared/llmUsage.js";
 import type { AnalysisRetryStatus } from "../../shared/analysisRetry.js";
+import type { runArticleAnalysis } from "../../server/analysis/analyze.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
@@ -149,6 +150,7 @@ export interface DataApi {
   getLlmUsage(): Promise<LlmUsageReport>;
   getAnalysisRetryStatus(): Promise<AnalysisRetryStatus>;
   resetAnalysisRetry(articleId?: number): Promise<{ reset: number }>;
+  runArticleAnalysis(articleId: number): ReturnType<typeof runArticleAnalysis>;
   updateAnalysisConfig(cfg: AnalysisConfig): Promise<void>;
   getFilterGuidance(): Promise<{ text: string; count: number; updatedAt?: string }>;
   setFilterGuidance(text: string): Promise<void>;
@@ -314,6 +316,7 @@ function makeTrpcApi(): DataApi {
     getLlmUsage: () => client.settings.getLlmUsage.query(),
     getAnalysisRetryStatus: () => client.settings.getAnalysisRetryStatus.query(),
     resetAnalysisRetry: (articleId) => client.settings.resetAnalysisRetry.mutate({ articleId }),
+    runArticleAnalysis: (articleId) => client.settings.runArticleAnalysis.mutate({ articleId }),
     updateAnalysisConfig: async (cfg) => {
       await client.settings.updateAnalysisConfig.mutate(cfg);
     },
@@ -511,6 +514,7 @@ function makeStaticApi(): DataApi {
       return { persisted: false, totalPending: 0, eligible: 0, held: 0, waiting: 0, globalPause: null, items: [] };
     },
     async resetAnalysisRetry() { return { reset: 0 }; },
+    async runArticleAnalysis() { return { analyzed: 0, relevant: 0, errors: 0, busy: false }; },
     async updateAnalysisConfig(cfg) {
       localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
     },

@@ -1,3 +1,4 @@
+import type { ProviderErrorCategory } from "./providerError.js";
 /** Metadata only: never store prompts, response text, reasoning text, keys or full URLs. */
 export interface LlmCallDiagnostics {
   version: 1;
@@ -27,6 +28,8 @@ export interface LlmCallDiagnostics {
   providerRequestId?: string;
   errorName?: string;
   errorCodes?: string[];
+  errorCategory?: ProviderErrorCategory;
+  errorParam?: string | null;
   finishReason?: string;
   promptTokens?: number;
   completionTokens?: number;
