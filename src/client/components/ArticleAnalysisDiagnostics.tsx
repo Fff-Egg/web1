@@ -5,7 +5,8 @@ import { LLM_STAGE_LABELS, usageFailureLabel } from "../../shared/llmUsageView.j
 const time = (iso: string) => new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 const count = (n: number | null) => n === null ? "미수신" : n.toLocaleString("ko-KR");
 const holdReasons: Record<string, string> = { output_limit: "작은 구간도 출력 한도 초과", recovery_budget: "추가 복구 횟수 소진",
-  not_compressed: "요약이 입력보다 줄어들지 않음", too_many_levels: "요약 단계 한도 도달" };
+  not_compressed: "요약이 입력보다 줄어들지 않음", too_many_levels: "요약 단계 한도 도달",
+  packet_too_large: "최종 사실 메모가 전달 한도 초과" };
 
 /** Only mounts after an explicit disclosure click; this query never calls the LLM. */
 export function ArticleAnalysisDiagnostics({ articleId }: { articleId: number }) {
@@ -34,6 +35,9 @@ export function ArticleAnalysisDiagnostics({ articleId }: { articleId: number })
       </div>
       {r ? <div className="space-y-1">
         <p>전체 읽기: {r.completedAt ? `완료 · ${time(r.completedAt)}` : "미완료"} · 입력 {count(r.inputChars)}자 / 기본 구간 {count(r.chunkCount)}개</p>
+        {a.sourceReading && <p>원문 구간별 읽기: {a.sourceReading.completed
+          ? `전 구간 저장됨 · 순서대로 합친 사실 메모 ${count(a.sourceReading.chars)}자 / ${count(a.sourceReading.bytes)}바이트`
+          : "아직 저장되지 않은 원문 구간이 있습니다."}</p>}
         <p>완료된 캐시 {count(r.savedChunkCount)}개 · 저장 요약 합계 {count(r.savedChunkChars)}자</p>
         <p className="text-xs text-slate-500">캐시는 부모·자식 구간 요약을 함께 포함합니다. 개수나 합계 글자 수가 고유 원문의 처리량을 뜻하지는 않습니다.</p>
         {r.recovery && <>

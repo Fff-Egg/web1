@@ -5,6 +5,7 @@ import { readingDiagnostics } from "../src/shared/analysisDiagnostics.js";
 import type { ReadingCache } from "../src/shared/articleContent.js";
 import { articleDiagnosticQueries, articleDiagnosticsFromRows } from "../src/server/repo/analysisDiagnostics.js";
 import { settingsRouter } from "../src/server/trpc/routers/settings.js";
+import { readWholeArticle } from "../src/server/analysis/fullReading.js";
 
 const store = drizzle.mock();
 
@@ -72,6 +73,7 @@ test("article DTO retains the complete body but only source length and safe proj
     assert.equal(view.sourceBodyChars, row.sourceBody.length);
     assert.equal(view.content.extractedLinks, 1); assert.equal(view.content.unavailableLinks, 1);
     assert.deepEqual(view.analysis, { completed: false, analyzedAt: null });
+    assert.equal(view.sourceReading, null);
     assert.equal(view.attempts.length, 30); assert.equal(view.attempts[0].outputTokens, 3200);
     assert.equal(view.attempts[0].inputTokens, null); assert.equal(view.attempts[0].startedAt, "2026-09-22T04:29:00.000Z");
     assert.doesNotMatch(JSON.stringify(view), /PRIVATE_|SOURCE_TEXT_ONLY_LENGTH|errorMessage|requestId/);
@@ -86,4 +88,19 @@ test("diagnostic query rejects missing, bulk and invalid IDs before touching sto
     { articleId: Number.MAX_SAFE_INTEGER + 1 }, { articleId: 83479, articleIds: [83479, 83480] }]) {
     await assert.rejects(caller.getArticleAnalysisDiagnostics(input as { articleId: number }), { code: "BAD_REQUEST" });
   }
+});
+
+test("source reading diagnosis counts only all original segments, not arbitrary parent or reduction cache totals", async () => {
+  const body = "원".repeat(13000);
+  const cache = await readWholeArticle({ body, model: "deepseek-flash", invoke: async () => "원문의 핵심 사실" });
+  cache.chunks["unrelated-cached-reduction"] = "중복하면 안 되는 이전 압축".repeat(500);
+  const row = { id: 83479, title: null, url: null, provider: null, body, sourceBody: null,
+    contentMeta: null, readingCache: cache, analysisId: null, analyzedAt: null };
+  const view = articleDiagnosticsFromRows(row, []);
+  assert.equal(view.sourceReading?.completed, true);
+  assert.equal(view.sourceReading?.chars, cache.text!.length);
+  assert.equal(view.sourceReading?.bytes, Buffer.byteLength(cache.text!, "utf8"));
+  assert.ok(view.reading!.savedChunkChars > view.sourceReading!.chars!);
+  const incomplete = articleDiagnosticsFromRows({ ...row, readingCache: { ...cache, chunks: {} } }, []);
+  assert.deepEqual(incomplete.sourceReading, { completed: false, chars: null, bytes: null });
 });

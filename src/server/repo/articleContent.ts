@@ -2,11 +2,32 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
 import { enrichArticle } from "../adapters/fullText.js";
-import { readWholeArticle } from "../analysis/fullReading.js";
-import { FILTER_MODEL } from "../analysis/anthropic.js";
+import { readWholeArticle, READING_CHUNK_CHARS, type ReadingPacketBudget } from "../analysis/fullReading.js";
+import { ANALYSIS_MODEL, FILTER_MODEL, resolveModel } from "../analysis/anthropic.js";
 import { contentScope, resetReadingRecovery } from "../../shared/articleContent.js";
 
 const jobs = new Map<number, Promise<unknown>>();
+export const DEEPSEEK_READING_PACKET_BYTES = 384 * 1024;
+const FLASH_CONTEXT_MODELS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]);
+
+/** Deliberately scoped to documented 1M-context Flash consumers, not generic compatible endpoints. */
+export function articleReadingPacketBudget(cfg: AnalysisConfig): ReadingPacketBudget {
+  const conservative = { maxChars: READING_CHUNK_CHARS };
+  try {
+    if (!process.env.LLM_API_KEY || new URL(process.env.LLM_BASE_URL ?? "").hostname !== "api.deepseek.com") return conservative;
+    const extra: unknown = JSON.parse(process.env.LLM_EXTRA_BODY || "{}");
+    if (!extra || typeof extra !== "object" || Array.isArray(extra)) return conservative;
+    const override = (extra as { model?: unknown }).model;
+    if (override !== undefined && typeof override !== "string") return conservative;
+    const filter = cfg.filterModel || FILTER_MODEL();
+    // The final model is also the optional per-article deep-analysis model.
+    const consumers = [filter, cfg.digestMapModel || filter, cfg.analysisModel || ANALYSIS_MODEL()];
+    if (!consumers.every(model => FLASH_CONTEXT_MODELS.has(typeof override === "string" ? override : resolveModel(model)))) return conservative;
+    // A UTF-8 byte bound is conservative relative to the documented 1M token
+    // window and leaves room for caller instructions and final thinking/output.
+    return { maxBytes: DEEPSEEK_READING_PACKET_BYTES };
+  } catch { return conservative; }
+}
 class ContentChangedError extends Error {}
 /** Collection, filter and digest must share the same extraction/checkpoint lock. */
 async function withArticleContent<T>(id: number, run: () => Promise<T>): Promise<T> {
@@ -86,7 +107,7 @@ export async function prepareStoredArticle(id: number, cfg: AnalysisConfig, refr
     const reading = await readWholeArticle({ body: article.body ?? "", meta: article.contentMeta,
       articleId: id,
       model: cfg.digestMapModel || cfg.filterModel || FILTER_MODEL(), thinking: cfg.digestMapThinking ?? "disabled",
-      instructions: cfg.summaryInstructions, cache: article.readingCache,
+      instructions: cfg.summaryInstructions, cache: article.readingCache, packetBudget: articleReadingPacketBudget(cfg),
       checkpoint: async readingCache => {
         const result = await db.update(articles).set({ readingCache }).where(contentSnapshot(preparedArticle));
         if (!result[0].affectedRows) throw Error("원문이 변경되었거나 휴지통으로 이동해 전체 읽기를 중단했습니다.");

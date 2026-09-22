@@ -21,6 +21,8 @@ export interface ReadingCache {
   key: string;
   chunks: Record<string, string>;
   text?: string;
+  /** Last complete packet retained only while adapting to a stricter consumer budget. */
+  previousCompletedText?: string;
   inputChars: number;
   chunkCount: number;
   completedAt?: string;
@@ -35,7 +37,7 @@ export interface ReadingCache {
     /** Monotonically smaller request bound learned from this article's truncated inputs. */
     inputCharLimit?: number;
     calls: number;
-    held?: { reason: "output_limit" | "recovery_budget" | "not_compressed" | "too_many_levels"; at: string };
+    held?: { reason: "output_limit" | "recovery_budget" | "not_compressed" | "too_many_levels" | "packet_too_large"; at: string };
   };
 }
 

@@ -3,6 +3,7 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, llmUsage, sources } from "../db/schema.js";
 import { contentScope } from "../../shared/articleContent.js";
 import { readingDiagnostics, type ArticleAnalysisDiagnostics, type ArticleAnalysisDiagnosticsResponse } from "../../shared/analysisDiagnostics.js";
+import { readCachedSourceNotes } from "../analysis/fullReading.js";
 
 /** SELECT-only projections: no collection, cache reset, analysis or provider call. */
 export function articleDiagnosticQueries(store: Pick<typeof db, "select">, articleId: number) {
@@ -28,6 +29,7 @@ type AttemptRow = Awaited<DiagnosticQueries["attempts"]>[number];
 /** Deliberately enumerate public fields rather than exposing whole DB rows/caches. */
 export function articleDiagnosticsFromRows(row: ArticleRow, attempts: AttemptRow[]): ArticleAnalysisDiagnostics {
   const meta = row.contentMeta;
+  const sourceNotes = row.readingCache ? readCachedSourceNotes(row.body ?? "", row.readingCache) : null;
   return {
     id: row.id, title: row.title, url: row.url, provider: row.provider,
     body: row.body ?? "", bodyChars: (row.body ?? "").length, sourceBodyChars: row.sourceBody?.length ?? null,
@@ -36,6 +38,8 @@ export function articleDiagnosticsFromRows(row: ArticleRow, attempts: AttemptRow
       extractedLinks: meta?.links.filter(link => link.status === "extracted").length ?? 0,
       unavailableLinks: meta?.links.filter(link => link.status === "unavailable").length ?? 0 },
     analysis: { completed: row.analysisId !== null, analyzedAt: row.analyzedAt?.toISOString() ?? null },
+    sourceReading: row.readingCache ? { completed: sourceNotes !== null, chars: sourceNotes?.length ?? null,
+      bytes: sourceNotes === null ? null : Buffer.byteLength(sourceNotes, "utf8") } : null,
     reading: readingDiagnostics(row.readingCache),
     attempts: attempts.slice(0, 30).map(attempt => ({
       startedAt: attempt.startedAt.toISOString(), stage: attempt.stage, model: attempt.model, thinking: attempt.thinking,

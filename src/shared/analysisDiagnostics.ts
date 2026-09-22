@@ -23,6 +23,7 @@ export interface ArticleAnalysisDiagnostics {
     checkedAt: string | null; pending: boolean; extractedLinks: number; unavailableLinks: number;
   };
   analysis: { completed: boolean; analyzedAt: string | null };
+  sourceReading: { completed: boolean; chars: number | null; bytes: number | null } | null;
   reading: ArticleReadingDiagnostics | null;
   attempts: ArticleUsageAttempt[];
 }
