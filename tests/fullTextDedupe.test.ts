@@ -70,7 +70,7 @@ test("tracking variants fetch and append one article while preserving all source
 
 test("redirect aliases and whitespace-only mirrored articles keep one body and their distinct titles/addresses", async () => {
   const canonical = "https://example.com/article";
-  const links = ["https://short.example/first", canonical, "https://short.example/second", "https://mirror.example/copy"];
+  const links = ["https://short.example/first", canonical, "https://mirror.example/copy"];
   const calls: string[] = [];
   const result = await enrichArticle({ externalId: "post", body: "게시자 본문", linkedUrls: links }, source("x"), async url => {
     calls.push(url);
@@ -78,7 +78,7 @@ test("redirect aliases and whitespace-only mirrored articles keep one body and t
     const title = mirrored ? "미러 원문 제목" : "원문 제목";
     return { html: page(`<h1>${title}</h1>${sentences.map(s => `<p>${s}</p>`).join(mirrored ? "\n" : "")}`, title), url: mirrored ? url : canonical };
   });
-  assert.deepEqual(calls, [links[0], links[2], links[3]], "an observed redirect target can reuse the first fetch");
+  assert.deepEqual(calls, [links[0], links[2]], "an observed redirect target can reuse the first fetch");
   assert.equal(result.body!.split("문단 179:").length - 1, 1);
   assert.match(result.body!, /미러 원문 제목/);
   assert.ok(result.body!.includes(`원문 주소: ${canonical}`));

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test, { after, afterEach } from "node:test";
 import { MySqlDialect } from "drizzle-orm/mysql-core";
 import type { SQL } from "drizzle-orm";
-import { articles, type Article, type AnalysisConfig, type Source } from "../src/server/db/schema.js";
+import { analyses, articles, type Article, type AnalysisConfig, type Source } from "../src/server/db/schema.js";
 
 // Use the real repository/collector/reader with an in-memory Drizzle boundary.
 // Neither the placeholder MySQL connection nor a paid model is contacted.
@@ -15,7 +15,8 @@ delete process.env.LLM_EXTRA_BODY;
 const { db, pool } = await import("../src/server/db/client.js");
 const { collectSource } = await import("../src/server/workers/collect.js");
 const { getAdapter } = await import("../src/server/adapters/registry.js");
-const { prepareStoredArticle } = await import("../src/server/repo/articleContent.js");
+const { enrichStoredArticle, prepareStoredArticle } = await import("../src/server/repo/articleContent.js");
+const { readWholeArticle } = await import("../src/server/analysis/fullReading.js");
 const adapter = getAdapter("telegram")!;
 const originals = { select: db.select, insert: db.insert, update: db.update, fetch: globalThis.fetch, adapterFetch: adapter.fetch };
 afterEach(() => { db.select = originals.select; db.insert = originals.insert; db.update = originals.update; adapter.fetch = originals.adapterFetch; globalThis.fetch = originals.fetch; });
@@ -33,6 +34,7 @@ function deferred() {
 
 function fixture() {
   let article: Article | null = null;
+  let analysed = false;
   let calls = 0;
   let beforeWrite: ((patch: Partial<Article>) => Promise<void>) | undefined;
   let beforeSelect: ((joined: boolean) => Promise<void>) | undefined;
@@ -59,10 +61,12 @@ function fixture() {
   };
   db.select = ((shape?: Record<string, unknown>) => {
     let joined = false;
+    let selectedTable: unknown;
     const builder = {
-      from: () => builder,
+      from: (table: unknown) => { selectedTable = table; return builder; },
       innerJoin: () => { joined = true; return builder; },
       where: (where: SQL) => ({ limit: async () => {
+        if (selectedTable === analyses) return analysed ? [{ id: 91 }] : [];
         await beforeSelect?.(joined);
         if (!matches(where)) return [];
         return joined ? [{ article: structuredClone(article), source }] : [Object.fromEntries(Object.keys(shape ?? {}).map(key => [key, article![key as keyof Article]]))];
@@ -91,6 +95,7 @@ function fixture() {
   };
   return {
     get article() { return article!; }, get calls() { return calls; }, patches,
+    set analysed(value: boolean) { analysed = value; },
     set beforeWrite(value: typeof beforeWrite) { beforeWrite = value; },
     set beforeSelect(value: typeof beforeSelect) { beforeSelect = value; },
     set invoke(value: typeof invoke) { invoke = value; },
@@ -238,4 +243,112 @@ test("explicit refresh releases a reading hold while preserving completed chunks
   assert.deepEqual(state.article.readingCache?.recovery?.splits, { first: true });
   assert.equal(state.article.readingCache?.recovery?.calls, 0);
   assert.equal(state.article.readingCache?.recovery?.held, undefined);
+});
+
+const referenceUrls = Array.from({ length: 4 }, (_, i) => `https://example.com/reference-${i + 1}`);
+const providerPost = `작성자의 원래 주장과 조건은 그대로 보존합니다.\n${referenceUrls.join("\n")}`;
+
+async function historicalExpandedPost() {
+  const state = fixture();
+  adapter.fetch = async () => [{ externalId: "race", body: providerPost, linkedUrls: referenceUrls }];
+  await collectSource(source);
+  state.article.body = `${providerPost}\n\n[연결 원문 — 게시글 작성자의 말과 구분]\n${body}`;
+  state.article.contentMeta = { version: 1, status: "post", method: "post", checkedAt: "2026-09-21T00:00:00.000Z",
+    links: referenceUrls.map(url => ({ url, status: "extracted" })), sourceUrls: referenceUrls };
+  state.article.readingCache = { version: 1, key: "historical-expanded-input", inputChars: state.article.body.length,
+    chunkCount: 2, chunks: { old: "과거 연결 자료의 완료 요약" } };
+  state.patches.splice(0);
+  return state;
+}
+
+test("pending historical posts with four references lazily use only the saved provider body", async () => {
+  const state = await historicalExpandedPost();
+  const prepared = await prepareStoredArticle(1, cfg);
+  assert.equal(state.calls, 0, "the short original needs no paid whole-reading calls");
+  assert.equal(state.article.body, providerPost);
+  assert.equal(state.article.sourceBody, providerPost);
+  assert.equal(state.article.contentMeta?.linkExpansion?.skipped, true);
+  assert.ok(prepared.text.includes(providerPost));
+  assert.ok(!prepared.text.includes("과거 연결 자료의 완료 요약"));
+  assert.equal(state.article.readingCache?.chunks.old, undefined, "expanded-body checkpoints cannot be used for different input");
+  assert.ok(state.patches.some(patch => patch.readingCache === null));
+  const cache = structuredClone(state.article.readingCache);
+  const checkedAt = state.article.contentMeta?.checkedAt;
+  await prepareStoredArticle(1, cfg);
+  assert.equal(state.calls, 0);
+  assert.deepEqual(state.article.readingCache, cache);
+  assert.equal(state.article.contentMeta?.checkedAt, checkedAt);
+  assert.equal(state.patches.filter(patch => "body" in patch).length, 1);
+});
+
+test("completed historical analyses retain their expanded body and completed reading", async () => {
+  const state = await historicalExpandedPost();
+  state.analysed = true;
+  const originalBody = state.article.body;
+  const originalMeta = structuredClone(state.article.contentMeta);
+  await prepareStoredArticle(1, cfg);
+  const calls = state.calls;
+  const cache = structuredClone(state.article.readingCache);
+  assert.ok(calls > 0, "build a real reading of the historical expanded input");
+  assert.ok(cache?.completedAt);
+  await enrichStoredArticle(1);
+  await prepareStoredArticle(1, cfg);
+  assert.equal(state.calls, calls);
+  assert.equal(state.article.body, originalBody);
+  assert.deepEqual(state.article.contentMeta, originalMeta);
+  assert.deepEqual(state.article.readingCache, cache);
+  assert.ok(state.patches.every(patch => !("body" in patch)));
+});
+
+test("new reference-limited posts reuse their source-only reading on repeated preparation", async () => {
+  const state = fixture();
+  adapter.fetch = async () => [{ externalId: "race", body: providerPost, linkedUrls: referenceUrls }];
+  await collectSource(source);
+  await prepareStoredArticle(1, cfg);
+  const cache = structuredClone(state.article.readingCache);
+  const meta = structuredClone(state.article.contentMeta);
+  const patchesBefore = state.patches.length;
+  await enrichStoredArticle(1);
+  await prepareStoredArticle(1, cfg);
+  assert.equal(state.calls, 0);
+  assert.equal(state.article.body, providerPost);
+  assert.deepEqual(state.article.contentMeta, meta);
+  assert.deepEqual(state.article.readingCache, cache);
+  assert.ok(state.patches.slice(patchesBefore).every(patch => !("body" in patch) && patch.readingCache !== null));
+});
+
+test("historical posts without a saved provider body are never stripped by inference", async () => {
+  const state = await historicalExpandedPost();
+  state.article.sourceBody = null;
+  const snapshot = structuredClone(state.article);
+  await enrichStoredArticle(1);
+  assert.equal(state.calls, 0);
+  assert.deepEqual(state.article, snapshot);
+  assert.equal(state.patches.length, 0);
+});
+
+test("historical source-only posts keep completed readings when all linked pages were unavailable", async () => {
+  const state = fixture();
+  const original = `${body}\n${referenceUrls.join("\n")}`;
+  adapter.fetch = async () => [{ externalId: "race", body: original, linkedUrls: referenceUrls }];
+  await collectSource(source);
+  state.article.contentMeta = { version: 1, status: "partial", method: "post", checkedAt: "2026-09-21T00:00:00.000Z",
+    links: referenceUrls.map(url => ({ url, status: "unavailable", reason: "원문 HTTP 403" })), sourceUrls: referenceUrls };
+  // Seed a real historical reading before running today's repository policy.
+  state.article.readingCache = await readWholeArticle({ body: original, meta: state.article.contentMeta,
+    model: cfg.filterModel!, thinking: "disabled", instructions: cfg.summaryInstructions });
+  const calls = state.calls;
+  const cache = structuredClone(state.article.readingCache);
+  const meta = structuredClone(state.article.contentMeta);
+  assert.ok(calls > 0, "build a real completed reading using the historical scope");
+  assert.ok(cache?.completedAt);
+  state.patches.splice(0);
+  await enrichStoredArticle(1);
+  await prepareStoredArticle(1, cfg);
+  assert.equal(state.calls, calls, "a policy-label change must not repeat completed paid reading");
+  assert.equal(state.article.body, original);
+  assert.equal(state.article.sourceBody, original);
+  assert.deepEqual(state.article.contentMeta, meta);
+  assert.deepEqual(state.article.readingCache, cache);
+  assert.ok(state.patches.every(patch => !("body" in patch) && patch.readingCache !== null));
 });

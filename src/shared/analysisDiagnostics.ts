@@ -20,7 +20,7 @@ export interface ArticleAnalysisDiagnostics {
   body: string; bodyChars: number; sourceBodyChars: number | null;
   content: {
     scope: string; status: ArticleContentMeta["status"] | null; method: ArticleContentMeta["method"] | null;
-    checkedAt: string | null; pending: boolean; extractedLinks: number; unavailableLinks: number;
+    checkedAt: string | null; pending: boolean; extractedLinks: number; unavailableLinks: number; skippedLinks: number;
   };
   analysis: { completed: boolean; analyzedAt: string | null };
   sourceReading: { completed: boolean; chars: number | null; bytes: number | null } | null;

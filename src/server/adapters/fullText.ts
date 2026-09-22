@@ -98,7 +98,10 @@ export function extractArticle(html: string, url: string, selector?: string): { 
 
 export function outboundLinks(body: string, supplied: string[] = []): string[] {
   const anchors = /<a\b/i.test(body) ? [...parseHTML(body).document.querySelectorAll("a[href]")].map(a => a.getAttribute("href") ?? "") : [];
-  return [...new Set([...supplied, ...anchors, ...(body.match(/https?:\/\/[^\s<>"']+/g) ?? [])].map(s => s.replace(/[),.;\]}>]+$/, "")))].filter(raw => {
+  // Anchor hrefs are already decoded. Scanning raw HTML again would count an
+  // &amp;-escaped copy as another reference alongside the same decoded URL.
+  const text = anchors.length ? htmlToText(body) : body;
+  return [...new Set([...supplied, ...anchors, ...(text.match(/https?:\/\/[^\s<>"']+/g) ?? [])].map(s => s.replace(/[),.;\]}>]+$/, "")))].filter(raw => {
     try { return ["http:", "https:"].includes(new URL(raw).protocol); } catch { return false; }
   });
 }
@@ -160,6 +163,25 @@ function articleUrlKey(raw: string): string {
   return url.href;
 }
 
+export const MAX_POST_REFERENCE_LINKS = 3;
+
+/** Count parent-post references before any page request, never links inside a fetched page. */
+function linkedArticleTargets(item: Pick<NormalizedArticle, "url" | "body" | "linkedUrls">) {
+  const ownKey = item.url ? articleUrlKey(item.url) : null;
+  const urls = outboundLinks(item.body ?? "", item.linkedUrls).filter(url => {
+    const host = new URL(url).hostname.toLowerCase();
+    return articleUrlKey(url) !== ownKey && !(host === "t.co" && item.linkedUrls?.length);
+  });
+  // Known tracking variants are one reference. Unknown redirect aliases cannot
+  // be resolved here: exceeding the limit must make zero page requests.
+  return { urls, linkCount: new Set(urls.map(articleUrlKey)).size };
+}
+
+export function skipLinkedArticleExpansion(item: Pick<NormalizedArticle, "url" | "body" | "linkedUrls">, source: Pick<Source, "provider">): boolean {
+  return (source.provider === "x" || source.provider === "telegram") &&
+    linkedArticleTargets(item).linkCount > MAX_POST_REFERENCE_LINKS;
+}
+
 export async function enrichArticle(item: NormalizedArticle, source: Source, fetchPage = fetchArticlePage): Promise<NormalizedArticle> {
   const original = htmlToText(item.body ?? "");
   const social = source.provider === "x" || source.provider === "telegram";
@@ -192,12 +214,16 @@ export async function enrichArticle(item: NormalizedArticle, source: Source, fet
     } catch (err) { meta.status = "partial"; meta.reason = err instanceof Error ? err.message : "원문 수집 실패"; }
   } else if (!social) { meta.reason = "원문 주소 없음"; }
   if (social) {
+    const { urls, linkCount } = linkedArticleTargets(item);
+    const skipped = linkCount > MAX_POST_REFERENCE_LINKS;
+    meta.linkExpansion = { maxLinks: MAX_POST_REFERENCE_LINKS, linkCount, skipped };
+    if (skipped) {
+      meta.reason = `참고 링크 ${linkCount}개로 연결 자료 수집 생략 (${MAX_POST_REFERENCE_LINKS}개 이하만 수집)`;
+      meta.links = urls.map(url => ({ url, status: "skipped" }));
+      return { ...item, body, contentMeta: meta };
+    }
     const pages = new Map<string, Awaited<ReturnType<typeof read>>>();
     const bodies = new Set<string>();
-    const urls = outboundLinks(item.body ?? "", item.linkedUrls).filter(url => {
-      const host = new URL(url).hostname.toLowerCase();
-      return url !== item.url && !(host === "t.co" && item.linkedUrls?.length);
-    });
     for (const url of urls) {
       const link: ContentLink = { url, status: "unavailable" };
       try {

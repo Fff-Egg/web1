@@ -60,7 +60,7 @@ test("article DTO retains the complete body but only source length and safe proj
   const body = "원문 시작\n" + "자료 🚀".repeat(9000) + "\n끝의 별도 결론";
   const row = { id: 83479, title: "제목", url: "https://example.test/article", provider: "telegram" as const,
     body, sourceBody: "SOURCE_TEXT_ONLY_LENGTH", contentMeta: { version: 1 as const, status: "partial" as const, method: "post" as const,
-      checkedAt: "2026-09-22T00:00:00Z", links: [{ url: "x", status: "extracted" as const }, { url: "y", status: "unavailable" as const }] },
+      checkedAt: "2026-09-22T00:00:00Z", links: [{ url: "x", status: "extracted" as const }, { url: "y", status: "unavailable" as const }, { url: "z", status: "skipped" as const }] },
     readingCache: null, analysisId: null, analyzedAt: null, apiKey: "PRIVATE_KEY", prompt: "PRIVATE_PROMPT" };
   const attempt = { startedAt: new Date("2026-09-22T04:29:00Z"), stage: "whole_reading" as const, model: "deepseek-flash", thinking: "disabled" as const,
     success: false, durationMs: 90_000, httpStatus: 200, finishReason: "length", errorCategory: null, errorParam: null,
@@ -72,6 +72,7 @@ test("article DTO retains the complete body but only source length and safe proj
     assert.equal(view.body, body); assert.equal(view.bodyChars, body.length);
     assert.equal(view.sourceBodyChars, row.sourceBody.length);
     assert.equal(view.content.extractedLinks, 1); assert.equal(view.content.unavailableLinks, 1);
+    assert.equal(view.content.skippedLinks, 1);
     assert.deepEqual(view.analysis, { completed: false, analyzedAt: null });
     assert.equal(view.sourceReading, null);
     assert.equal(view.attempts.length, 30); assert.equal(view.attempts[0].outputTokens, 3200);

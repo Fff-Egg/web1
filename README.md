@@ -2,6 +2,8 @@
 
 Multi-source feed collection → LLM investment analysis → twice-daily digest, viewable on a web dashboard. Sources are managed entirely from the UI.
 
+X/Telegram reference collection: posts with **more than 3 distinct reference URLs** keep their complete original text but skip all linked-page expansion. Posts with up to 3 references retain normal collection. See [collection and reading rules](docs/FULL_ARTICLE_READING.md).
+
 > Built green-field in this repo. The original static HTML tutorial pages are preserved under [`legacy/`](./legacy).
 
 ## Stack

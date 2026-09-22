@@ -31,7 +31,7 @@ export function ArticleAnalysisDiagnostics({ articleId }: { articleId: number })
         <p>선별 분석: {a.analysis.completed ? `완료${a.analysis.analyzedAt ? ` · ${time(a.analysis.analyzedAt)}` : ""}` : "미완료"}</p>
         <p>저장 본문 {count(a.bodyChars)}자 · 최초 수집 본문 {a.sourceBodyChars === null ? "별도 저장 없음" : `${count(a.sourceBodyChars)}자`}</p>
         <p>수집 범위: {a.content.scope}{a.content.pending ? " · 수집 처리 대기" : ""}</p>
-        <p className="text-xs text-slate-500">연결 원문 추출 {a.content.extractedLinks}건 / 미수집 {a.content.unavailableLinks}건{a.content.checkedAt ? ` · 확인 ${time(a.content.checkedAt)}` : ""}</p>
+        <p className="text-xs text-slate-500">연결 원문 추출 {a.content.extractedLinks}건 / 미수집 {a.content.unavailableLinks}건{a.content.skippedLinks ? ` / 링크 수 기준으로 생략 ${a.content.skippedLinks}건` : ""}{a.content.checkedAt ? ` · 확인 ${time(a.content.checkedAt)}` : ""}</p>
       </div>
       {r ? <div className="space-y-1">
         <p>전체 읽기: {r.completedAt ? `완료 · ${time(r.completedAt)}` : "미완료"} · 입력 {count(r.inputChars)}자 / 기본 구간 {count(r.chunkCount)}개</p>

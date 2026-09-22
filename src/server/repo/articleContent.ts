@@ -1,7 +1,7 @@
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
-import { articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
-import { enrichArticle } from "../adapters/fullText.js";
+import { analyses, articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
+import { enrichArticle, htmlToText, skipLinkedArticleExpansion } from "../adapters/fullText.js";
 import { readWholeArticle, READING_CHUNK_CHARS, type ReadingPacketBudget } from "../analysis/fullReading.js";
 import { ANALYSIS_MODEL, FILTER_MODEL, resolveModel } from "../analysis/anthropic.js";
 import { contentScope, resetReadingRecovery } from "../../shared/articleContent.js";
@@ -57,7 +57,19 @@ async function enrichCurrentArticle(id: number, refresh = false): Promise<Articl
   if (!row) return null;
   const article = row.article;
   // Analysis may have finished enriching/reading while this collection waited.
-  if (article.contentMeta && !article.contentMeta.pending && !refresh) return article;
+  if (article.contentMeta && !article.contentMeta.pending && !refresh) {
+    // Apply the reference-count policy lazily to unfinished historical posts.
+    // The saved provider body is the only safe way to remove earlier additions;
+    // never infer it from an already expanded body or rewrite completed analyses.
+    // Already source-only inputs keep their old scope label too: changing only
+    // that label would invalidate otherwise reusable paid reading checkpoints.
+    if (article.sourceBody === null || article.body === htmlToText(article.sourceBody) || article.contentMeta.linkExpansion?.skipped ||
+      !skipLinkedArticleExpansion({ ...article, body: article.sourceBody,
+        linkedUrls: article.contentMeta.sourceUrls }, row.source)) return article;
+    const [completed] = await db.select({ id: analyses.id }).from(analyses)
+      .where(eq(analyses.articleId, id)).limit(1);
+    if (completed) return article;
+  }
   const sourceBody = article.sourceBody ?? article.body;
   const enriched = await enrichArticle({ ...article, body: sourceBody, contentMeta: article.contentMeta ?? undefined,
     linkedUrls: article.contentMeta?.sourceUrls, externalId: article.externalId }, row.source);

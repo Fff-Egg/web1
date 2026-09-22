@@ -1,6 +1,6 @@
 export interface ContentLink {
   url: string;
-  status: "extracted" | "unavailable";
+  status: "extracted" | "unavailable" | "skipped";
   title?: string;
   reason?: string;
 }
@@ -14,6 +14,8 @@ export interface ArticleContentMeta {
   links: ContentLink[];
   sourceUrls?: string[];
   pending?: boolean;
+  /** Intentional collection policy, not an extraction failure. */
+  linkExpansion?: { maxLinks: number; linkCount: number; skipped: boolean };
 }
 
 export interface ReadingCache {
