@@ -1,6 +1,7 @@
 import { LlmDiagnosticsPanel } from "../components/LlmDiagnosticsPanel.js";
 import { BoundaryRunPanel } from "../components/BoundaryRunPanel.js";
 import { ManualDigestRunPanel } from "../components/ManualDigestRunPanel.js";
+import { DigestCopyButton } from "../components/DigestCopyButton.js";
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -812,6 +813,7 @@ export function DigestPage() {
       {digest.error && <p className="text-red-600">{(digest.error as Error).message}</p>}
 
       {digest.data && <ModelBadge meta={digest.data.meta} />}
+      {digest.data && <DigestCopyButton key={digest.data.id} html={html} />}
       {digest.data && (
         <article
           ref={articleRef}
