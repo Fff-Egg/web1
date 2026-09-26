@@ -5,15 +5,12 @@ import express from "express";
 import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { appRouter } from "./trpc/routers/index.js";
 import type { Context } from "./trpc/trpc.js";
-import { createBasicAuthMiddleware } from "./auth/basicAuth.js";
 // Import adapters for their registration side-effects.
 import "./adapters/index.js";
 import { startSchedulers } from "./scheduler.js";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:5173";
-const APP_USERNAME = process.env.APP_USERNAME ?? "admin";
-const APP_PASSWORD = process.env.APP_PASSWORD;
 
 const app = express();
 
@@ -34,15 +31,8 @@ app.get("/api/health", (_req, res) =>
   }),
 );
 
-// Keep the liveness endpoint public for Railway, but protect every user-facing
-// page and mutation when APP_PASSWORD is configured. Browser-native Basic Auth
-// avoids ever shipping the password in the React bundle.
-if (APP_PASSWORD) {
-  app.use(createBasicAuthMiddleware({ username: APP_USERNAME, password: APP_PASSWORD }));
-  console.log(`[server] access protection enabled for user "${APP_USERNAME}"`);
-} else {
-  console.warn("[security] APP_PASSWORD is not set — dashboard and tRPC API are publicly accessible.");
-}
+// Public access is intentional: the dashboard and tRPC API require no login.
+// Legacy APP_USERNAME / APP_PASSWORD variables are no longer used.
 
 app.use(
   "/trpc",

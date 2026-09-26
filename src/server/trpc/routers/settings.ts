@@ -58,7 +58,6 @@ export const settingsRouter = router({
     .query(({ input }) => getArticleAnalysisDiagnostics(input.articleId)),
   resetAnalysisRetry: publicProcedure.input(z.object({ articleId: z.number().int().positive().optional() }))
     .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
-  // Like every settings mutation, protected by the app's Basic Auth middleware.
   runArticleAnalysis: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
     .mutation(({ input }) => runArticleAnalysis(input.articleId)),
   getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),

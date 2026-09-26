@@ -27,8 +27,6 @@
 | 변수 | 값 |
 |---|---|
 | `DATABASE_URL` | `${{ MySQL.MYSQL_URL }}` (Railway 변수 참조 — MySQL 서비스 이름이 다르면 맞게) |
-| `APP_USERNAME` | 원하는 로그인 아이디 (생략 시 `admin`) |
-| `APP_PASSWORD` | **필수 권장:** 길고 고유한 사이트 접속 암호 |
 | `ANTHROPIC_API_KEY` | Claude 사용 시 `sk-ant-...` |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | DeepSeek 등 OpenAI 호환 API 사용 시 세 변수를 함께 설정 |
 | `FILTER_MODEL` | 글 선별·다이제스트 자료 정리 모델 (예: `deepseek-v4-flash`) |
@@ -44,7 +42,8 @@
 > 웹 **설정 → 고급**에 모델을 직접 쓰면 Railway의 `FILTER_MODEL` / `ANALYSIS_MODEL`보다 우선합니다.
 > OpenAI 호환 API에서 `FILTER_MODEL=claude-*` 같은 옛 값을 두면 실제로는 `LLM_MODEL`로 치환되므로,
 > 혼동을 피하려면 실제 모델 id(예: `deepseek-v4-flash`)로 바꾸세요.
-> `APP_PASSWORD`를 설정하지 않으면 서버 로그에 공개 접근 경고가 출력됩니다.
+> 사이트와 tRPC API는 로그인 없이 공개됩니다. 주소를 아는 사람은 조회·설정 변경·삭제·분석 실행이 가능합니다.
+> 기존 `APP_USERNAME` / `APP_PASSWORD`는 더 이상 사용하지 않으므로 Railway에 남아 있어도 로그인창이 뜨지 않습니다.
 
 ## 4. 배포
 - 환경변수를 저장하면 Railway가 자동으로 **빌드 → 마이그레이션 → 서버 시작**을 합니다.

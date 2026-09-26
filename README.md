@@ -111,9 +111,10 @@ Sessions expire → the source is flagged "로그인 필요" (no silent re-login
 > site's terms; use for your own subscribed accounts only.
 
 ## Security
-- Set `APP_PASSWORD` on every public Railway deployment. `APP_USERNAME` defaults
-  to `admin`; the browser will show its native login dialog. `/api/health` stays
-  public for Railway health checks, while the dashboard and tRPC API are protected.
+- The dashboard and tRPC API are public, as requested by the owner. Anyone with
+  the URL can read content, change settings, delete items, and trigger analysis.
+  No login is required; legacy `APP_USERNAME` / `APP_PASSWORD` variables are ignored.
+  `/api/health` remains available for Railway health checks.
 - **Passwords are never stored** — not in the DB, env, or repo. Only login
   sessions (cookies) are saved locally.
 - `.env` and `sessions/` are git-ignored and must never be committed.

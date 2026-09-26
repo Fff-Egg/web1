@@ -7,7 +7,7 @@
 
 ## Safety
 - Never commit `.env`, API keys, X/Telegram credentials, or anything under `sessions/`.
-- Keep `/api/health` public, but do not bypass the `APP_PASSWORD` protection on user pages or tRPC routes.
+- The owner requested public access on 2026-09-26: dashboard, tRPC routes, and `/api/health` require no login. Legacy `APP_USERNAME` / `APP_PASSWORD` variables are ignored.
 - The K-Fear and US-entry constants are backed by small-sample parity/anchor checks. Do not tune them without an explicit backtest request and updated tests/docs.
 - External collectors are intentionally tolerant: one source failing must not discard successful sources.
 
