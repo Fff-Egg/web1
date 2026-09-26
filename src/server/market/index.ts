@@ -1,0 +1,292 @@
+import { eq } from "drizzle-orm";
+import { db, hasDb } from "../db/client.js";
+import { settings } from "../db/schema.js";
+import type { MarketSnapshot, MarketHistory, OHLC, Timeframe } from "../../shared/market.js";
+import { fetchFearGreed } from "./cnn.js";
+import { fetchBreadth, fetchSymbol, fetchCandles } from "./tradingview.js";
+import { fetchAdr, fetchAdrHistory } from "./adr.js";
+import { fetchCreditSnapshot } from "./credit.js";
+import { fetchLiquidity } from "./liquidity.js";
+import { fetchKoreaIndexes } from "./koreaIndexes.js";
+import { fetchForcedLiqRatio } from "./forcedLiq.js";
+import { fetchUsEntry } from "./usEntry.js";
+import { checkAnchors } from "./anchors.js";
+
+const SNAPSHOT_KEY = "marketSnapshot";
+const CUSTOM_SYMBOL_KEY = "marketCustomSymbol";
+const DEFAULT_CUSTOM_SYMBOL = "CBOE:VIX";
+
+const EMPTY_HISTORY: MarketHistory = {
+  fearGreed: [],
+  custom: [],
+  s5fi: [],
+  ndfi: [],
+  kospiAdr: [],
+  kosdaqAdr: [],
+  creditKospi: [],
+  creditKosdaq: [],
+  netLiquidity: [],
+  reserves: [],
+  tga: [],
+  rrp: [],
+  kospiClose: [],
+  kosdaqClose: [],
+  vkospi: [],
+  forcedLiqRatio: [],
+  forcedLiqAmount: [],
+  vix: [],
+  vix3m: [],
+  hyOas: [],
+  ixic: [],
+  vvix: [],
+};
+
+/** The TradingView symbol chosen for the configurable slot (default CBOE:VIX). */
+export async function getCustomSymbol(): Promise<string> {
+  if (!hasDb) return DEFAULT_CUSTOM_SYMBOL;
+  const rows = await db.select().from(settings).where(eq(settings.key, CUSTOM_SYMBOL_KEY)).limit(1);
+  const sym = (rows[0]?.value as { symbol?: string } | undefined)?.symbol;
+  return sym && sym.trim() ? sym.trim() : DEFAULT_CUSTOM_SYMBOL;
+}
+
+async function setCustomSymbolValue(symbol: string): Promise<void> {
+  if (!hasDb) return;
+  const value = { symbol } as Record<string, unknown>;
+  await db
+    .insert(settings)
+    .values({ key: CUSTOM_SYMBOL_KEY, value })
+    .onDuplicateKeyUpdate({ set: { value } });
+}
+
+/**
+ * Collect a fresh snapshot from all sources in parallel. Each source is
+ * independent and tolerant: a failure records a Korean note in `errors` and
+ * leaves that section null/empty, so a single dead source never blocks the
+ * others. Each source returns both the current value and ~1 year of daily
+ * history (for the charts).
+ */
+export async function fetchMarketSnapshot(): Promise<MarketSnapshot> {
+  const errors: string[] = [];
+  const history: MarketHistory = { ...EMPTY_HISTORY };
+  const customSymbol = await getCustomSymbol();
+
+  const [fg, breadth, custom, adr, adrHist, credit, liquidity, koreaIdx, forcedLiq, usEntry] = await Promise.all([
+    fetchFearGreed().catch((e: unknown) => {
+      errors.push(`Fear & Greed 수집 실패: ${msg(e)}`);
+      return null;
+    }),
+    fetchBreadth().catch((e: unknown) => {
+      errors.push(`S5FI/NDFI 수집 실패: ${msg(e)}`);
+      return null;
+    }),
+    fetchSymbol(customSymbol).catch((e: unknown) => {
+      errors.push(`${customSymbol} 수집 실패: ${msg(e)}`);
+      return null;
+    }),
+    fetchAdr().catch((e: unknown) => {
+      errors.push(`ADR(코스피/코스닥) 현재값 수집 실패: ${msg(e)}`);
+      return { kospi: null, kosdaq: null };
+    }),
+    fetchAdrHistory().catch((e: unknown) => {
+      errors.push(`ADR 히스토리 수집 실패: ${msg(e)}`);
+      return { kospi: [], kosdaq: [] };
+    }),
+    fetchCreditSnapshot().catch((e: unknown) => {
+      errors.push(`신용잔고(KOFIA) 수집 실패: ${msg(e)}`);
+      return { kospi: null, kosdaq: null, history: { kospi: [], kosdaq: [] } };
+    }),
+    fetchLiquidity().catch((e: unknown) => {
+      errors.push(`미국 순유동성(FRED) 수집 실패: ${msg(e)}`);
+      return { quote: null, history: { netLiquidity: [], reserves: [], tga: [], rrp: [] }, errors: [] };
+    }),
+    fetchKoreaIndexes().catch((e: unknown) => {
+      errors.push(`코스피/코스닥 종가 수집 실패: ${msg(e)}`);
+      return { kospiClose: [], kosdaqClose: [] };
+    }),
+    fetchForcedLiqRatio().catch((e: unknown) => {
+      errors.push(`반대매매 비중(KOFIA) 수집 실패: ${msg(e)}`);
+      return { ratio: [], amount: [] };
+    }),
+    fetchUsEntry().catch((e: unknown) => {
+      errors.push(`US 진입신호(VIX/VIX3M/HY) 수집 실패: ${msg(e)}`);
+      return { vix: [], vix3m: [], hyOas: [], ixic: [], vvix: [] };
+    }),
+  ]);
+  // Partial liquidity failures (e.g. RRP only) don't throw — surface them too.
+  for (const e of liquidity.errors) errors.push(`미국 순유동성 일부 시리즈 실패: ${e}`);
+
+  if (fg) history.fearGreed = fg.history;
+  if (breadth) {
+    history.s5fi = breadth.s5fi.history;
+    history.ndfi = breadth.ndfi.history;
+  }
+  if (custom) history.custom = custom.history;
+  history.kospiAdr = adrHist.kospi;
+  history.kosdaqAdr = adrHist.kosdaq;
+  history.creditKospi = credit.history.kospi;
+  history.creditKosdaq = credit.history.kosdaq;
+  history.netLiquidity = liquidity.history.netLiquidity;
+  history.reserves = liquidity.history.reserves;
+  history.tga = liquidity.history.tga;
+  history.rrp = liquidity.history.rrp;
+  history.kospiClose = koreaIdx.kospiClose;
+  history.kosdaqClose = koreaIdx.kosdaqClose;
+  history.vkospi = []; // legacy — FEAR's F4(실현변동성)가 대체
+  history.forcedLiqRatio = forcedLiq.ratio;
+  history.forcedLiqAmount = forcedLiq.amount;
+  history.vix = usEntry.vix;
+  history.vix3m = usEntry.vix3m;
+  history.hyOas = usEntry.hyOas;
+  history.ixic = usEntry.ixic;
+  history.vvix = usEntry.vvix;
+
+  const snapshot: MarketSnapshot = {
+    fetchedAt: new Date().toISOString(),
+    fearGreed: fg ? fg.current : null,
+    custom: { symbol: customSymbol, name: custom?.name ?? null, quote: custom?.quote ?? null },
+    breadth: {
+      s5fi: breadth ? breadth.s5fi.quote : null,
+      ndfi: breadth ? breadth.ndfi.quote : null,
+    },
+    adr,
+    credit: { kospi: credit.kospi, kosdaq: credit.kosdaq },
+    liquidity: liquidity.quote,
+    history,
+    errors,
+  };
+  // 데이터 정합성 앵커 대조 (신용 ×8·반대매매 컬럼·지수 종가·staleness). 불일치는
+  // errors로 노출돼 UI '일부 소스 수집 실패' 박스에 뜬다 — 조용히 틀린 값 방지.
+  const anchorWarns = checkAnchors(snapshot);
+  for (const w of anchorWarns) {
+    console.warn(`[anchors] ${w}`);
+    snapshot.errors.push(w);
+  }
+  return snapshot;
+}
+
+/** Read the last stored snapshot (null if none saved yet or no DB). */
+export async function getStoredSnapshot(): Promise<MarketSnapshot | null> {
+  if (!hasDb) return null;
+  const rows = await db.select().from(settings).where(eq(settings.key, SNAPSHOT_KEY)).limit(1);
+  if (rows.length === 0) return null;
+  const snap = rows[0].value as unknown as MarketSnapshot;
+  // Back-compat: snapshots stored before history/custom/credit existed.
+  if (!snap.history) snap.history = { ...EMPTY_HISTORY };
+  if (snap.history.custom === undefined) snap.history.custom = [];
+  if (snap.history.creditKospi === undefined) snap.history.creditKospi = [];
+  if (snap.history.creditKosdaq === undefined) snap.history.creditKosdaq = [];
+  if (snap.history.netLiquidity === undefined) snap.history.netLiquidity = [];
+  if (snap.history.reserves === undefined) snap.history.reserves = [];
+  if (snap.history.tga === undefined) snap.history.tga = [];
+  if (snap.history.rrp === undefined) snap.history.rrp = [];
+  if (snap.history.kospiClose === undefined) snap.history.kospiClose = [];
+  if (snap.history.kosdaqClose === undefined) snap.history.kosdaqClose = [];
+  if (snap.history.vkospi === undefined) snap.history.vkospi = [];
+  if (snap.history.forcedLiqRatio === undefined) snap.history.forcedLiqRatio = [];
+  if (snap.history.forcedLiqAmount === undefined) snap.history.forcedLiqAmount = [];
+  if (snap.history.vix === undefined) snap.history.vix = [];
+  if (snap.history.vix3m === undefined) snap.history.vix3m = [];
+  if (snap.history.hyOas === undefined) snap.history.hyOas = [];
+  if (snap.history.ixic === undefined) snap.history.ixic = [];
+  if (snap.history.vvix === undefined) snap.history.vvix = [];
+  if (!snap.credit) snap.credit = { kospi: null, kosdaq: null };
+  if (snap.liquidity === undefined) snap.liquidity = null;
+  return snap;
+}
+
+/** Persist a snapshot under the settings KV key. */
+export async function storeSnapshot(snap: MarketSnapshot): Promise<void> {
+  if (!hasDb) return;
+  const value = snap as unknown as Record<string, unknown>;
+  await db
+    .insert(settings)
+    .values({ key: SNAPSHOT_KEY, value })
+    .onDuplicateKeyUpdate({ set: { value } });
+}
+
+/**
+ * 이번 수집이 어떤 시리즈를 빈 값으로 받아오면(예: TradingView WS 일시 끊김) 그 시리즈만
+ * **직전 저장값으로 되돌린다** — 전면 재수집이 한 소스 실패로 화면을 통째 비우지 않게.
+ * 되돌린 데이터는 과거에 앵커를 통과한 값이라 신뢰 가능하고, 오래되면 asOf staleness
+ * 배지/경고가 뜬다. 되돌림이 있었으면 명시적 경고를 남긴다.
+ */
+function carryForwardEmpty(snap: MarketSnapshot, prev: MarketSnapshot): void {
+  const h = snap.history;
+  const ph = prev.history;
+  let carried = false;
+  for (const k of Object.keys(h) as (keyof MarketHistory)[]) {
+    if ((h[k]?.length ?? 0) === 0 && (ph[k]?.length ?? 0) > 0) {
+      h[k] = ph[k];
+      carried = true;
+    }
+  }
+  // 신용 quote는 히스토리와 세트로 유지(카드 숫자와 K-공포지수가 어긋나지 않게).
+  if (h.creditKospi === ph.creditKospi && !snap.credit.kospi && prev.credit.kospi) snap.credit.kospi = prev.credit.kospi;
+  if (h.creditKosdaq === ph.creditKosdaq && !snap.credit.kosdaq && prev.credit.kosdaq) snap.credit.kosdaq = prev.credit.kosdaq;
+  if (h.netLiquidity === ph.netLiquidity && !snap.liquidity && prev.liquidity) snap.liquidity = prev.liquidity;
+  if (carried) {
+    snap.errors.push("⚠️ 일부 소스 이번 수집 실패 — 직전 저장값 유지(데이터가 오래됐을 수 있음)");
+  }
+}
+
+/** Collect + persist, returning the new snapshot. */
+export async function refreshMarketSnapshot(): Promise<MarketSnapshot> {
+  const snap = await fetchMarketSnapshot();
+  const prev = await getStoredSnapshot().catch(() => null);
+  if (prev) carryForwardEmpty(snap, prev);
+  await storeSnapshot(snap);
+  return snap;
+}
+
+/**
+ * Change the configurable slot's symbol and re-collect JUST that symbol,
+ * merging it into the stored snapshot (so we don't re-hit CNN/ADR/breadth).
+ * Returns the updated snapshot.
+ */
+export async function setCustomSymbol(symbolInput: string): Promise<MarketSnapshot> {
+  const input = symbolInput.trim();
+  // The chart WS resolves bare tickers ("aapl" → "NASDAQ:AAPL"), so fetch with
+  // the raw input and persist whatever canonical symbol it resolved to.
+  const series = await fetchSymbol(input).catch(() => null);
+  const ok = series && (series.quote || series.history.length > 0);
+  const symbol = ok && series.resolved ? series.resolved : input.toUpperCase();
+  await setCustomSymbolValue(symbol);
+
+  const stored = (await getStoredSnapshot()) ?? (await refreshMarketSnapshot());
+  stored.custom = { symbol, name: series?.name ?? null, quote: series?.quote ?? null };
+  stored.history.custom = series?.history ?? [];
+  // Drop a previous custom-symbol error (keep unrelated source errors).
+  stored.errors = (stored.errors ?? []).filter((e) => !/찾지 못했습니다/.test(e));
+  if (!ok) {
+    stored.errors.push(`"${input}" 심볼을 찾지 못했습니다. 티커(예: AAPL) 또는 거래소:티커(예: NASDAQ:AAPL)로 입력하세요.`);
+  }
+  await storeSnapshot(stored);
+  return stored;
+}
+
+/** TradingView resolution + bar count for each timeframe button. */
+const TF_RES: Record<Timeframe, { res: string; count: number }> = {
+  "4h": { res: "240", count: 360 },
+  "1D": { res: "1D", count: 260 },
+  "1W": { res: "1W", count: 260 },
+  "1M": { res: "1M", count: 240 },
+  "1Y": { res: "12M", count: 40 },
+};
+
+export interface CandlesResponse {
+  symbol: string;
+  name: string | null;
+  timeframe: Timeframe;
+  candles: OHLC[];
+}
+
+/** Live OHLC candles for the custom slot's candlestick chart (not stored). */
+export async function getCandles(symbol: string, timeframe: Timeframe): Promise<CandlesResponse> {
+  const { res, count } = TF_RES[timeframe];
+  const r = await fetchCandles(symbol, res, count);
+  return { symbol: r.resolved ?? symbol.toUpperCase(), name: r.name, timeframe, candles: r.candles };
+}
+
+function msg(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
