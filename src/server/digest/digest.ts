@@ -3,7 +3,7 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
-import { mapStageEffort } from "../../shared/llmModels.js";
+import { mapStageEffort, readingStageEffort, readingStageModel, readingStageThinking } from "../../shared/llmModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
@@ -699,8 +699,8 @@ async function synthesizeFromDigests(
   for (const [i, d] of src.entries()) {
     await reportDigestProgress(`저장된 보고서 전체 읽기 ${i + 1}/${src.length} (보고서 #${d.id})`);
     const original = stripDigestHtml(d.markdown);
-    const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel, runId: trace.runId,
-      thinking: cfg.digestMapThinking ?? "disabled", effort: mapStageEffort(cfg), instructions: cfg.summaryInstructions }) : null;
+    const reading = hasLLM() ? await readWholeArticle({ body: original, model: readingStageModel(cfg, mapModel), runId: trace.runId,
+      thinking: readingStageThinking(cfg), effort: readingStageEffort(cfg), instructions: cfg.summaryInstructions }) : null;
     inputs.push(`### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n${reading?.text ?? original}`);
   }
   const body = inputs.join("\n\n---\n\n");

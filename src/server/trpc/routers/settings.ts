@@ -14,7 +14,7 @@ import {
   providerFor,
   resolveModel,
 } from "../../analysis/anthropic.js";
-import { CLAUDE_EFFORTS, effortFor, mapStageEffort } from "../../../shared/llmModels.js";
+import { CLAUDE_EFFORTS, effortFor, mapStageEffort, readingStageEffort, readingStageThinking } from "../../../shared/llmModels.js";
 import {
   digestFinalTokenBudget,
   DIGEST_FINAL_THINKING_TOKEN_FLOOR,
@@ -29,16 +29,19 @@ const analysisConfigSchema = z.object({
   digestInstructions: z.string().optional(),
   filterModel: z.string().optional(),
   digestMapModel: z.string().optional(),
+  readingModel: z.string().optional(),
   analysisModel: z.string().optional(),
   filterThinking: z.enum(["enabled", "disabled"]).optional(),
   digestMapThinking: z.enum(["enabled", "disabled"]).optional(),
+  readingThinking: z.enum(["enabled", "disabled"]).optional(),
   digestFinalThinking: z.enum(["enabled", "disabled"]).optional(),
   filterEffort: z.enum(CLAUDE_EFFORTS).optional(),
   digestMapEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  readingEffort: z.enum(CLAUDE_EFFORTS).optional(),
   digestFinalEffort: z.enum(CLAUDE_EFFORTS).optional(),
 });
 
-type ModelSource = "web" | "railway" | "default" | "filter";
+type ModelSource = "web" | "railway" | "default" | "filter" | "map";
 type AnalysisConfigEffort = z.infer<typeof analysisConfigSchema>["filterEffort"];
 
 function configuredModel(
@@ -79,6 +82,10 @@ export const settingsRouter = router({
     const map = mapSaved
       ? { configured: mapSaved, effective: resolveModel(mapSaved), source: "web" as const }
       : { ...filter, source: "filter" as const };
+    const readingSaved = cfg.readingModel?.trim();
+    const reading = readingSaved
+      ? { configured: readingSaved, effective: resolveModel(readingSaved), source: "web" as const }
+      : { ...map, source: "map" as const };
     const final = configuredModel(cfg.analysisModel, "ANALYSIS_MODEL", ANALYSIS_MODEL);
     const fallbackTokens = Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
     const configuredThinkingTokens = Number(
@@ -93,6 +100,8 @@ export const settingsRouter = router({
     return {
       provider: llmProvider(),
       filter: stage(filter, cfg.filterEffort),
+      reading: stage(reading, readingStageEffort(cfg)),
+      readingThinking: digestThinkingMode(reading.effective, "map", readingStageThinking(cfg)),
       map: stage(map, mapStageEffort(cfg)),
       final: stage(final, cfg.digestFinalEffort),
       finalTokens,

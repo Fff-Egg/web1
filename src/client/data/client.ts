@@ -1,4 +1,4 @@
-import { effortFor, isClaudeModel, mapStageEffort, type ClaudeEffort } from "../../shared/llmModels.js";
+import { effortFor, isClaudeModel, mapStageEffort, readingStageEffort, readingStageModel, readingStageThinking, type ClaudeEffort } from "../../shared/llmModels.js";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
@@ -115,7 +115,7 @@ export interface UpdateInput {
 export interface EffectiveModelStep {
   configured: string;
   effective: string;
-  source: "web" | "railway" | "default" | "filter";
+  source: "web" | "railway" | "default" | "filter" | "map";
   /** Which API this stage actually calls. */
   provider?: "anthropic" | "openai-compatible";
   /** Claude reasoning effort actually sent (null for non-Claude models). */
@@ -125,6 +125,9 @@ export interface EffectiveModelStep {
 export interface ModelPlan {
   provider: "openai-compatible" | "anthropic" | "mixed" | "unconfigured";
   filter: EffectiveModelStep;
+  /** Long-article reading (bodies over 12,000 chars); inherits the map setting when unset. */
+  reading: EffectiveModelStep;
+  readingThinking?: "enabled" | "disabled";
   map: EffectiveModelStep;
   final: EffectiveModelStep;
   finalTokens: number;
@@ -478,6 +481,7 @@ function makeStaticApi(): DataApi {
       const cfg = await this.getAnalysisConfig();
       const filter = cfg.filterModel || "deepseek-flash";
       const map = cfg.digestMapModel || filter;
+      const reading = readingStageModel(cfg, filter);
       const final = cfg.analysisModel || "deepseek-flash";
       const filterThinking = cfg.filterThinking ?? "disabled";
       const mapThinking = cfg.digestMapThinking ?? "disabled";
@@ -492,6 +496,9 @@ function makeStaticApi(): DataApi {
           source: cfg.digestMapModel ? "web" : "filter",
           provider: isClaudeModel(map) ? "anthropic" : "openai-compatible", effort: effortFor(map, mapStageEffort(cfg)) ?? null,
         },
+        reading: { configured: reading, effective: reading, source: cfg.readingModel ? "web" : "map",
+          provider: isClaudeModel(reading) ? "anthropic" : "openai-compatible", effort: effortFor(reading, readingStageEffort(cfg)) ?? null },
+        readingThinking: readingStageThinking(cfg),
         final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default",
           provider: isClaudeModel(final) ? "anthropic" : "openai-compatible", effort: effortFor(final, cfg.digestFinalEffort) ?? null },
         finalTokens: thinkingTokenBudget(8192, finalThinking),

@@ -1,4 +1,4 @@
-import { mapStageEffort, modelOption } from "../../shared/llmModels.js";
+import { modelOption, readingStageEffort, readingStageModel, readingStageThinking } from "../../shared/llmModels.js";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
@@ -149,8 +149,8 @@ export async function prepareStoredArticle(id: number, cfg: AnalysisConfig, refr
     const preparedArticle = article;
     const reading = await readWholeArticle({ body: article.body ?? "", meta: article.contentMeta,
       articleId: id,
-      model: cfg.digestMapModel || cfg.filterModel || FILTER_MODEL(), thinking: cfg.digestMapThinking ?? "disabled",
-      effort: mapStageEffort(cfg), instructions: cfg.summaryInstructions, cache: article.readingCache, packetBudget: articleReadingPacketBudget(cfg),
+      model: readingStageModel(cfg, cfg.filterModel || FILTER_MODEL()), thinking: readingStageThinking(cfg),
+      effort: readingStageEffort(cfg), instructions: cfg.summaryInstructions, cache: article.readingCache, packetBudget: articleReadingPacketBudget(cfg),
       checkpoint: async readingCache => {
         const result = await db.update(articles).set({ readingCache }).where(contentSnapshot(preparedArticle));
         if (!result[0].affectedRows) throw Error("원문이 변경되었거나 휴지통으로 이동해 전체 읽기를 중단했습니다.");

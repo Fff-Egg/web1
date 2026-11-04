@@ -107,7 +107,38 @@ export function claudeCostUsd(
   return (hit * price.cacheRead + miss * price.input + out * price.output) / 1_000_000;
 }
 
-/** The map/reading stage inherits the filter model when unset — and its effort with it. */
+/** The map stage inherits the filter model when unset — and its effort with it. */
 export function mapStageEffort(cfg: { digestMapModel?: string; digestMapEffort?: ClaudeEffort; filterEffort?: ClaudeEffort }): ClaudeEffort | undefined {
   return cfg.digestMapEffort ?? (cfg.digestMapModel?.trim() ? undefined : cfg.filterEffort);
+}
+
+/** Settings fields that decide the long-article reading stage (sections of bodies over 12,000 chars). */
+export interface ReadingStageConfig {
+  readingModel?: string; readingEffort?: ClaudeEffort; readingThinking?: "enabled" | "disabled";
+  digestMapModel?: string; digestMapEffort?: ClaudeEffort; digestMapThinking?: "enabled" | "disabled";
+  filterEffort?: ClaudeEffort;
+}
+
+/** True once any reading-specific field is saved; otherwise reading follows the 자료 정리 (map) setting. */
+export function hasReadingOverride(cfg: ReadingStageConfig): boolean {
+  return Boolean(cfg.readingModel?.trim() || cfg.readingEffort || cfg.readingThinking);
+}
+
+/**
+ * Long-article reading model: its own setting, else the 자료 정리 (map) model, else
+ * `fallback` (the filter model). Splitting it lets a cheap model do the faithful
+ * section-by-section fact extraction while the map keeps a stronger model.
+ */
+export function readingStageModel(cfg: ReadingStageConfig, fallback: string): string {
+  return cfg.readingModel?.trim() || cfg.digestMapModel?.trim() || fallback;
+}
+
+/** Reading effort: explicit value, else (only while the model is inherited) the map stage's effort. */
+export function readingStageEffort(cfg: ReadingStageConfig): ClaudeEffort | undefined {
+  return cfg.readingEffort ?? (cfg.readingModel?.trim() ? undefined : mapStageEffort(cfg));
+}
+
+/** DeepSeek Thinking for reading: explicit value, else the map's while the model is inherited, else OFF. */
+export function readingStageThinking(cfg: ReadingStageConfig): "enabled" | "disabled" {
+  return cfg.readingThinking ?? (cfg.readingModel?.trim() ? "disabled" : cfg.digestMapThinking ?? "disabled");
 }

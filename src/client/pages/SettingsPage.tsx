@@ -5,7 +5,7 @@ import type { AnalysisConfig, ModelPlan } from "../data/client.js";
 import { LlmUsagePanel } from "../components/LlmUsagePanel.js";
 import { AnalysisRetryPanel } from "../components/AnalysisRetryPanel.js";
 import {
-  CLAUDE_EFFORTS, EFFORT_LABELS, MODEL_OPTIONS, isClaudeEffort, isClaudeModel, modelOption, type ClaudeEffort,
+  CLAUDE_EFFORTS, EFFORT_LABELS, MODEL_OPTIONS, isClaudeEffort, isClaudeModel, mapStageEffort, modelOption, type ClaudeEffort,
 } from "../../shared/llmModels.js";
 
 /**
@@ -137,7 +137,10 @@ export function SettingsPage() {
                 className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
               />
             </label>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <ModelSelect label="긴 글 읽기 모델 (1.2만 자 초과 글)" value={form.readingModel}
+                defaultLabel="기본값 (자료 정리 모델과 같음)"
+                onChange={(readingModel) => set({ readingModel })} />
               <ModelSelect label="1차 글 선별 모델" value={form.filterModel}
                 defaultLabel={`기본값 (${planQuery.data?.filter.source === "web" ? "서버 설정" : planQuery.data?.filter.effective ?? "서버 설정"})`}
                 onChange={(filterModel) => set({ filterModel })} />
@@ -148,7 +151,13 @@ export function SettingsPage() {
                 defaultLabel={`기본값 (${planQuery.data?.final.source === "web" ? "서버 설정" : planQuery.data?.final.effective ?? "서버 설정"})`}
                 onChange={(analysisModel) => set({ analysisModel })} />
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <ReasoningControl stage="긴 글 읽기"
+                model={form.readingModel || form.digestMapModel || form.filterModel || planQuery.data?.reading.effective}
+                effort={form.readingEffort} onEffort={(readingEffort) => set({ readingEffort })}
+                inheritedEffort={form.readingModel ? undefined : mapStageEffort(form)} inheritedFrom="자료 정리"
+                thinking={form.readingThinking} onThinking={(readingThinking) => set({ readingThinking })}
+                thinkingSupported={planQuery.data?.readingThinking !== undefined} />
               <ReasoningControl stage="글 선별"
                 model={form.filterModel || planQuery.data?.filter.effective}
                 effort={form.filterEffort} onEffort={(filterEffort) => set({ filterEffort })}
@@ -168,8 +177,10 @@ export function SettingsPage() {
             </div>
             <p className="text-xs text-slate-500">
               Claude 모델은 <strong>추론 강도</strong>(낮음~최대)로, DeepSeek 모델은 Thinking ON/OFF로 생각의 깊이를 정합니다.
-              강도가 높을수록 품질이 오를 수 있지만 출력 토큰(비용)과 시간이 늘어납니다. 글마다 도는 선별은 낮음부터
-              시작하는 것을 권장합니다. 저장 후 아래 적용 흐름과 사용량 카드를 확인하세요.
+              강도가 높을수록 품질이 오를 수 있지만 출력 토큰(비용)과 시간이 늘어납니다. <strong>긴 글 읽기</strong>는 1.2만 자가
+              넘는 글을 구간별로 읽어 사실 메모(새 해석 없음)를 만드는 단계라 저렴한 모델로도 충분하고, <strong>자료 정리</strong>는
+              최종 보고서가 보는 유일한 입력이라 충실도가 중요합니다. 긴 글 읽기 모델을 바꾸면 아직 읽지 않았거나 다시 준비하는
+              긴 글은 새 모델로 한 번 읽습니다. 저장 후 아래 적용 흐름과 사용량 카드를 확인하세요.
             </p>
             {planQuery.data && <ModelFlowCard plan={planQuery.data} />}
             {planQuery.error && (
@@ -238,11 +249,13 @@ function ModelSelect({ label, value, defaultLabel, onChange }: {
   );
 }
 
-function ReasoningControl({ stage, model, effort, inheritedEffort, onEffort, thinking, onThinking, thinkingSupported }: {
+function ReasoningControl({ stage, model, effort, inheritedEffort, inheritedFrom = "선별", onEffort, thinking, onThinking, thinkingSupported }: {
   stage: string;
   model: string | undefined;
   effort: ClaudeEffort | undefined;
   inheritedEffort?: ClaudeEffort;
+  /** Which stage the inherited effort comes from (label only). */
+  inheritedFrom?: string;
   onEffort: (value: ClaudeEffort | undefined) => void;
   thinking: AnalysisConfig["filterThinking"];
   onThinking: (value: AnalysisConfig["filterThinking"]) => void;
@@ -260,7 +273,7 @@ function ReasoningControl({ stage, model, effort, inheritedEffort, onEffort, thi
       <select value={effort ?? ""} onChange={(e) => onEffort(isClaudeEffort(e.target.value) ? e.target.value : undefined)}
         className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2">
         <option value="">
-          {inheritedEffort ? `선별 강도 따름 (${EFFORT_LABELS[fallback]})` : `모델 기본값 (${EFFORT_LABELS[fallback]})`}
+          {inheritedEffort ? `${inheritedFrom} 강도 따름 (${EFFORT_LABELS[fallback]})` : `모델 기본값 (${EFFORT_LABELS[fallback]})`}
         </option>
         {levels.map((level) => <option key={level} value={level}>{EFFORT_LABELS[level]}</option>)}
       </select>
@@ -294,14 +307,16 @@ function sourceLabel(source: ModelPlan["filter"]["source"]): string {
   if (source === "web") return "웹 설정";
   if (source === "railway") return "Railway 변수";
   if (source === "filter") return "1차 모델 상속";
+  if (source === "map") return "자료 정리 모델 상속";
   return "기본값";
 }
 
 function ModelFlowCard({ plan }: { plan: ModelPlan }) {
   const steps = [
-    { label: "① 글별 선별", step: plan.filter, thinking: plan.filterThinking },
-    { label: "② 묶음별 사실 정리", step: plan.map, thinking: plan.mapThinking },
-    { label: "③ 최종 연결·작성", step: plan.final, thinking: plan.finalThinking },
+    { label: "① 긴 글 구간 읽기 (1.2만 자 초과만)", step: plan.reading, thinking: plan.readingThinking },
+    { label: "② 글별 선별", step: plan.filter, thinking: plan.filterThinking },
+    { label: "③ 묶음별 사실 정리", step: plan.map, thinking: plan.mapThinking },
+    { label: "④ 최종 연결·작성", step: plan.final, thinking: plan.finalThinking },
   ];
   const remapped = steps.filter(({ step }) => step.configured !== step.effective);
   return (
@@ -318,7 +333,7 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
                 : "LLM 미설정"}
         </span>
       </div>
-      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+      <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
         {steps.map(({ label, step, thinking }, index) => (
           <div key={label} className="relative rounded-md border border-indigo-100 bg-white px-3 py-2">
             <p className="text-[10px] font-medium text-slate-500">{label}</p>
@@ -333,7 +348,7 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
               <p className="mt-1 text-[10px] text-indigo-700">Thinking {thinking === "enabled" ? "ON" : "OFF"}</p>
             )}
             {index < steps.length - 1 && (
-              <span className="absolute -right-2.5 top-1/2 z-10 hidden -translate-y-1/2 text-indigo-300 sm:block">→</span>
+              <span className="absolute -right-2.5 top-1/2 z-10 hidden -translate-y-1/2 text-indigo-300 lg:block">→</span>
             )}
           </div>
         ))}

@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AnalysisConfig, Article } from "../db/schema.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 import { FILTER_MODEL, ANALYSIS_MODEL, resolveModel } from "./anthropic.js";
+import { hasReadingOverride, readingStageEffort, readingStageModel, readingStageThinking } from "../../shared/llmModels.js";
 
 export const ANALYSIS_RETRY_VERSION = "2026-09-22-compact-reading-v2";
 export function filterTokenLimit(hasThreads: boolean): number {
@@ -21,6 +22,10 @@ export function analysisConfigFingerprint(cfg: AnalysisConfig, hasThreads: boole
     cfg.filterEffort ?? "", cfg.digestMapEffort ?? "",
     filterTokenLimit(hasThreads), process.env.ANALYSIS_MAX_TOKENS ?? "4096", process.env.DEEP_ANALYSIS ?? "0",
     cfg.instructions, cfg.relevanceCriteria, cfg.importanceCriteria, cfg.summaryInstructions,
+    // Appended only once a reading-specific setting exists, so fingerprints (and
+    // therefore existing holds) stay byte-identical for configs without one.
+    ...(hasReadingOverride(cfg) ? [["reading", resolveModel(readingStageModel(cfg, cfg.filterModel || FILTER_MODEL())),
+      readingStageEffort(cfg) ?? "", readingStageThinking(cfg)]] : []),
   ])).digest("hex");
 }
 

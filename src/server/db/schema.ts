@@ -353,14 +353,18 @@ export interface AnalysisConfig {
   filterModel?: string;
   /** Optional digest map/compression model. Defaults to filterModel/FILTER_MODEL. */
   digestMapModel?: string;
+  /** Long-article reading model (sections of bodies over 12,000 chars). Defaults to digestMapModel. */
+  readingModel?: string;
   analysisModel?: string;
   /** Per-stage thinking overrides, independent of model IDs. Omit to use defaults. */
   filterThinking?: "enabled" | "disabled";
   digestMapThinking?: "enabled" | "disabled";
+  readingThinking?: "enabled" | "disabled";
   digestFinalThinking?: "enabled" | "disabled";
   /** Per-stage Claude reasoning effort (Claude models only). Omit for the model default. */
   filterEffort?: ClaudeEffort;
   digestMapEffort?: ClaudeEffort;
+  readingEffort?: ClaudeEffort;
   digestFinalEffort?: ClaudeEffort;
 }
 
