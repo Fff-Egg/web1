@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { AnalysisConfig, Article } from "../db/schema.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 import { FILTER_MODEL, ANALYSIS_MODEL, resolveModel } from "./anthropic.js";
+import { llmEndpointKey } from "./provider.js";
 
 export const ANALYSIS_RETRY_VERSION = "2026-09-22-compact-reading-v2";
 export function filterTokenLimit(hasThreads: boolean): number {
@@ -15,7 +16,7 @@ export function correctedFilterTokenLimit(initial: number): number { return Math
 
 export function analysisConfigFingerprint(cfg: AnalysisConfig, hasThreads: boolean): string {
   return createHash("sha256").update(JSON.stringify([
-    ANALYSIS_RETRY_VERSION, process.env.LLM_BASE_URL ?? "anthropic", process.env.LLM_EXTRA_BODY ?? "",
+    ANALYSIS_RETRY_VERSION, llmEndpointKey(), process.env.LLM_EXTRA_BODY ?? "",
     resolveModel(cfg.filterModel || FILTER_MODEL()), resolveModel(cfg.digestMapModel || cfg.filterModel || FILTER_MODEL()),
     resolveModel(cfg.analysisModel || ANALYSIS_MODEL()), cfg.filterThinking ?? "disabled", cfg.digestMapThinking ?? "disabled",
     filterTokenLimit(hasThreads), process.env.ANALYSIS_MAX_TOKENS ?? "4096", process.env.DEEP_ANALYSIS ?? "0",
@@ -34,10 +35,14 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
   const message = error instanceof Error ? error.message : "";
   if (code === "WHOLE_READING_HELD") return "reading_held";
   if (code === "LLM_OUTPUT_LIMIT" || /finish_reason=length/.test(message)) return "output_limit";
+  // A model refusal repeats for the same input, like a provider policy 400.
+  if (code === "LLM_REFUSAL") return "request_rejected";
+  // The Claude API reports exhausted credits as a 400, not DeepSeek's 402.
+  if (error && typeof error === "object" && "category" in error && error.category === "balance") return "balance";
   const status = /LLM API (\d{3}):/.exec(message)?.[1];
   if (status === "401" || status === "403") return "authentication";
   if (status === "402") return "balance";
-  if (status === "400" || status === "404" || status === "422") return "request_rejected";
+  if (status === "400" || status === "404" || status === "413" || status === "422") return "request_rejected";
   if (status === "429" || /rate limit|quota|TPD|tokens per day/i.test(message)) return "rate_limit";
   return "transient";
 }

@@ -56,3 +56,16 @@ test("runtime display distinguishes existing defaults and disabled avoidance", (
   assert.equal(value.middayHourSource, "default"); assert.equal(value.peakAvoidanceEnabled, false);
   assert.equal(value.automaticEnabled, false); assert.equal(value.analysisDeferred, false);
 });
+
+test("Claude rows are priced from the Claude rate card; the same tokens on Opus cost forty times Haiku", async () => {
+  const { claudeEstimate, usageCostEstimate } = await import("../src/shared/llmUsageView.js");
+  const haiku = { endpointHost: "api.anthropic.com", model: "claude-haiku-5-5", costBasis: row.costBasis } as LlmUsageBucket;
+  const haikuUsd = 2 * 0.01 + 1 * 0.1 + 0.5 * 0.5;
+  assert.ok(Math.abs(claudeEstimate(haiku)!.usd - haikuUsd) < 1e-12);
+  assert.ok(Math.abs(claudeEstimate({ ...haiku, model: "claude-opus-5-5" })!.usd - (2 * 0.2 + 1 * 4 + 0.5 * 20)) < 1e-12);
+  assert.equal(claudeEstimate({ ...haiku, model: "claude-unknown-9" }), null);
+  assert.equal(claudeEstimate({ ...haiku, endpointHost: "api.deepseek.com" }), null);
+  assert.ok(Math.abs(usageCostEstimate(haiku)!.usd - haikuUsd) < 1e-12);
+  assert.ok(Math.abs(usageCostEstimate(row)!.usd - 0.456) < 1e-12, "DeepSeek rows keep the Flash estimate");
+  assert.equal(usageFailureLabel({ httpStatus: 200, finishReason: "refusal" }), "제공자의 내용 정책 거절 (응답 거절)");
+});

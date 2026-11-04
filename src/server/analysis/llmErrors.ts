@@ -9,6 +9,12 @@ export function isLlmOutputLimitError(error: unknown): error is LlmOutputLimitEr
     "code" in error && error.code === "LLM_OUTPUT_LIMIT");
 }
 
+/** The model declined (Claude `stop_reason: "refusal"`). Resending the same input does not help. */
+export class LlmRefusalError extends Error {
+  readonly code = "LLM_REFUSAL";
+  constructor(message: string) { super(message); this.name = "LlmRefusalError"; }
+}
+
 export class WholeReadingHeldError extends Error {
   readonly code = "WHOLE_READING_HELD";
   constructor() {

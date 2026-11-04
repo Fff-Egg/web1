@@ -37,14 +37,14 @@ export interface ModelAttemptFailure {
 }
 
 /**
- * Stage-specific DeepSeek policy:
+ * Stage-specific thinking policy (DeepSeek V4 and current Claude models):
  * - article filter / map compression / emergency fallback: thinking OFF (cost control)
- * - final Flash or Pro synthesis: thinking ON (cross-article reasoning quality)
+ * - final synthesis: thinking ON (cross-article reasoning quality)
  *
  * Saved Settings overrides these defaults. Without a saved override,
  * `DIGEST_FINAL_THINKING` (then legacy `DIGEST_PRO_THINKING`) controls the final default.
- * Other providers are left
- * untouched because their thinking controls are not API-compatible.
+ * Other providers/models are left untouched because their thinking controls are not
+ * API-compatible; the Claude request mapping lives in analysis/claudeModels.ts.
  */
 export function digestThinkingMode(
   model: string,

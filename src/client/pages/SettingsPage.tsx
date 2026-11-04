@@ -47,7 +47,9 @@ export function SettingsPage() {
           <h2 className="text-lg font-semibold">분석 지침</h2>
           <p className="mt-1 text-sm text-slate-500">
             글 선별·자료 정리·최종 작성에 사용할 모델을 단계별로 설정할 수 있습니다.
-            DeepSeek의 생각 기능은 모델 이름과 별개로 단계마다 설정하며, 모델을 바꿔도 유지됩니다.
+            생각(Thinking) 기능은 모델 이름과 별개로 단계마다 설정하며, 모델을 바꿔도 유지됩니다. Claude에서 ON은
+            adaptive thinking(기본 effort high), OFF는 생각 끔입니다. 생각을 끌 수 없는 모델(Opus 5.5 등)은 OFF일 때
+            effort low로 짧게 생각합니다.
           </p>
           <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-800">
             논지 지도는 글을 거르는 필터가 아니라 선별 후 붙이는 사후 태그입니다. 바이오·방산·크립토 등 현재
@@ -207,7 +209,8 @@ export function SettingsPage() {
 
       <p className="text-xs text-slate-400">
         자동 분석/다이제스트를 실행하려면 MySQL과 LLM이 연결돼 있어야 합니다 — <code>ANTHROPIC_API_KEY</code>
-        (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>). 다이제스트는
+        (Claude) 또는 OpenAI 호환 엔드포인트(<code>LLM_BASE_URL</code> + <code>LLM_API_KEY</code>). 둘 다 있으면 OpenAI 호환이
+        우선이며, <code>LLM_PROVIDER=anthropic</code>이면 Claude를 씁니다. 다이제스트는
         매일 <code>DIGEST_HOUR</code>(KST)에 생성됩니다.
       </p>
     </div>
@@ -257,7 +260,7 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
           {plan.provider === "openai-compatible"
             ? "OpenAI 호환 API"
             : plan.provider === "anthropic"
-              ? "Anthropic API"
+              ? "Claude API (Anthropic)"
               : "LLM 미설정"}
         </span>
       </div>

@@ -7,7 +7,34 @@
 > `docs/fear-indicators.md`(K-공포지수·US 진입신호 지표 상세)에 자족적으로 정리돼 있다. 이 CLAUDE.md의
 > §0 이후는 세션 인수인계·주의사항·세부 구현 노트다.
 
-## 최신 인수인계 — 2026-09-22 참고 링크 3개 초과 시 연결 자료 생략
+## 최신 인수인계 — 2026-11-04 Claude API 전환 (Ultra 월 $200 API 크레딧)
+
+- **사용자 요청**: Claude Ultra 요금제(옛 Max 20x, 2026-10-30 개명)에 포함된 월 $200 API 크레딧으로 DeepSeek를 대체한다. 이 커밋만으로는 동작이 바뀌지 않는다 — DeepSeek 배포는 그대로 돈다.
+- **스위치**: Railway에 `ANTHROPIC_API_KEY`(크레딧이 연결된 Console 조직에서 발급한 키) + `LLM_PROVIDER=anthropic`을 넣으면 Claude로 전환된다. DeepSeek 변수(`LLM_BASE_URL`·`LLM_API_KEY`·`LLM_MODEL`·`LLM_EXTRA_BODY`)는 남겨도 무시되며, 되돌릴 때는 `LLM_PROVIDER`만 지운다. `LLM_PROVIDER`가 없으면 예전 규칙(OpenAI 호환 우선)이다. 판정은 `analysis/provider.ts` 한 곳.
+- **크레딧 조건** (Anthropic 도움말 17154008, 2026-11-04 확인): Ultra $200/월(Max $100). claude.ai 설정 → 결제에서 Console 조직 하나를 연결해 받는다. 그 조직의 Owner/Admin/Billing 역할과 요금제 가입 7일 경과가 필요하고, 연결 조직은 지원팀을 통해서만 바뀐다. 이월 없이 결제 주기마다 소멸한다. 다 쓰면 구매 크레딧·자동 충전이 없는 한 API가 멈추며 요금제로 청구되지 않는다.
+- **모델**: 기본 선별·자료 정리 = `claude-haiku-5-5`, 최종 = `claude-opus-5-5`. 웹 설정·Railway에 남은 DeepSeek ID는 등급대로 치환한다(`pro`/`reasoner` → Opus 5.5, 나머지 → Haiku 5.5; `resolveModel`). ⚠️ 9/10 이후 웹 설정 세 칸이 모두 `deepseek-flash`라 **최종도 Haiku로 치환**된다. 전환 후 Settings → 고급의 최종 칸을 `claude-opus-5-5`로 바꾼다(서버 적용 흐름 카드에 ⚠ 치환 경고가 뜬다).
+- **Thinking 번역** (`analysis/claudeModels.ts`): ON = adaptive + effort(`CLAUDE_THINKING_EFFORT`, 기본 high). OFF = Haiku 5.5·Sonnet 5·Opus 5 등은 `{type:"disabled"}`, Sonnet 5.5는 `between_tools`, 끌 수 없는 Opus 5.5·Fable은 effort low + max_tokens +16,384. 4.6 이전 세대(Haiku 4.5 포함)는 Thinking 없이 호출한다. 단계 기본(선별·맵 OFF, 최종 ON)과 웹 설정 우선순위는 그대로다.
+- **Claude 호출 방어** (`completeAnthropic`, DeepSeek 경로와 동등):
+  - 항상 스트리밍(`finalMessage`)한다. 비스트리밍은 SDK가 max_tokens 21,333 초과를 즉시 거부해 최종 49,152 호출이 불가능했다.
+  - `stop_reason=max_tokens`는 `LlmOutputLimitError`(부분 결과 폐기), `refusal`은 `LlmRefusalError`(같은 입력 재시도 무의미 → 글 보류), 빈 본문은 에러로 처리한다.
+  - HTTP 오류는 `LlmProviderError`로 바꿔 기존 재시도·대기 정책을 그대로 탄다. 크레딧 소진(400 "credit balance is too low"), Console 지출 한도(400 "reached your specified API usage limits"), 402 billing_error는 모두 `balance`로 분류해 전역 60분 대기만 하고 글은 보류하지 않는다. 스트림 중간에 온 overloaded는 529다.
+  - system 프롬프트에 `cache_control`을 붙인다. 최소 캐시 길이는 Haiku 5.5·Opus 5.5 모두 512토큰이고, 글 선별 지침 반복분은 입력 단가의 1/10이 된다.
+  - 호출부 출력 상한은 DeepSeek 토크나이저 기준이라 Claude에서는 ×1.5로 잡는다(Thinking ON 예산 제외). 상한은 실사용분만 과금되고 OTPM도 실생성량만 센다.
+  - Opus 5.5·Opus 5·Sonnet 5.5·Fable 5.1은 서버 측 거절 폴백(`fallbacks:"default"`, beta `server-side-fallback-2026-07-01`)을 켠다. API가 beta를 거부하면 그 400은 무과금이므로 같은 요청을 폴백 없이 1회 보내고, 프로세스가 도는 동안 폴백을 끈다.
+- **자동 조정**:
+  - DeepSeek 혼잡 시간 대기(10~13·15~19시)는 Claude에서 자동 해제된다.
+  - 전체 본문 메모 예산은 세 단계 모두 1M 컨텍스트 Claude 모델이면 192KiB(Haiku 5.5의 10만 토큰 요금 구간 안), 아니면 12,000자다.
+  - 재시도 지문의 엔드포인트 키는 DeepSeek 배포에서 이전과 같은 값이다. 그래서 배포만으로는 보류 상태가 초기화되지 않는다. 전환하면 모델이 바뀌어 지문이 바뀌므로, DeepSeek 정책 거절로 보류된 글도 한 번 다시 시도된다.
+- **사용량 패널**: Claude 행도 추정 비용을 표시한다(Haiku 5.5 $0.10/$0.50, Opus 5.5 $4/$20, Sonnet 5.5 $2/$10 등). 캐시 쓰기 할증과 Haiku 10만 토큰 초과 요금은 빠져 있다. Anthropic 호출의 `cacheMissTokens` = input + cache_creation이다. 실청구와 잔여 크레딧은 Claude Console에서 본다.
+- **비용 추정**: 9/22 DeepSeek 실측과 코드상 호출량 기준으로 대략 월 $60~100이다. 최종 Opus가 약 60%, 글 선별 Haiku가 약 25%를 차지한다. 운영 실측이 아니므로 전환 후 2~3일 동안 사용량 패널과 Console로 확인한다. 더 줄이려면 `CLAUDE_THINKING_EFFORT=medium`.
+- **SDK**: `@anthropic-ai/sdk` 0.65 → 0.137(0.x 최신, `anthropic-version: 2023-06-01` 유지). 1.x는 API 버전 2026-10-21로 바뀌므로 별도 작업이다.
+- **검증**:
+  - 전체 285개 테스트, 타입 검사, 프로덕션 빌드를 통과했다.
+  - `tests/claudeProvider.test.ts`는 로컬 SSE 서버를 상대로 실제 SDK 요청 형태를 검증한다: 캐시 마커, thinking/effort, 폴백 beta, 상한. 실패 경로(잘림·거절·빈 응답·크레딧 소진·스트림 중 과부하·beta 거부 재시도)도 확인한다.
+  - 실제 Claude API 유료 호출은 하지 않았다. health `features`에 `claude-provider-switch`가 표시된다.
+- **주의**: 사이트가 로그인 없이 공개라 주소를 아는 누구나 실행 버튼을 누르거나 모델을 바꿀 수 있다. 실행당 비용이 DeepSeek보다 크다. Console 자동 충전을 켜지 않으면 피해는 월 크레딧 안으로 묶인다.
+
+## 이전 인수인계 — 2026-09-22 참고 링크 3개 초과 시 연결 자료 생략
 
 - **사용자 기준**: 원래 X·텔레그램 게시글의 참고 링크가 4개 이상이면 연결 자료를 모두 생략하고 원 게시글 전체만 분석한다. 3개 이하는 기존대로 수집한다. 연결 기사 내부의 링크 수나 처음 3개 선택 기준이 아니다.
 - **동작**: HTTP 요청 전에 원 게시글의 참조 주소를 센다. 동일 주소·알려진 추적 변형·자기 주소·확장 URL이 있는 경우의 `t.co` 중복을 제외한다. 미확인 단축 주소의 목적지는 요청 전에는 알 수 없어 별개로 센다. 원문·링크 주소를 보존하고 의도적 `skipped` 상태와 `linkExpansion` 사유를 표시한다. RSS 원문 수집은 유지한다.
@@ -134,7 +161,7 @@
 **"하루 2~3회 다이제스트 + 움직인 신호만 보기"**(신경 끄기).
 
 **스택**: TypeScript 단일 리포 풀스택 모노리스. 프론트 = React 19 · Vite 6 · Tailwind · tRPC 11 + react-query.
-백엔드 = Express · @trpc/server · Drizzle ORM · MySQL · node-cron. LLM = **DeepSeek**(OpenAI 호환).
+백엔드 = Express · @trpc/server · Drizzle ORM · MySQL · node-cron. LLM = **DeepSeek**(OpenAI 호환) 또는 **Claude API**(`LLM_PROVIDER=anthropic`, 최신 인수인계 참고).
 배포 = **Railway**(개발 브랜치 푸시 = 자동 재배포). 계산 무거운 지표(K-공포·US 진입)는 **전부 클라이언트**.
 
 **두 파이프라인** (node-cron 스케줄러가 오케스트레이션):
@@ -189,6 +216,7 @@ deletedAt·tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText)
 - 주요 환경변수:
   - `DATABASE_URL` (MySQL public URL)
   - 분석 LLM = **DeepSeek**: `LLM_BASE_URL=https://api.deepseek.com/v1`, `LLM_API_KEY`, `LLM_MODEL=deepseek-v4-flash` (OpenAI 호환)
+  - 분석 LLM = **Claude API**(전환 시): `ANTHROPIC_API_KEY` + `LLM_PROVIDER=anthropic`(DeepSeek 변수보다 우선), 선택 `CLAUDE_THINKING_EFFORT`(Thinking ON 단계 effort, 기본 high), `FILTER_MODEL`/`ANALYSIS_MODEL`(Claude ID; DeepSeek ID는 자동 치환)
   - `TELEGRAM_API_ID/HASH/SESSION` (텔레그램 MTProto, 공개·비공개 채널 배치 수집)
   - X: `X_AUTH_TOKEN`+`X_CT0`(끝 **숫자 0**, 내 계정 쿠키로 직접 수집, 권장·브라우저 불필요) > 소스별 `config.rssUrl` > `X_RSS_BRIDGE`(브리지 템플릿). 쿠키 만료/로그아웃 시 갱신 필요
   - DB 커넥션은 **UTC 고정**(`db/client.ts`: `timezone:"Z"` + 세션 `SET time_zone='+00:00'`) — 경계 창(`createdAt`) 비교가 시간대로 어긋나지 않게 (이전에 이것 때문에 sweep 0건 버그 있었음)

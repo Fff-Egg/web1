@@ -3,16 +3,27 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
 import { enrichArticle, htmlToText, skipLinkedArticleExpansion } from "../adapters/fullText.js";
 import { readWholeArticle, READING_CHUNK_CHARS, type ReadingPacketBudget } from "../analysis/fullReading.js";
-import { ANALYSIS_MODEL, FILTER_MODEL, resolveModel } from "../analysis/anthropic.js";
+import { ANALYSIS_MODEL, FILTER_MODEL, llmProvider, resolveModel } from "../analysis/anthropic.js";
+import { hasMillionTokenContext } from "../analysis/claudeModels.js";
 import { contentScope, resetReadingRecovery } from "../../shared/articleContent.js";
 
 const jobs = new Map<number, Promise<unknown>>();
 export const DEEPSEEK_READING_PACKET_BYTES = 384 * 1024;
+/** Claude 1M-context models: half the DeepSeek packet keeps one article's filter prompt well
+ * under Haiku 5.5's 100K-token price tier (Korean ≈ 3 bytes/char ≈ 65K chars at most). */
+export const CLAUDE_READING_PACKET_BYTES = 192 * 1024;
 const FLASH_CONTEXT_MODELS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]);
 
-/** Deliberately scoped to documented 1M-context Flash consumers, not generic compatible endpoints. */
+/** Deliberately scoped to documented 1M-context consumers (official DeepSeek Flash, or Claude
+ * models with a 1M window), not generic compatible endpoints. */
 export function articleReadingPacketBudget(cfg: AnalysisConfig): ReadingPacketBudget {
   const conservative = { maxChars: READING_CHUNK_CHARS };
+  if (llmProvider() === "anthropic") {
+    const filter = resolveModel(cfg.filterModel || FILTER_MODEL());
+    const consumers = [filter, resolveModel(cfg.digestMapModel || filter), resolveModel(cfg.analysisModel || ANALYSIS_MODEL())];
+    return consumers.every(hasMillionTokenContext) ? { maxBytes: CLAUDE_READING_PACKET_BYTES } : conservative;
+  }
+  if (llmProvider() !== "openai-compatible") return conservative;
   try {
     if (!process.env.LLM_API_KEY || new URL(process.env.LLM_BASE_URL ?? "").hostname !== "api.deepseek.com") return conservative;
     const extra: unknown = JSON.parse(process.env.LLM_EXTRA_BODY || "{}");

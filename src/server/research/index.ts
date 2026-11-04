@@ -19,7 +19,7 @@ const MAX_DETAIL = 160;
 /** Cap on 시총 fetches per run. */
 const MAX_MARKETCAP = 250;
 
-/** 주요 내용 — condense a report's read-page text to one line via the LLM (DeepSeek). */
+/** 주요 내용 — condense a report's read-page text to one line via the LLM. */
 async function summarize(title: string, body: string): Promise<string | null> {
   if (!hasLLM() || body.trim().length < 40) return null;
   try {

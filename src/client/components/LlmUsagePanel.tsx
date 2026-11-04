@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../data/client.js";
-import { discountedFlashEstimate, LLM_STAGE_LABELS, usageFailureLabel, usageKstDay } from "../../shared/llmUsageView.js";
+import { usageCostEstimate, LLM_STAGE_LABELS, usageFailureLabel, usageKstDay } from "../../shared/llmUsageView.js";
 
 const count = (n: number | null) => n === null ? "미수신" : n.toLocaleString("ko-KR");
 const hour = (n: number) => `${String(n).padStart(2, "0")}시`;
@@ -30,7 +30,7 @@ export function LlmUsagePanel() {
   const repeated = usage.data?.repeatedArticles ?? [];
   const days = [...new Set((usage.data?.rows ?? []).map(row => row.day))].filter(d => d !== today).sort().reverse();
   const totals = rows.reduce((sum, row) => {
-    const estimate = discountedFlashEstimate(row);
+    const estimate = usageCostEstimate(row);
     return { requests: sum.requests + row.requests, output: sum.output + (row.outputTokens ?? 0),
       outputKnown: sum.outputKnown + row.outputKnown, unknown: sum.unknown + row.unknownUsage,
       cost: sum.cost + (estimate?.usd ?? 0), costRequests: sum.costRequests + (estimate?.requests ?? 0) };
@@ -75,7 +75,7 @@ export function LlmUsagePanel() {
         <table className="w-full text-xs whitespace-nowrap text-left">
           <thead className="sticky top-0 bg-slate-100"><tr>{["날짜", "작업 / 모델", "Thinking", "요청 / 실패", "입력 적중 / 미적중", "출력 토큰", "할인 기준 추정"].map(label => <th key={label} className="p-2 font-medium">{label}</th>)}</tr></thead>
           <tbody>{rows.map((row, i) => {
-            const estimate = discountedFlashEstimate(row);
+            const estimate = usageCostEstimate(row);
             return <tr key={`${row.day}-${row.stage}-${row.model}-${row.thinking}-${i}`} className="border-b border-slate-100 align-top">
               <td className="p-2">{row.day.slice(5)}</td>
               <td className="p-2">{LLM_STAGE_LABELS[row.stage] ?? row.stage}<span className="block text-[10px] text-slate-500">{row.model}</span></td>
@@ -93,7 +93,7 @@ export function LlmUsagePanel() {
         <div className="mt-2 overflow-auto"><table className="w-full text-left text-xs whitespace-nowrap">
           <thead><tr>{["날짜 / 작업", "실패 원인", "요청", "확인된 출력", "할인 기준 추정"].map(label => <th key={label} className="p-2 font-medium">{label}</th>)}</tr></thead>
           <tbody>{failures.map((row, i) => {
-            const estimate = discountedFlashEstimate(row);
+            const estimate = usageCostEstimate(row);
             return <tr key={i} className="border-t border-amber-100 align-top">
               <td className="p-2">{row.day.slice(5)} · {LLM_STAGE_LABELS[row.stage] ?? row.stage}<span className="block text-[10px] text-slate-500">{row.model} · Thinking {row.thinking === "enabled" ? "ON" : row.thinking === "disabled" ? "OFF" : "미확인"}</span></td>
               <td className="p-2">{usageFailureLabel(row)}</td><td className="p-2 text-right">{count(row.requests)}회</td>
@@ -133,7 +133,7 @@ export function LlmUsagePanel() {
                 : <p className="text-slate-600">분석할 대기 글이 없어 추가 작업 없이 종료했습니다. 이미 분석되었거나 삭제된 글일 수 있습니다.</p>)}
         </div>
       </details>}
-      <p className="text-xs leading-relaxed text-slate-500">추정 비용은 공식 DeepSeek Flash의 입력 캐시 적중·미적중·출력 사용량을 모두 받은 요청만 계산합니다. 100만 토큰당 $0.003 / $0.15 / $0.60을 적용한 참고값이며 실제 청구액은 아닙니다. 혼잡 시간에는 2배입니다. 제공자 요금 변경·사용량 미수신·다른 모델 비용은 반영하지 않습니다. 입력 캐시 할인과 완성된 요약 재사용은 다릅니다. 입력이 할인되어도 새 출력에는 비용이 발생합니다. <a className="underline" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noreferrer">공식 요금표</a> (2026-09-21 확인)</p>
+      <p className="text-xs leading-relaxed text-slate-500">추정 비용은 입력 캐시 적중·미적중·출력 사용량을 모두 받은 요청만 계산한 참고값이며 실제 청구액이 아닙니다. DeepSeek Flash는 100만 토큰당 $0.003 / $0.15 / $0.60(혼잡 시간 2배, <a className="underline" href="https://api-docs.deepseek.com/quick_start/pricing/" target="_blank" rel="noreferrer">공식 요금표</a> 2026-09-21 확인), Claude는 입력 / 출력 / 캐시 적중 기준 Haiku 5.5 $0.10 / $0.50 / $0.01, Opus 5.5 $4 / $20 / $0.20, Sonnet 5.5 $2 / $10 / $0.20을 적용합니다(2026-11-04 확인). Claude의 캐시 쓰기 할증(1.25배)과 Haiku 5.5의 10만 토큰 초과 요금은 빠져 있어 실제보다 조금 낮을 수 있습니다. 정확한 청구액과 남은 월 크레딧은 <a className="underline" href="https://platform.claude.com" target="_blank" rel="noreferrer">Claude Console</a>에서 확인하세요. 제공자 요금 변경·사용량 미수신·목록에 없는 모델은 반영하지 않습니다. 입력 캐시 할인과 완성된 요약 재사용은 다릅니다. 입력이 할인되어도 새 출력에는 비용이 발생합니다.</p>
     </>}
   </section>;
 }

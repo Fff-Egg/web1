@@ -903,7 +903,7 @@ function ModelBadge({ meta }: { meta: unknown }) {
         timeout: "요청 시간 초과",
         network: "네트워크 연결 실패",
         content_filter: "제공자 콘텐츠 필터",
-        provider_5xx: "DeepSeek 서버 오류",
+        provider_5xx: "LLM 제공자 서버 오류",
         bad_request: "요청 형식·파라미터 오류",
         empty_response: "본문이 없는 빈 응답",
         unknown: "분류되지 않은 오류",

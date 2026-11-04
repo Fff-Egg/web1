@@ -1,3 +1,5 @@
+import { llmProvider } from "./provider.js";
+
 const KST_CLOCK = new Intl.DateTimeFormat("en-GB", {
   timeZone: "Asia/Seoul",
   hour: "2-digit",
@@ -18,8 +20,9 @@ export function kstMinuteOfDay(at = new Date()): number {
   return hour * 60 + minute;
 }
 
+/** DeepSeek's peak surcharge does not exist on the Claude API, so waiting there only delays the feed. */
 export function isAutomaticAnalysisPeakAvoidanceEnabled(): boolean {
-  return process.env.ANALYSIS_AVOID_PEAK !== "0";
+  return process.env.ANALYSIS_AVOID_PEAK !== "0" && llmProvider() !== "anthropic";
 }
 
 /**

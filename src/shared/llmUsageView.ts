@@ -10,6 +10,28 @@ export function discountedFlashEstimate(row: Pick<LlmUsageBucket, "model" | "end
   return { usd: (b.cacheHitTokens * FLASH_OFFPEAK_RATES.hit + b.cacheMissTokens * FLASH_OFFPEAK_RATES.miss + b.outputTokens * FLASH_OFFPEAK_RATES.output) / 1_000_000, requests: b.requests };
 }
 
+/** Claude API list prices per 1M tokens (input / output / cache read), checked 2026-11-04.
+ * Reference estimates only — the bill is in the Claude Console. The 1.25x cache-write premium
+ * and Haiku 5.5's higher tier for prompts over 100K tokens are not included. */
+export const CLAUDE_RATES: Readonly<Record<string, { input: number; output: number; cacheRead: number }>> = {
+  "claude-haiku-5-5": { input: 0.1, output: 0.5, cacheRead: 0.01 },
+  "claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.2 },
+  "claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2 },
+  "claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2 },
+  "claude-opus-5": { input: 5, output: 25, cacheRead: 0.5 },
+  "claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1 },
+};
+export function claudeEstimate(row: Pick<LlmUsageBucket, "model" | "endpointHost" | "costBasis">): { usd: number; requests: number } | null {
+  const rate = row.endpointHost === "api.anthropic.com" ? CLAUDE_RATES[row.model.replace(/-\d{8}$/, "")] : undefined;
+  const b = row.costBasis;
+  if (!rate || !b || b.requests <= 0 || ![b.cacheHitTokens, b.cacheMissTokens, b.outputTokens].every(n => Number.isFinite(n) && n >= 0)) return null;
+  return { usd: (b.cacheHitTokens * rate.cacheRead + b.cacheMissTokens * rate.input + b.outputTokens * rate.output) / 1_000_000, requests: b.requests };
+}
+/** Whichever provider-specific estimate applies to this row (null = not priced). */
+export function usageCostEstimate(row: Pick<LlmUsageBucket, "model" | "endpointHost" | "costBasis">): { usd: number; requests: number } | null {
+  return discountedFlashEstimate(row) ?? claudeEstimate(row);
+}
+
 export function usageKstDay(iso: string): string {
   return new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10);
 }
@@ -24,6 +46,7 @@ const PROVIDER_FAILURE_LABELS: Record<ProviderErrorCategory, string> = {
 export function usageFailureLabel(row: { httpStatus: number | null; finishReason: string | null; errorCategory?: ProviderErrorCategory | null; errorParam?: string | null }): string {
   if (row.httpStatus !== null && row.httpStatus >= 400) return `${PROVIDER_FAILURE_LABELS[row.errorCategory ?? "unknown"]} (HTTP ${row.httpStatus})${row.errorParam ? ` · ${row.errorParam}` : ""}`;
   if (row.finishReason === "length" || row.finishReason === "max_tokens") return "출력 한도 초과 (응답 잘림)";
+  if (row.finishReason === "refusal") return "제공자의 내용 정책 거절 (응답 거절)";
   return "응답 처리 실패 (상세 미확인)";
 }
 

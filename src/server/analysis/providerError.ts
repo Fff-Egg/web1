@@ -27,11 +27,17 @@ export function diagnoseProviderError(raw: string, status: number): ProviderErro
     : typeof root.error === "string" ? root.error.slice(0, 65_536) : payload === undefined ? raw.slice(0, 65_536) : "";
   // Codes can be useful to classify but are untrusted and are not returned/stored.
   const code = typeof error.code === "string" ? error.code.slice(0, 128).toLowerCase() : "";
+  // Claude API bodies carry `error.type` (billing_error, not_found_error …) instead of `code`.
+  const type = typeof error.type === "string" ? error.type.slice(0, 64).toLowerCase() : "";
   const text = `${code} ${message}`.toLowerCase();
   const result = (category: ProviderErrorDiagnosis["category"]): ProviderErrorDiagnosis => ({ category, param });
   if (status === 401) return result("authentication");
   if (status === 402) return result("balance");
   if (status === 429) return result("rate_limit");
+  // Claude API: exhausted prepaid/monthly credits and a Console spend limit you set both
+  // arrive as a 400 invalid_request_error; they clear by themselves later, unlike a bad request.
+  if (type === "billing_error" || /credit balance (?:is )?too low|reached your specified (?:workspace )?api usage limits/u.test(text)) return result("balance");
+  if (status === 404 && type === "not_found_error" && /\bmodel\b/u.test(text)) return result("model");
   if (/content[_ ](?:filter|policy|exists[_ ]risk|risk)|safety[_ ](?:violation|policy)|moderation|sensitive content|内容.{0,20}风险/u.test(text)) return result("content_policy");
   if (status === 403) return result("authentication");
   if (/authentication[_ ](?:error|failed)|invalid[_ ]api[_ ]key|(?:api[_ ]key|api key).{0,30}(?:invalid|incorrect|missing)/u.test(text)) return result("authentication");

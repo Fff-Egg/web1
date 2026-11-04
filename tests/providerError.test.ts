@@ -60,3 +60,18 @@ test("only known parameter paths survive, with array indexes removed", () => {
   assert.match(error.message, /LLM API 400: provider request failed \(invalid_unicode; param=messages.content\)/);
   assert.doesNotMatch(`${error.stack} ${JSON.stringify(error)}`, /PRIVATE_/);
 });
+
+test("Claude API bodies: exhausted credits are a balance problem even as a 400, a missing model is a model problem", () => {
+  const claude = (status: number, type: string, message: string) =>
+    diagnoseProviderError(JSON.stringify({ type: "error", error: { type, message } }), status);
+  assert.equal(claude(400, "invalid_request_error",
+    "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing to upgrade or purchase credits.").category, "balance");
+  assert.equal(claude(402, "billing_error", "PRIVATE").category, "balance");
+  assert.equal(claude(400, "invalid_request_error",
+    "You have reached your specified API usage limits. You will regain access on 2026-12-01 at 00:00 UTC.").category, "balance");
+  assert.equal(claude(400, "invalid_request_error",
+    "You have reached your specified workspace API usage limits.").category, "balance");
+  assert.equal(claude(404, "not_found_error", "model: claude-nope").category, "model");
+  assert.equal(claude(529, "overloaded_error", "Overloaded").category, "unknown");
+  assert.equal(claude(400, "invalid_request_error", "messages: roles must alternate").category, "unknown");
+});
