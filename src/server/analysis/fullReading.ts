@@ -49,6 +49,7 @@ export function readCachedSourceNotes(body: string, cache?: ReadingCache | null)
 
 export async function readWholeArticle(opts: {
   body: string; meta?: ArticleContentMeta | null; model: string; thinking?: "enabled" | "disabled"; effort?: ClaudeEffort;
+  /** Feed summary guide. Not used by the reading prompt and not part of the cache key. */
   instructions?: string; cache?: ReadingCache | null;
   /** Consumer-specific completed-note budget. Raw sources still use the original 12k first-pass threshold. */
   packetBudget?: ReadingPacketBudget;
@@ -59,7 +60,11 @@ export async function readWholeArticle(opts: {
   const model = resolveModel(opts.model);
   const thinking = supportsThinkingControl(model) ? opts.thinking ?? "disabled" : undefined;
   const scope = contentScope(opts.meta);
-  const legacySystem = `${LEGACY_SYSTEM}\n수집 상태: ${scope}\n사용자 요약 지침: ${opts.instructions ?? ""}`;
+  // The Feed summary guide is NOT part of the reading prompt (FACT_SYSTEM below), so it
+  // must not be part of the cache key either: editing it would re-bill every long
+  // article for identical output. The empty slot keeps keys of calls that never
+  // passed a guide byte-identical to the pre-change format.
+  const legacySystem = `${LEGACY_SYSTEM}\n수집 상태: ${scope}\n사용자 요약 지침: `;
   const key = hash(JSON.stringify([1, opts.body, scope, model, thinking, legacySystem, READING_CHUNK_CHARS]));
   const system = `${FACT_SYSTEM}\n수집 상태: ${scope}`;
   const budget = opts.packetBudget ?? { maxChars: READING_CHUNK_CHARS };

@@ -368,9 +368,9 @@ function finalMaxTokens(model: string, thinking?: AnalysisConfig["digestFinalThi
 // call small: no context overflow, no "lost in the middle" skipping.
 const MAP_MAX_ITEMS = (): number => Math.max(5, Number(process.env.DIGEST_MAP_ITEMS ?? 30));
 const MAP_MAX_CHARS = (): number => Math.max(10_000, Number(process.env.DIGEST_MAP_CHARS ?? 45_000));
-// 맵은 Thinking OFF지만 글마다 1~3문장을 누락 없이 남겨야 하므로 8K 여유를 둔다.
-// 상한은 실제 사용량 과금이라 성공 호출이 일찍 멈추면 그대로 절약된다.
-const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 8000);
+// 맵은 글마다 사실 1~3문장 + 출처 성격·조건/반론·연결 가설을 누락 없이 남겨야 하므로
+// 12K 여유를 둔다(Claude는 하한 16K). 상한은 실제 사용량 과금이라 일찍 멈추면 그대로 절약된다.
+const MAP_MAX_TOKENS = (): number => Number(process.env.DIGEST_MAP_TOKENS ?? 12000);
 const MAP_RETRY_TOKENS = (): number =>
   Number(process.env.DIGEST_MAP_RETRY_TOKENS ?? MAP_MAX_TOKENS() * 2);
 const MAP_CONCURRENCY = 3;
@@ -437,12 +437,19 @@ export function packChunks(rows: Pick<DigestItem, "title" | "body" | "summary">[
   }
 }
 
-const MAP_SYSTEM =
+export const MAP_SYSTEM =
   "★ 모든 출력은 반드시 한국어로 작성한다. 중국어·일본어 절대 금지. (영어 고유명사·티커만 예외)\n\n" +
   "너는 다이제스트 1단계 정리자다. 아래는 오늘 선별된 글 전체 중 일부 묶음이다. " +
-  "한 건도 빠짐없이, 글마다 `- [번호] 핵심 내용 1~3문장 (종목/테마, 영향: 상승/하락/중립)` 형식으로 압축한다. " +
+  "한 건도 빠짐없이, 글마다 다음 형식으로 압축한다:\n" +
+  "`- [번호] [출처 성격] 핵심 사실 1~3문장 (종목/테마, 영향: 상승/하락/중립) · 조건/반론: … · [연결 가설] …`\n" +
+  "- [출처 성격]: 입력 요약에 표시된 출처·검증 라벨(예: 공식·확정/신뢰 보도/업계 전언/미확인 찌라시/소셜 관찰/개인 해석, " +
+  "[원문 확인 필요])을 그대로 옮긴다. 요약에 표시가 없으면 원문으로 판단하고, 판단할 수 없으면 [출처 미표시]로 쓴다. 미확인 정보를 확정처럼 바꾸지 않는다.\n" +
+  "- 조건/반론: 원문·요약에 있는 핵심 전제·조건·한계·반론·반대 신호가 있으면 짧게 남기고, 없으면 이 부분은 생략한다.\n" +
+  "- [연결 가설]: 입력 요약에 '연결 가설'이 있으면 가장 중요한 하나를 짧게 옮긴다. 새 가설을 만들지 말고 사실처럼 쓰지 않는다. 없으면 생략한다.\n" +
+  "- 한 글에 서로 다른 사건이 여러 개면 합치지 말고 같은 [번호]로 줄을 나눠 모두 남긴다.\n" +
   "번호는 입력에 적힌 [N]을 그대로 쓴다(새로 매기지 마라). 제목·URL은 쓰지 않는다. " +
-  "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
+  "이 출력은 2단계 종합의 유일한 입력이 되므로, 여러 글의 의견을 종합하지 말고 투자 판단에 쓰일 구체 정보(수치·날짜·주체·조건·근거)와 " +
+  "출처 성격·반론을 보존하는 데 집중한다.";
 
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
 export async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"], configuredEffort?: AnalysisConfig["digestMapEffort"]): Promise<string[]> {

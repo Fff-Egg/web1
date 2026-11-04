@@ -214,13 +214,16 @@ test("explicit reset retains proactive plans and policy while renewing only corr
   assert.ok(cache.recovery?.held);
 });
 
-test("changed reading instructions release a held cache, without treating it as completed", async () => {
+test("a held reading stays held when only the Feed guide changes, and is released by a real input change", async () => {
   const body = "원".repeat(13000);
   let saved: ReadingCache | undefined;
   await assert.rejects(readWholeArticle({ body, model: "deepseek-flash", checkpoint: async c => { saved = structuredClone(c); },
     invoke: async () => { throw limit(); } }), WholeReadingHeldError);
+  // The guide is not in the reading prompt: retrying would resend the same failing request.
+  await assert.rejects(readWholeArticle({ body, model: "deepseek-flash", instructions: "수치와 조건 위주로 간결하게", cache: saved,
+    invoke: async () => { throw Error("guide edit must not re-bill a held reading"); } }), WholeReadingHeldError);
   let calls = 0;
-  const result = await readWholeArticle({ body, model: "deepseek-flash", instructions: "수치와 조건 위주로 간결하게", cache: saved,
+  const result = await readWholeArticle({ body, model: "deepseek-v4-flash", cache: saved,
     invoke: async () => { calls++; return "완료"; } });
   assert.ok(calls > 0); assert.ok(result.completedAt); assert.notEqual(result.key, saved!.key);
 });
@@ -325,4 +328,15 @@ test("transport returns typed output-limit errors while still recording consumed
   await withLlmUsageSink(event => { recorded += event.outputTokens ?? 0; assert.equal(event.success, false); },
     () => assert.rejects(complete({ model: "deepseek-flash", system: "", user: "", maxTokens: 3200, thinking: "disabled" }), LlmOutputLimitError));
   assert.equal(recorded, 3200);
+});
+
+test("editing the Feed summary guide does not change the reading cache key (no re-billing)", async () => {
+  const body = "원문".repeat(7000);
+  const read = (instructions?: string, model = "deepseek-flash") =>
+    readWholeArticle({ body, instructions, model, thinking: "disabled", invoke: async () => "요약" });
+  const none = await read(), guideA = await read("증거 패킷 A"), guideB = await read("증거 패킷 B — 연결 가설 추가");
+  assert.equal(guideA.key, none.key);
+  assert.equal(guideB.key, none.key);
+  // Still keyed on what actually changes the reading output.
+  assert.notEqual((await read("증거 패킷 A", "deepseek-v4-flash")).key, none.key);
 });
