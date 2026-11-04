@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import type { AnalysisConfig, Article } from "../db/schema.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 import { FILTER_MODEL, ANALYSIS_MODEL, resolveModel } from "./anthropic.js";
-import { hasReadingOverride, readingStageEffort, readingStageModel, readingStageThinking } from "../../shared/llmModels.js";
+import { mapStageEffort, readingStageEffort, readingStageModel, readingStageThinking } from "../../shared/llmModels.js";
 
 export const ANALYSIS_RETRY_VERSION = "2026-09-22-compact-reading-v2";
 export function filterTokenLimit(hasThreads: boolean): number {
@@ -15,6 +15,13 @@ export function filterTokenLimit(hasThreads: boolean): number {
 export function correctedFilterTokenLimit(initial: number): number { return Math.max(initial, Math.min(6000, Math.max(1600, initial * 2))); }
 
 export function analysisConfigFingerprint(cfg: AnalysisConfig, hasThreads: boolean): string {
+  // Long-article reading enters the fingerprint only when its EFFECTIVE setup differs
+  // from the 자료 정리 (map) setup it otherwise inherits: unset fields, or saved values
+  // equal to the inherited ones, keep fingerprints (and so existing holds) unchanged.
+  const filterModelId = cfg.filterModel || FILTER_MODEL();
+  const reading = [resolveModel(readingStageModel(cfg, filterModelId)), readingStageEffort(cfg) ?? "", readingStageThinking(cfg)];
+  const inherited = [resolveModel(cfg.digestMapModel || filterModelId), mapStageEffort(cfg) ?? "", cfg.digestMapThinking ?? "disabled"];
+  const readingDiffers = reading.some((value, i) => value !== inherited[i]);
   return createHash("sha256").update(JSON.stringify([
     ANALYSIS_RETRY_VERSION, process.env.LLM_BASE_URL ?? "anthropic", process.env.LLM_EXTRA_BODY ?? "",
     resolveModel(cfg.filterModel || FILTER_MODEL()), resolveModel(cfg.digestMapModel || cfg.filterModel || FILTER_MODEL()),
@@ -22,10 +29,7 @@ export function analysisConfigFingerprint(cfg: AnalysisConfig, hasThreads: boole
     cfg.filterEffort ?? "", cfg.digestMapEffort ?? "",
     filterTokenLimit(hasThreads), process.env.ANALYSIS_MAX_TOKENS ?? "4096", process.env.DEEP_ANALYSIS ?? "0",
     cfg.instructions, cfg.relevanceCriteria, cfg.importanceCriteria, cfg.summaryInstructions,
-    // Appended only once a reading-specific setting exists, so fingerprints (and
-    // therefore existing holds) stay byte-identical for configs without one.
-    ...(hasReadingOverride(cfg) ? [["reading", resolveModel(readingStageModel(cfg, cfg.filterModel || FILTER_MODEL())),
-      readingStageEffort(cfg) ?? "", readingStageThinking(cfg)]] : []),
+    ...(readingDiffers ? [["reading", ...reading]] : []),
   ])).digest("hex");
 }
 

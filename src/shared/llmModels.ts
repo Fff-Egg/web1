@@ -119,11 +119,6 @@ export interface ReadingStageConfig {
   filterEffort?: ClaudeEffort;
 }
 
-/** True once any reading-specific field is saved; otherwise reading follows the 자료 정리 (map) setting. */
-export function hasReadingOverride(cfg: ReadingStageConfig): boolean {
-  return Boolean(cfg.readingModel?.trim() || cfg.readingEffort || cfg.readingThinking);
-}
-
 /**
  * Long-article reading model: its own setting, else the 자료 정리 (map) model, else
  * `fallback` (the filter model). Splitting it lets a cheap model do the faithful
