@@ -299,11 +299,18 @@ async function attemptAnthropic(opts: CompleteOpts, useFallback: boolean): Promi
     if (typeof res.model === "string" && /^[\w./:-]{1,160}$/.test(res.model)) probe.data.effectiveModel = res.model;
     const reason = res.stop_reason ?? "unknown";
     probe.data.finishReason = /^[a-z_]{1,40}$/.test(reason) ? reason : "unknown";
-    const text = res.content
-      .filter((b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === "text")
-      .map((b) => b.text)
-      .join("\n")
-      .trim();
+    // A server-side fallback after a mid-stream decline continues the partial
+    // answer: [text(partial), fallback, …, text(continuation)]. Glue across the
+    // fallback boundary without a separator so JSON/words are not split.
+    let text = "";
+    let afterFallback = false;
+    for (const block of res.content) {
+      if ((block as { type: string }).type === "fallback") { afterFallback = true; continue; }
+      if (block.type !== "text") continue;
+      text += text && !afterFallback ? `\n${block.text}` : block.text;
+      afterFallback = false;
+    }
+    text = text.trim();
     probe.data.contentChars = text.length;
     const detail = `stop_reason=${reason} tokens(output=${usage.output_tokens ?? "?"}) max_tokens=${maxTokens}`;
     if (reason === "max_tokens") {

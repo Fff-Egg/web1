@@ -8,7 +8,7 @@ import { withLlmUsageSink } from "../src/server/analysis/usageObservation.js";
 import { isLlmOutputLimitError } from "../src/server/analysis/llmErrors.js";
 import { LlmProviderError } from "../src/server/analysis/providerError.js";
 import { analysisFailureReason, globalPauseMinutes, nextAnalysisRetry } from "../src/server/analysis/retryPolicy.js";
-import { articleReadingPacketBudget, DEEPSEEK_READING_PACKET_BYTES } from "../src/server/repo/articleContent.js";
+import { articleReadingPacketBudget, DEEPSEEK_READING_PACKET_BYTES, TIERED_PRICE_READING_PACKET_BYTES } from "../src/server/repo/articleContent.js";
 import { digestFinalTokenBudget, CLAUDE_FINAL_MAX_TOKENS } from "../src/server/digest/modelPipeline.js";
 import { setAnalysisFilterProviderHint, shouldDeferAutomaticAnalysis } from "../src/server/analysis/schedule.js";
 import { effortFor, mapStageEffort, claudeCostUsd } from "../src/shared/llmModels.js";
@@ -251,20 +251,52 @@ test("mid-stream overloaded_error is classified (529 overloaded), not unknown", 
 });
 
 test("provider-wide failures never use up an article's retry attempts", () => {
-  for (const reason of ["balance", "authentication", "rate_limit", "overloaded"] as const) {
+  for (const reason of ["balance", "authentication", "overloaded"] as const) {
     const next = nextAnalysisRetry(2, reason);
     assert.equal(next.attempts, 2);
     assert.equal(next.held, false);
   }
   assert.equal(nextAnalysisRetry(2, "transient").held, true);
+  // A 429 can come from one oversized request every time: it must still be bounded.
+  assert.equal(nextAnalysisRetry(0, "rate_limit").attempts, 1);
+  assert.equal(nextAnalysisRetry(2, "rate_limit").held, true);
+});
+
+test("a content-policy refusal sent as 403 is held per article, not an account-wide auth pause", () => {
+  const error = new LlmProviderError(403, { category: "content_policy", param: null });
+  assert.equal(analysisFailureReason(error), "request_rejected");
+  assert.equal(nextAnalysisRetry(0, "request_rejected").held, true);
+  assert.equal(analysisFailureReason(new LlmProviderError(403, { category: "authentication", param: null })), "authentication");
+});
+
+test("text after a mid-stream server fallback continues the partial without a stray newline", async () => {
+  useClaude(() => sse([
+    { event: "message_start", data: { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-opus-5-5",
+      content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "{\"relevant\": tr" } } },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 0 } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 1, content_block: { type: "fallback", from: { model: "claude-opus-5-5" }, to: { model: "claude-opus-4-8" } } } },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 1 } },
+    { event: "content_block_start", data: { type: "content_block_start", index: 2, content_block: { type: "text", text: "" } } },
+    { event: "content_block_delta", data: { type: "content_block_delta", index: 2, delta: { type: "text_delta", text: "ue}" } } },
+    { event: "content_block_stop", data: { type: "content_block_stop", index: 2 } },
+    { event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 5 } } },
+    { event: "message_stop", data: { type: "message_stop" } },
+  ]));
+  assert.equal(await complete({ ...base, model: "claude-opus-5-5" }), '{"relevant": true}');
 });
 
 test("Claude stages get the large long-article note budget", () => {
   delete process.env.LLM_EXTRA_BODY;
   const big = { maxBytes: DEEPSEEK_READING_PACKET_BYTES }, small = { maxChars: 12000 };
-  const claude = { instructions: "", filterModel: "claude-haiku-5-5", digestMapModel: "claude-sonnet-5-5", analysisModel: "claude-opus-5-5" };
+  const capped = { maxBytes: TIERED_PRICE_READING_PACKET_BYTES };
+  const claude = { instructions: "", filterModel: "claude-sonnet-5-5", digestMapModel: "claude-sonnet-5-5", analysisModel: "claude-opus-5-5" };
   assert.deepEqual(articleReadingPacketBudget(claude), big);
   assert.deepEqual(articleReadingPacketBudget({ ...claude, analysisModel: "claude-fable-5-1" }), big);
+  // Haiku bills >100K-token prompts at 5x: any Haiku stage caps the shared packet.
+  assert.deepEqual(articleReadingPacketBudget({ ...claude, filterModel: "claude-haiku-5-5" }), capped);
+  assert.ok(TIERED_PRICE_READING_PACKET_BYTES > 12000 * 3 && TIERED_PRICE_READING_PACKET_BYTES < DEEPSEEK_READING_PACKET_BYTES);
   // Mixed with official DeepSeek Flash is still all 1M-context.
   assert.deepEqual(articleReadingPacketBudget({ ...claude, filterModel: "deepseek-flash" }), big);
   // Unknown Claude IDs or unproven compatible models keep the conservative budget.

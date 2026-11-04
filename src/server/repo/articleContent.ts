@@ -10,6 +10,12 @@ import { contentScope, resetReadingRecovery } from "../../shared/articleContent.
 const jobs = new Map<number, Promise<unknown>>();
 /** Large per-article note budget for 1M-token-context consumers (name kept: first used for DeepSeek Flash). */
 export const DEEPSEEK_READING_PACKET_BYTES = 384 * 1024;
+/**
+ * Cap for models with a long-prompt price tier (Haiku 5.5: >100K-token prompts bill
+ * 5x). 128KiB ≈ 43K Hangul chars ≈ 60K tokens, leaving room for instructions while
+ * staying well under the tier — still ~3.5x the conservative 12,000-char budget.
+ */
+export const TIERED_PRICE_READING_PACKET_BYTES = 128 * 1024;
 const FLASH_CONTEXT_MODELS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]);
 
 /** Official DeepSeek endpoint check, or null when the compatible endpoint is not provably Flash. */
@@ -35,15 +41,22 @@ export function articleReadingPacketBudget(cfg: AnalysisConfig): ReadingPacketBu
     // The final model is also the optional per-article deep-analysis model.
     const consumers = [filter, cfg.digestMapModel || filter, cfg.analysisModel || ANALYSIS_MODEL()];
     let flash: ((model: string) => boolean) | null | undefined;
-    const longContext = (model: string) => {
-      if (providerFor(model) === "anthropic") return modelOption(model)?.provider === "anthropic";
+    /** Byte budget this consumer can take, or null when it is not a proven 1M-context model. */
+    const budgetFor = (model: string): number | null => {
+      if (providerFor(model) === "anthropic") {
+        const option = modelOption(model);
+        if (option?.provider !== "anthropic") return null;
+        return option.price?.longPromptOver !== undefined ? TIERED_PRICE_READING_PACKET_BYTES : DEEPSEEK_READING_PACKET_BYTES;
+      }
       if (flash === undefined) flash = deepseekFlashCheck();
-      return flash !== null && flash(model);
+      return flash !== null && flash(model) ? DEEPSEEK_READING_PACKET_BYTES : null;
     };
-    if (!consumers.every(longContext)) return conservative;
+    const budgets = consumers.map(budgetFor);
+    if (budgets.some(b => b === null)) return conservative;
     // A UTF-8 byte bound is conservative relative to the 1M token window and
-    // leaves room for caller instructions and final thinking/output.
-    return { maxBytes: DEEPSEEK_READING_PACKET_BYTES };
+    // leaves room for caller instructions and final thinking/output. The
+    // smallest stage budget wins: every stage reads the same packet.
+    return { maxBytes: Math.min(...(budgets as number[])) };
   } catch { return conservative; }
 }
 class ContentChangedError extends Error {}

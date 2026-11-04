@@ -40,6 +40,8 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
   if (category === "balance") return "balance";
   if (category === "authentication") return "authentication";
   if (category === "overloaded") return "overloaded";
+  // Per-request refusals stay per-article (held), even when a gateway sends them as 403.
+  if (category === "content_policy") return "request_rejected";
   const status = /LLM API (\d{3}):/.exec(message)?.[1];
   if (status === "401" || status === "403") return "authentication";
   if (status === "402") return "balance";
@@ -53,8 +55,10 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
  * pause, and the article itself did nothing wrong. Refund the reserved attempt
  * so days of exhausted credit (one probe every 6h) never hold healthy articles.
  * These requests are rejected before any work, or (mid-stream overload) rare.
+ * rate_limit is deliberately NOT here: one oversized request can exceed the
+ * per-minute input bucket on every try, and only the hold-after-3 bounds it.
  */
-const PROVIDER_WIDE_REASONS: ReadonlySet<AnalysisRetryReason> = new Set(["balance", "authentication", "rate_limit", "overloaded"]);
+const PROVIDER_WIDE_REASONS: ReadonlySet<AnalysisRetryReason> = new Set(["balance", "authentication", "overloaded"]);
 
 export function nextAnalysisRetry(attemptsBefore: number, reason: AnalysisRetryReason, now = new Date()) {
   if (PROVIDER_WIDE_REASONS.has(reason)) return { attempts: attemptsBefore, reason, held: false, nextRetryAt: null, updatedAt: now };
