@@ -1,4 +1,6 @@
 import type { ProviderErrorCategory } from "./providerError.js";
+// "research_summary" is retained only so historical usage-ledger rows from the
+// removed 증권사 리포트 feature still parse/label; nothing records it anymore.
 /** A paid attempt, not a feed item. Missing provider usage is never treated as zero. */
 export const LLM_USAGE_STAGES = ["filter", "whole_reading", "digest_map", "digest_final", "digest_fallback", "feedback", "deep_analysis", "research_summary", "unknown"] as const;
 export type LlmUsageStage = typeof LLM_USAGE_STAGES[number];

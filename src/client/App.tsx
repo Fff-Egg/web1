@@ -8,10 +8,9 @@ import { ArchivePage } from "./pages/ArchivePage.js";
 import { DigestPage } from "./pages/DigestPage.js";
 import { ManualPage } from "./pages/ManualPage.js";
 import { MarketPage } from "./pages/MarketPage.js";
-import { ResearchPage } from "./pages/ResearchPage.js";
 import { ThesisMapPage } from "./pages/ThesisMapPage.js";
 
-type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "settings" | "research" | "thesis";
+type Tab = "market" | "digest" | "feed" | "archive" | "analyze" | "sources" | "settings" | "thesis";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "market", label: "시황분석" },
@@ -21,7 +20,6 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "analyze", label: "분석(수동)" },
   { id: "sources", label: "Sources" },
   { id: "settings", label: "Settings" },
-  { id: "research", label: "리포트" },
   { id: "thesis", label: "논지 지도" },
 ];
 
@@ -105,7 +103,6 @@ export function App() {
       {tab === "analyze" && <ManualPage />}
       {tab === "sources" && <SourcesPage />}
       {tab === "settings" && <SettingsPage />}
-      {tab === "research" && <ResearchPage />}
       {tab === "thesis" && <ThesisMapPage />}
     </div>
   );

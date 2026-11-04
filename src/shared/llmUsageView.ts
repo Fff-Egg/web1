@@ -48,5 +48,7 @@ export function usageFailureLabel(row: { httpStatus: number | null; finishReason
 export const LLM_STAGE_LABELS: Record<string, string> = {
   filter: "글 선별", whole_reading: "전체 본문 구간 요약", digest_map: "보고서 자료 정리",
   digest_final: "최종 보고서", digest_fallback: "실패 후 대체 작성", feedback: "학습 메모",
-  deep_analysis: "개별 심층 분석", research_summary: "증권사 리포트 요약", unknown: "기타",
+  deep_analysis: "개별 심층 분석",
+  // research_summary: 증권사 리포트 기능 제거됨 — 과거 사용량 기록 표시용으로만 유지.
+  research_summary: "증권사 리포트 요약", unknown: "기타",
 };

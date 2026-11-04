@@ -14,11 +14,11 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - **프론트**: React 19 · Vite 6 · Tailwind 3 · tRPC 11 클라이언트 + react-query 5 + superjson
 - **백엔드**: Express 4 · @trpc/server · Drizzle ORM · MySQL(mysql2, UTC 고정) · tsx 런타임 · ESM
 - **LLM**: DeepSeek(OpenAI 호환, `LLM_BASE_URL`/`LLM_API_KEY`) — `complete()` 헬퍼로 추상화, Anthropic SDK 폴백
-- **스케줄**: node-cron(Asia/Seoul) — 수집 인터벌 + 다이제스트/시황/리포트 크론 + 부팅 캐치업
+- **스케줄**: node-cron(Asia/Seoul) — 수집 인터벌 + 다이제스트/시황 크론 + 부팅 캐치업
 - **소스 수집**: twitter-scraper(X 쿠키) · gramjs(텔레그램 MTProto) · ws(TradingView) · rss-parser · playwright · marked(다이제스트 렌더)
 - **배포**: Railway(앱 web1 + MySQL). `start = db:migrate && tsx src/server/index.ts`. `claude/focused-planck-m3wgbz` 푸시 = 자동 재배포. 사용자 요청에 따라 이후 코드 변경과 인수인계 기록도 이 브랜치에 함께 커밋·푸시한다. 아웃바운드 개방(외부 수집은 프로덕션에서만).
 
-**규모**: 9개 사용자 탭(휴지통은 Feed 하위 탭) · 8개 소스 어댑터 · 8개 tRPC 라우터 · DB 마이그레이션 0000~0017(18개).
+**규모**: 8개 사용자 탭(휴지통은 Feed 하위 탭; 증권사 리포트 탭은 2026-11-04 사용자 요청으로 제거) · 8개 소스 어댑터 · 7개 tRPC 라우터 · DB 마이그레이션 0000~0017(18개).
 
 ---
 
@@ -83,7 +83,7 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 **분석 (수동)** (`ManualPage.tsx`) — API 키 없이 Claude Max로
 - pending 글을 소스별 그룹핑. '복사'로 지침+본문 프롬프트를 클립보드에 → claude.ai 붙여넣기 → 돌아온 JSON을 붙여 '저장'하면 파싱돼 Feed/Digest 반영. 건너뛰기·미리보기.
 
-### 관리 · 애그리게이터 (4개 탭)
+### 관리 · 논지 (3개 탭)
 
 **Sources** (`SourcesPage.tsx`)
 - 소스 추가(프로바이더·식별자·라벨)/토글/편집/삭제 + 소스별 '지금 수집'(즉시 fetch 테스트, 결과 인라인).
@@ -97,11 +97,6 @@ TypeScript 단일 리포의 **풀스택 모노리스**. React SPA 프론트 + Ex
 - 지침 4종 편집: `relevanceCriteria`(1차 필터) · `importanceCriteria`(중요/검토 분리) · `summaryInstructions`(요약) · `digestInstructions`(2차 다이제스트).
 - 고급(접힘): DEEP_ANALYSIS 지침 · 1차 글 선별 / 다이제스트 자료 정리 / 최종 연결 모델을 독립 설정. 현재 서버의 실제 모델 흐름과 Settings·Railway 우선순위 표시.
 - **학습 메모(자동)**: 피드백으로 매일 distill되는 중요도 메모 보기·편집·비우기(`settings.filterGuidance`, `importanceCriteria`와 별개).
-
-**리포트** (`ResearchPage.tsx`) — 증권사 리포트 애그리게이터
-- 오늘 올라온 기업·산업 리포트를 카테고리별로(네이버 + 한경 병합, 출처 배지). 헤드라인·한 줄 요약·목표가·의견·시총.
-- 5영업일 커버리지 ≥5회=주요종목, 직전 대비 TP상향=티어업. 날짜 선택·지금 수집.
-- ⚠️ 파서는 Railway 실검증 대기(샌드박스 egress 차단).
 
 **논지 지도** (`ThesisMapPage.tsx`) — 투자 논지 추적
 - 스레드(A~E) 카드: 코드 배지·한줄 명제·7일 verdict 집계(강화/약화/반증/중립)·net 추세 화살표·마지막 신호일. 30일 반증>0이면 빨강 경고.
@@ -186,33 +181,32 @@ MEGA 배지  = VIX ≥ 40
 
 ## 7. 데이터 모델 · tRPC · 배포
 
-**tRPC 라우터 8개**: sources · settings · feed · digest · manual · market · research · thesis. (`initTRPC.context().create({transformer: superjson})`)
+**tRPC 라우터 7개**: sources · settings · feed · digest · manual · market · thesis. (`initTRPC.context().create({transformer: superjson})`)
 
 **DB 테이블** (`db/schema.ts`):
-- `sources` · `articles`(soft-delete deletedAt · tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText/tickers/themes/impact) · `digests`(periodStart/End · meta · slot) · `settings`(key/value JSON KV — 지침·filterGuidance·marketSnapshot 등) · `filter_feedback` · `research_reports` · `threads`+`signals`(논지지도, signals unique(article_id,thread_id), thread_id NULL=신규후보)
+- `sources` · `articles`(soft-delete deletedAt · tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText/tickers/themes/impact) · `digests`(periodStart/End · meta · slot) · `settings`(key/value JSON KV — 지침·filterGuidance·marketSnapshot 등) · `filter_feedback` · `research_reports`(미사용, 기능 제거됨 — 테이블만 남김) · `threads`+`signals`(논지지도, signals unique(article_id,thread_id), thread_id NULL=신규후보)
 - `llm_usage`(호출별 단계·실제 모델/Thinking·확보한 토큰·성공/실패·안전한 제공자 오류 분류/파라미터명) · `analysis_retries`(글별 본문/설정 지문·실패 횟수·다음 재시도·보류·선별 보정 여부). 전체 분석 대기는 `settings.analysisRetryPause`, 구간별 분할·복구 정책/보류는 `articles.readingCache.recovery`에 저장한다. 오류 원문·프롬프트·본문·키는 사용량에 기록하지 않는다.
 
 **마이그레이션**(수동 작성 — drizzle-kit generate는 대화형이라 이 환경서 막힘):
-0000 초기 · 0001 settings · 0002 full_text · 0003 trash+digest 기간화 · 0004 low_priority · 0005 saved · 0006 text→mediumtext · 0007 filter_feedback · 0008 research_reports · 0009 research summary/marketCap · 0010 thesis_map · 0011 source_review · 0012 원문확인 재분류 · 0013 실질 정보 중요도 복구 · 0014 전체 본문/읽기 캐시 · 0015 LLM 사용량 · 0016 분석 재시도 · 0017 제공자 오류 안전 분류. 컬럼 추가는 nullable/default로.
+0000 초기 · 0001 settings · 0002 full_text · 0003 trash+digest 기간화 · 0004 low_priority · 0005 saved · 0006 text→mediumtext · 0007 filter_feedback · 0008 research_reports · 0009 research summary/marketCap(둘 다 미사용, 기능 제거됨) · 0010 thesis_map · 0011 source_review · 0012 원문확인 재분류 · 0013 실질 정보 중요도 복구 · 0014 전체 본문/읽기 캐시 · 0015 LLM 사용량 · 0016 분석 재시도 · 0017 제공자 오류 안전 분류. 컬럼 추가는 nullable/default로.
 
-**주요 env**: `DATABASE_URL`, `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`, `X_AUTH_TOKEN/X_CT0`, `TELEGRAM_API_ID/HASH/SESSION`, `DIGEST_HOUR`(7)/`DIGEST_MIDDAY_HOUR`(17), `COLLECT_INTERVAL_MIN`, `MARKET_HOUR`(7)/`RESEARCH_HOUR`(8), `ANALYZE_BATCH/CONCURRENCY`, `DIGEST_MAX_TOKENS` 등.
+**주요 env**: `DATABASE_URL`, `LLM_BASE_URL/LLM_API_KEY/LLM_MODEL`, `X_AUTH_TOKEN/X_CT0`, `TELEGRAM_API_ID/HASH/SESSION`, `DIGEST_HOUR`(7)/`DIGEST_MIDDAY_HOUR`(17), `COLLECT_INTERVAL_MIN`, `MARKET_HOUR`(7), `ANALYZE_BATCH/CONCURRENCY`, `DIGEST_MAX_TOKENS` 등.
 
 ---
 
 ## 8. 파일 지도 (어디에 뭐가 있나)
 
 ```
-src/client/pages/     — 14개 페이지·컴포넌트 (10 탭 + 차트 3개 + 계산 모듈 kfear.ts/usEntry.ts)
+src/client/pages/     — 13개 페이지·컴포넌트 (9 탭 + 차트 3개 + 계산 모듈 kfear.ts/usEntry.ts)
 src/client/data/client.ts — tRPC 래퍼(DataApi) + 정적 데모 스텁
 src/server/adapters/  — 소스 어댑터 8종 + registry
 src/server/analysis/  — analyze.ts(1차 분석) · anthropic.ts(LLM) · feedback.ts(학습)
 src/server/digest/    — digest.ts(맵리듀스·각주·2슬롯)
 src/server/market/    — tradingview/cnn/adr/credit/forcedLiq/liquidity/koreaIndexes/usEntry/anchors
-src/server/research/  — naver.ts · hankyung.ts · index.ts
 src/server/repo/      — thesis.ts 등 저장소 레이어
-src/server/trpc/routers/ — 8개 라우터
+src/server/trpc/routers/ — 7개 라우터
 src/server/scheduler.ts  — node-cron 오케스트레이션
-src/shared/           — analysis.ts(지침 기본값·프롬프트) · market.ts · providers.ts · research.ts
+src/shared/           — analysis.ts(지침 기본값·프롬프트) · market.ts · providers.ts
 drizzle/              — 0000~0017 마이그레이션 SQL
 CLAUDE.md             — 전체 인수인계(가장 상세)
 ```
@@ -223,7 +217,7 @@ CLAUDE.md             — 전체 인수인계(가장 상세)
 
 - **다이제스트 텔레그램 전송** 미구현(계획됨).
 - **논지 지도 = changelog 다이제스트**(움직인 논지만) 미구현 · Feed 카드 스레드 배지 미구현.
-- **리포트·시황 파서**는 Railway(아웃바운드 개방)에서만 실동작 — 샌드박스는 외부 호스트 차단.
+- **시황 파서**는 Railway(아웃바운드 개방)에서만 실동작 — 샌드박스는 외부 호스트 차단.
 - 시황: 과거 신호 성적표(2020~ 백테스트) · US 진입 상태전이 텔레그램 알림 미구현.
 - 다이제스트 각주 ↩ 복귀가 간헐적(react-query background refetch 관련, CLAUDE.md '알려진 버그' 참조).
 - 신호 시스템은 소표본 백테스트 기반 — 계수 수치는 방향성만 신뢰.

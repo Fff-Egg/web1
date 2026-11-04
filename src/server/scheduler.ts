@@ -22,7 +22,6 @@ import { db, hasDb } from "./db/client.js";
 import { settings } from "./db/schema.js";
 import { hasLLM } from "./analysis/anthropic.js";
 import { getStoredSnapshot, refreshMarketSnapshot } from "./market/index.js";
-import { collectResearch, researchLastCollectedAt } from "./research/index.js";
 
 let analysisTask: Promise<void> | null = null;
 
@@ -180,16 +179,6 @@ async function runMarketRoutine(): Promise<void> {
   }
 }
 
-/** 리포트 daily batch: collect recent 증권사 리포트 from 한경 컨센서스 and upsert. */
-async function runResearchRoutine(): Promise<void> {
-  try {
-    const r = await collectResearch();
-    console.log(`[scheduler] research: inserted=${r.inserted}${r.error ? ` error="${r.error}"` : ""}`);
-  } catch (err) {
-    console.error("[scheduler] research collect failed:", err);
-  }
-}
-
 /**
  * Background schedulers. Phase 1 wires the collection loop. The analysis
  * pipeline (Phase 3) and the evening digest cron (Phase 4) hook in here.
@@ -276,21 +265,4 @@ export function startSchedulers(): void {
     }
   })();
 
-  // 리포트 (증권사 리포트) daily batch (KST). Reports post pre-market; one morning
-  // run + boot catch-up if stale (>12h). Intraday updates come via the 지금 수집 button.
-  const researchHour = Number(process.env.RESEARCH_HOUR ?? 8);
-  cron.schedule(`0 ${researchHour} * * *`, () => void runResearchRoutine(), { timezone: "Asia/Seoul" });
-  console.log(`[scheduler] research reports cron at ${researchHour}:00 KST`);
-  void (async () => {
-    try {
-      const last = await researchLastCollectedAt();
-      const ageMs = last ? Date.now() - new Date(last).getTime() : Infinity;
-      if (ageMs > 12 * 60 * 60_000) {
-        console.log("[scheduler] research reports stale/missing on boot — collecting now.");
-        await runResearchRoutine();
-      }
-    } catch (err) {
-      console.error("[scheduler] research boot check failed:", err);
-    }
-  })();
 }

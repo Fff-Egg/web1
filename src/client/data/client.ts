@@ -9,7 +9,6 @@ import type { ThreadWithStats as ThreadRow, SignalRow } from "../../server/repo/
 import { DEFAULT_ANALYSIS_CONFIG } from "../../shared/analysis.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import type { MarketSnapshot, OHLC, Timeframe } from "../../shared/market.js";
-import type { ResearchList } from "../../shared/research.js";
 import type { ArticleContentMeta } from "../../shared/articleContent.js";
 import type { BoundaryRun } from "../../shared/boundaryRun.js";
 import type { ManualDigestRun } from "../../shared/manualDigestRun.js";
@@ -21,7 +20,6 @@ import type { runArticleAnalysis } from "../../server/analysis/analyze.js";
 
 export type { AnalysisConfig, Verdict, Tier };
 export type { MarketSnapshot, OHLC, Timeframe };
-export type { ResearchList } from "../../shared/research.js";
 
 export interface CandlesResponse {
   symbol: string;
@@ -225,10 +223,6 @@ export interface DataApi {
   setMarketSymbol(symbol: string): Promise<MarketSnapshot>;
   /** Live OHLC candles for the custom slot at a timeframe. */
   marketCandles(symbol: string, timeframe: Timeframe): Promise<CandlesResponse>;
-  /** 리포트: broker-research board for a 작성일 (default = latest). */
-  researchList(date?: string): Promise<ResearchList>;
-  /** Force-collect today's reports from 한경 컨센서스, return the fresh board. */
-  researchRefresh(date?: string): Promise<ResearchList>;
   // 논지 지도(Thesis Map)
   listThreads(includeArchived?: boolean): Promise<ThreadRow[]>;
   createThread(input: CreateThreadInput): Promise<{ id: number }>;
@@ -385,8 +379,6 @@ function makeTrpcApi(): DataApi {
     setMarketSymbol: (symbol) => client.market.setSymbol.mutate({ symbol }) as Promise<MarketSnapshot>,
     marketCandles: (symbol, timeframe) =>
       client.market.candles.query({ symbol, timeframe }) as Promise<CandlesResponse>,
-    researchList: (date) => client.research.list.query({ date }) as Promise<ResearchList>,
-    researchRefresh: (date) => client.research.refresh.mutate({ date }) as Promise<ResearchList>,
     listThreads: (includeArchived) =>
       client.thesis.threads.query({ includeArchived: includeArchived ?? false }) as Promise<ThreadRow[]>,
     createThread: (input) => client.thesis.createThread.mutate(input),
@@ -686,12 +678,6 @@ function makeStaticApi(): DataApi {
       });
       return { symbol: symbol.toUpperCase(), name: symbol.toUpperCase(), timeframe, candles };
     },
-    async researchList() {
-      return SAMPLE_RESEARCH;
-    },
-    async researchRefresh() {
-      return { ...SAMPLE_RESEARCH, collectedAt: new Date().toISOString() };
-    },
     // 논지 지도 — demo: read-only sample, mutations are no-ops.
     async listThreads() {
       return SAMPLE_THREADS;
@@ -771,20 +757,6 @@ const SAMPLE_MARKET: MarketSnapshot = {
     vvix: sampleSeries(100, 20),
   },
   errors: [],
-};
-
-const SAMPLE_RESEARCH: ResearchList = {
-  date: "2026-06-20",
-  dates: ["2026-06-20", "2026-06-19", "2026-06-18"],
-  collectedAt: new Date().toISOString(),
-  error: null,
-  reports: [
-    { id: 1, source: "naver", reportDate: "2026-06-20", category: "기업", title: "삼성전자 - HBM4 양산 가시화, 실적 모멘텀 회복", summary: "HBM4 양산이 앞당겨지며 메모리 실적 모멘텀이 회복, 목표주가 상향.", marketCap: 5134567e8, stockName: "삼성전자", stockCode: "005930", targetPrice: "95,000", opinion: "매수", broker: "미래에셋증권", pdfUrl: "https://example.com/r1.pdf", coverageCount: 7, isMajor: true, tpRaised: true },
-    { id: 2, source: "hankyung", reportDate: "2026-06-20", category: "기업", title: "SK하이닉스 - DRAM 가격 반등 본격화", summary: null, marketCap: 1623400e8, stockName: "SK하이닉스", stockCode: "000660", targetPrice: "240,000", opinion: "매수", broker: "한국투자증권", pdfUrl: "https://example.com/r2.pdf", coverageCount: 5, isMajor: true, tpRaised: false },
-    { id: 3, source: "naver", reportDate: "2026-06-20", category: "기업", title: "현대차 - 하반기 신차 사이클 점검", summary: "하반기 신차 출시로 믹스 개선 기대, 단 환율 변동성은 부담.", marketCap: 543000e8, stockName: "현대차", stockCode: "005380", targetPrice: "270,000", opinion: "매수", broker: "NH투자증권", pdfUrl: "https://example.com/r3.pdf", coverageCount: 2, isMajor: false, tpRaised: false },
-    { id: 4, source: "naver", reportDate: "2026-06-20", category: "산업", title: "반도체 - 메모리 업황 회복 사이클 진입", summary: "감산 효과와 AI 수요로 메모리 업황이 회복 사이클에 진입.", marketCap: null, stockName: null, stockCode: null, targetPrice: null, opinion: null, broker: "키움증권", pdfUrl: "https://example.com/r4.pdf", coverageCount: 0, isMajor: false, tpRaised: false },
-    { id: 5, source: "hankyung", reportDate: "2026-06-20", category: "산업", title: "2차전지 - 수요 둔화 우려 점검", summary: null, marketCap: null, stockName: null, stockCode: null, targetPrice: null, opinion: null, broker: "대신증권", pdfUrl: "https://example.com/r5.pdf", coverageCount: 0, isMajor: false, tpRaised: false },
-  ],
 };
 
 const SAMPLE_THREADS: ThreadRow[] = [

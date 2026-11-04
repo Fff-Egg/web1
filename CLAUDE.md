@@ -16,8 +16,10 @@
 - **피크 대기**(`ANALYSIS_AVOID_PEAK`, DeepSeek 혼잡 단가 회피)는 **선별 모델이 DeepSeek일 때만** 적용 — `schedule.ts`의 `refreshAnalysisFilterProviderHint()`가 저장 설정을 읽어 갱신(배치 시작·설정 저장·부팅·스케줄 조회 시).
 - **설정**: `AnalysisConfig`에 `filterEffort`·`digestMapEffort`·`digestFinalEffort`(JSON, 마이그레이션 없음). 자료 정리 모델이 비면 선별 모델을 상속하듯 **강도도 선별 강도를 상속**(`mapStageEffort`). 모델 목록·단가·강도 = `src/shared/llmModels.ts`(Opus 5.5 기본 medium, Sonnet 5.5 high, Haiku 5.5 medium, Fable 5.1 high). Settings → 고급: 모델 3칸이 **드롭다운**(Claude/DeepSeek 그룹), 그 아래는 Claude면 **추론 강도**, DeepSeek면 기존 Thinking ON/OFF. 적용 흐름 카드에 단계별 공급자·강도 표시.
 - **사용량 카드**: Claude 행은 모델별 정가(`claudeCostUsd`, `usageEstimate`)로 추정, **최근 기록 → 30일 환산 / 월 $200** 막대(초과 예상 시 경고). 실제 잔액은 Console Billing/Cost.
-- **비용 감각(추정, 미측정)**: DeepSeek 하루 ~$0.5와 같은 토큰량이면 Sonnet 선별 월 ~$150~185 + Opus 보고서 월 ~$30~40 ≈ $200 경계. 사용자에게 품질 대비 효율 순서로 "선별 Haiku → 자료 정리 Sonnet → 최종 Fable/Opus"도 권했음(자료 정리 모델이 큰 창에서 최종 모델의 실제 입력이고, 긴 글 구간 읽기에도 쓰임). 리포트 요약(`research_summary`)은 env `FILTER_MODEL` 기본값 그대로(하루 최대 160건이라 Sonnet이면 비쌈) — DeepSeek 설정 시 DeepSeek로 계속 감.
+- **비용 감각(추정, 미측정)**: DeepSeek 하루 ~$0.5와 같은 토큰량이면 Sonnet 선별 월 ~$150~185 + Opus 보고서 월 ~$30~40 ≈ $200 경계. 사용자에게 품질 대비 효율 순서로 "선별 Haiku → 자료 정리 Sonnet → 최종 Fable/Opus"도 권했음(자료 정리 모델이 큰 창에서 최종 모델의 실제 입력이고, 긴 글 구간 읽기에도 쓰임).
+- **증권사 리포트 기능 제거**: 사용자 요청으로 「리포트」 탭·수집기(`src/server/research/`)·`research` tRPC 라우터·`RESEARCH_HOUR` 크론·`shared/research.ts`를 삭제했다. 따라서 `research_summary` LLM 호출도 더 이상 없다. `research_reports` 테이블(0008/0009)은 DROP 마이그레이션 없이 DB에 미사용으로 남는다(데이터 파괴 없음). 사용량 단계 값 `research_summary`와 라벨은 과거 사용량 기록 표시용으로만 유지한다.
 - **검증**: 신규 `tests/claudeProvider.test.ts` 11개(라우팅, 요청 본문, Haiku 대체 미전송, max_tokens/refusal/빈 응답, 잔액 부족 6시간 대기, 최종 토큰, 강도 상속, 단가, 피크 대기) 포함 전체 **284/284**, 타입 검사·빌드 통과. 정적 데모 화면에서 드롭다운·강도 전환 확인. **실제 Claude API 호출은 하지 않음**(키 없음).
+- **월 비용 추정(2026-11-04 워크플로: 상향식·하향식 독립 추정 + 반박 검토, 실측 아님)**: 선별 Haiku 5.5(medium) + 자료 정리 Sonnet 5.5(**medium 직접 저장**) + 최종 Opus 5.5(medium) ≈ 월 **$60 / 가능성 높음 $180 / $480**(낮음/중간/높음) — $200 판정 "불확실"(여유 ~$20). 같은 구성에 최종 Fable 5.1(high) ≈ $85 / $245 / $600 — "넘을 가능성 높음". 비용의 70~75%는 자료 정리 Sonnet(whole_reading + digest_map; 맵이 중요 글 본문 전체를 다시 읽고 묶음 수 = max(건수/30, 글자/45,000) ≈ 하루 20~25). ⚠ 자료 정리 모델을 지정하고 강도를 비우면 Sonnet API 기본값 **high**가 적용돼 중간값 ~$225로 넘음. 전환 첫 1~2일은 모델이 읽기 캐시 키에 들어가 장문이 한 번 다시 읽혀 30일 환산이 과대. 최대 절감 수단 후보(미구현): 전체 읽기(whole_reading)만 Haiku로 분리(월 ~$50~60 절감).
 - **사용자 남은 작업**: ① claude.ai 설정→결제→API credits에서 Console 조직 연결(플랜 7일 후) ② Console에서 API 키 발급 ③ Railway `ANTHROPIC_API_KEY` 추가 ④ Settings → 고급에서 모델·강도 선택 후 저장 ⑤ 사용량 카드의 `1건 다시 분석`으로 1회 검증 ⑥ 다이제스트 수동 생성 ⑦ Console Cost와 앱 추정 비교. 전환 후 미완료 전체 읽기 캐시는 모델이 키에 포함돼 1회 새로 읽음.
 
 ## 최신 인수인계 — 2026-09-22 참고 링크 3개 초과 시 연결 자료 생략
@@ -159,7 +161,7 @@
           → 클라 계산(K-공포지수 · US 진입신호) · 지표 카드
 ```
 
-**10개 탭** (`src/client/App.tsx` + `src/client/pages/`):
+**8개 탭** (`src/client/App.tsx` + `src/client/pages/`):
 | 탭 | 역할 |
 |---|---|
 | **시황분석** | 시장지표 9카드 + K-공포지수 + US 진입신호 (앱에서 가장 큰 기능 → 아래 §탭 구성) |
@@ -168,20 +170,19 @@
 | **보관함** | 저장·텔레그램 persistent 버킷 |
 | **분석(수동)** | API키 없이 Claude Max 붙여넣기 분석 |
 | **Sources** | 수집 소스 CRUD·'지금 수집'·피드 자동탐지 |
-| **휴지통** | soft-delete 복원/영구삭제(tombstone) |
+| **휴지통** | (Feed 하위 탭) soft-delete 복원/영구삭제(tombstone) |
 | **Settings** | 1·2차 분석 지침 + 자동 '학습 메모' |
-| **리포트** | 증권사 리포트 애그리게이터(커버리지·TP상향 티어) |
 | **논지 지도** | 투자 논지 스레드에 1차분석이 자동 기록한 신호 집계 |
 
 **핵심 DB 테이블** (`db/schema.ts`, 마이그레이션 0000~0010, **수동 작성**): `sources` · `articles`(soft-delete
 deletedAt·tombstone) · `analyses`(relevant/lowPriority/saved/summary/fullText) · `digests`(period·slot) ·
-`settings`(KV — 지침·filterGuidance·marketSnapshot) · `filter_feedback` · `research_reports` ·
+`settings`(KV — 지침·filterGuidance·marketSnapshot) · `filter_feedback` · `research_reports`(미사용, 기능 제거됨) ·
 `threads`+`signals`(논지지도).
 
 **파일 지도**: `src/client/pages/`(14 페이지+차트 3개+계산모듈 `kfear.ts`/`usEntry.ts`) ·
 `src/client/data/client.ts`(tRPC 래퍼) · `src/server/adapters/`(소스 8종+registry) ·
-`src/server/{analysis,digest,market,research,repo,trpc,scheduler.ts}` · `src/shared/`(지침 기본값·타입·providers) ·
-`drizzle/`(마이그레이션). tRPC 라우터 8개: sources·settings·feed·digest·manual·market·research·thesis.
+`src/server/{analysis,digest,market,repo,trpc,scheduler.ts}` · `src/shared/`(지침 기본값·타입·providers) ·
+`drizzle/`(마이그레이션). tRPC 라우터 7개: sources·settings·feed·digest·manual·market·thesis.
 
 **이 문서 나머지 읽는 법**: 배포/env=§실행 환경, 콘텐츠 파이프라인 상세=§파이프라인, 시황분석(K-공포 v5·US
 진입·데이터 정합성 앵커)=§탭 구성 안 큰 문단, 다이제스트 각주 버그 등=§알려진 버그, 다음 할 일=맨 아래 §방향.
@@ -229,13 +230,13 @@ generic_rss(피드 URL 또는 **홈페이지 URL도 허용** — 백그라운드
 ## 마이그레이션 (중요)
 - `drizzle-kit generate`는 **대화형이라 이 환경에서 막힘**. 마이그레이션은 **수동 작성**:
   `drizzle/00XX_name.sql` + `drizzle/meta/_journal.json`에 엔트리 추가(idx/tag/when). 컬럼 추가는 nullable 또는 default로(기존행 보호).
-- 현재 0000~0010 (0006: markdown/body/full_text → mediumtext, 0007: `filter_feedback`, 0008: `research_reports`[리포트], 0009: research_reports에 summary/marketCap 추가, 0010: `threads`+`signals` 논지 지도).
+- 현재 0000~0010 (0006: markdown/body/full_text → mediumtext, 0007: `filter_feedback`, 0008: `research_reports`, 0009: research_reports에 summary/marketCap 추가 — research_reports(미사용, 기능 제거됨), 0010: `threads`+`signals` 논지 지도).
 
 ## 논지 지도(Thesis Map) — 구현됨 (1차 슬라이스)
 - **DB**(0010): `threads`(code·name·thesis 한줄·context·archived·sort) + `signals`(articleId FK·threadId FK nullable·candidate·verdict·tier·note, unique(articleId,threadId)). **threadId NULL = 신규 논지 후보(인박스)**, 그 제안명은 `candidate`에. verdict=`support/weaken/refute/neutral`(강화/약화/반증/중립), tier=`confirmed/mgmt/inference/speculation`(확정/경영진주장/추론/추측).
 - **1차 분석 통합**(`analysis/analyze.ts`): 활성 스레드 목록(`thesisRepo.listBrief`)을 **기존 1차 호출 system 프롬프트에 주입**(`threadsBlock`) → 출력 JSON에 `signals[]`+`newThread` 추가(`THESIS_OUTPUT`, **스레드 있을 때만**; 없으면 프롬프트·동작 그대로). **추가 LLM 호출 없음**. relevant 글만 `thesisRepo.storeSignals`로 저장(스레드 매핑은 id 우선·code 폴백, verdict/tier 한↔영 정규화, 알 수 없는 스레드 참조는 skip, newThread는 candidate 행). **관련성/요약 게이트 불변** — 신호는 부가 출력일 뿐.
 - **집계는 시스템**(`thesisRepo.listWithStats`): 스레드별 7/30일 verdict 카운트·총합·마지막 신호일(LLM 신뢰도 아님). 7일 net(강화−약화−반증) 화살표, 30일 반증>0이면 카드 상단 빨강 경고.
-- **탭 "논지 지도"**(`ThesisMapPage.tsx`, App **맨 오른쪽 탭**, 리포트 다음): 스레드 카드(코드 배지·명제·집계·추세, 펼치면 신호목록+원문/?article 링크·반증 위로 정렬), 스레드 CRUD/보관, **신규 논지 후보 인박스**(붙이기→assignSignal / 승격→promoteSignal / 버리기→dismiss), **A~E 시딩**(`thesis.seed`, 비어있을 때만). tRPC `thesis` 라우터 + `data/client.ts` 메서드. 정적 데모는 샘플/무동작 스텁.
+- **탭 "논지 지도"**(`ThesisMapPage.tsx`, App **맨 오른쪽 탭**, Settings 다음): 스레드 카드(코드 배지·명제·집계·추세, 펼치면 신호목록+원문/?article 링크·반증 위로 정렬), 스레드 CRUD/보관, **신규 논지 후보 인박스**(붙이기→assignSignal / 승격→promoteSignal / 버리기→dismiss), **A~E 시딩**(`thesis.seed`, 비어있을 때만). tRPC `thesis` 라우터 + `data/client.ts` 메서드. 정적 데모는 샘플/무동작 스텁.
 - **남은 것(다음 세션)**: ① 다이제스트 = changelog(움직인 논지만 + 스레드 밖 신호 한 줄 + 변동 없으면 "오늘 논지 변동 없음"), ② Feed 카드 스레드 배지(`A 강화`) — feed.list에 신호 조인 필요, ③ A~E 명제 실제 내용으로 사용자 편집, ④ '보관' 복구 UI(서버 setArchived(false)·includeArchived는 이미 지원, UI만 없음 — 보관하면 화면에서 못 봄; 사용자가 일단 그대로 두기로 함).
 
 ## 검증·배포
@@ -392,7 +393,7 @@ LLM엔 5000자만 씀 · 휴지통 자동 만료 없음 · `marketSnapshot` KV�
 `HISTORY_DAYS` 370→1825)인데 **응답 압축 미들웨어 없음**.
 
 ## 탭 구성 (`src/client/App.tsx`)
-순서(10개): **시황분석 / Daily Digest / Feed / 보관함 / 분석(수동) / Sources / 휴지통 / Settings / 리포트 / 논지 지도**.
+순서(8개): **시황분석 / Daily Digest / Feed / 보관함 / 분석(수동) / Sources / Settings / 논지 지도** (휴지통은 Feed 하위 탭). (증권사 「리포트」 탭은 2026-11-04 사용자 요청으로 제거)
 - **시황분석**(tab 1, `src/client/pages/MarketPage.tsx`): 시장 지표 대시보드 **✅ 구현 완료**. 하루 1회 배치 수집(기본 07시 KST `MARKET_HOUR`) → `settings` KV(`key="marketSnapshot"`, 마이그레이션 불필요)에 JSON 스냅샷 저장. tRPC `market.latest`(저장본)·`market.refresh`('지금 갱신' 버튼=즉시 재수집). 서버 수집기 = **`src/server/market/`**: `cnn.ts`/`tradingview.ts`/`adr.ts`/`index.ts`(병렬·소스별 tolerant — 한 곳 실패해도 나머지 진행, 실패는 `errors[]` 한국어 메모). 스케줄러(`scheduler.ts`)에 일일 크론 + **부팅 시 스냅샷 없거나 20h↑ 오래되면 즉시 수집**.
   - **S5FI / NDFI**(S&P500/나스닥100 50일선 위 비율, breadth) — **TradingView 쿼트 websocket**(`wss://data.tradingview.com/socket.io/websocket`, 심볼 `INDEX:S5FI`/`INDEX:NDFI`). ⚠️ scanner REST(`scanner.tradingview.com/.../scan`)는 이 심볼(barchart EOD) **0건 반환**이라 못 씀. ⚠️ ws 핸드셰이크에 **`Origin: https://www.tradingview.com` 헤더 필수**(없으면 non-101 거부) → native WebSocket 불가, **`ws` 라이브러리 사용**(deps에 추가함). `update_mode=endofday`(미국 장마감 후 확정). 값=`lp`, 변화=`ch`/`chp`.
   - **CNN Fear & Greed** — JSON `https://production.dataviz.cnn.io/index/fearandgreed/graphdata`. ⚠️ **브라우저 UA + `Origin/Referer: edition.cnn.com` 헤더 필수**(없으면 418 "I'm a teapot. You're a bot."). `fear_and_greed.{score,rating,previous_close,previous_1_week/month/year}`.
@@ -409,10 +410,6 @@ LLM엔 5000자만 씀 · 휴지통 자동 만료 없음 · `marketSnapshot` KV�
     - **VVIX 단기 반등 확인(보조 신호) ✅ 구현 완료**(US 진입신호 카드 안 Tier 사다리 아래 `ReboundBlock`, 계산 `computeVvixRebound`): **최근 3거래일 VVIX≥140 AND 오늘 VIX<전일 VIX** → `CONFIRMED`(그 외 `PANIC`/`IDLE`/`UNAVAILABLE`). **Tier·fired·state·sizing에 일절 영향 없음**(진입 규모가 아니라 "공포가 진정되기 시작했나"만 관찰, 1주~1개월 전용). ⚠️**`computeUsEntry` 밖의 독립 순수함수**여야 함 — 안에 넣으면 VIX3M 실패 시 조기 `return EMPTY`에 걸려 VVIX 카드까지 죽는다(+`EMPTY`는 모듈 공유 객체라 mutate 금지). **판정 행 = `VVIX ∩ VIX` UTC dayKey 정확 조인**(ffill 금지, VIX3M/TERM과 독립) — `TVC:VIX`에 미국 휴장일 유령봉 22개(5년)가 있어 raw VIX로 cooling을 재면 증시 닫힌 날이 하락으로 잡힘(실측). 심볼 `CBOE:VVIX`(폴백 bare `VVIX`) — ⚠️**`TVC:VVIX`·`FRED:VVIXCLS`는 존재하지 않음**(실측 n=0), 폴백에 넣지 말 것. 구멍/stale 방어(`VVIX_LOOKBACK_CAL_DAYS=10`·`VVIX_STALE_TD=3`)로 `carryForwardEmpty`가 되살린 묵은 VVIX × 오늘 VIX 조합 차단. 성과는 **전체표본(2007~ n=14)과 앱 창(2021~ n=5, 재현 검증) 병기** — 전체표본 최악값 4개가 전부 앱 창에서 나와 좋은 성과는 대부분 창 밖. 앵커 `VVIX_REBOUND_ANCHORS` 5건(`verifyVvixAnchors`, 파이프라인 회귀 감지용이지 백테스트 증명 아님). 면책: 140은 절대수준이라 2008 미포착·발동빈도 2020 이후 급증(non-stationary)·채택 규칙도 동일 탐색 산물이라 상방 편향. 상세 = `docs/fear-indicators.md` §2-J.
   - ▶ **남은 개선(선택)**: 장중 ADR 더 자주(추가 크론), 기간 토글(1M/3M/1Y), F&G 색구간 배경, 다이제스트에 시황 한 줄 등.
   - **코스피/코스닥 신용잔고 카드 ✅ 구현 완료**: `src/server/market/credit.ts` = KOFIA FreeSIS `getMetaDataList.do`(service STATSCU0100000070, OBJ_NM=`STATSCU0100000070BO`, 일별). **컬럼(실화면 대조로 확정)**: TMPV2/3/4=신용거래융자 전체/유가/코스닥(=이게 "신용잔고"), TMPV5/6/7=신용거래대주 전체/유가/코스닥, TMPV8=청약자금대출, TMPV9=예탁증권담보융자. ⚠️**단위 함정**: 게이트웨이가 모든 잔고를 **실제 원의 정확히 1/8**로 반환(전 컬럼·전 날짜 일관 — `tmpV40:"08"` 표시 파라미터 탓 추정). 2026-07-07 실화면 대조로 검증: TMPV3 3.634e12 ×8 = 29.07조 = 화면 유가증권. **`KOFIA_UNIT_FACTOR=8`로 ×8 보정 후 /1e12(=`TO_JO` 1.25e11로 나눔)**. `shared/market.ts` `credit:{kospi,kosdaq}`+`history.creditKospi/kosdaq`, `MarketPage`에 카드 2개(기준선 없음). Railway 실서버 동작.
-- **리포트**(tab 9, `src/client/pages/ResearchPage.tsx`): 증권사 리포트 애그리게이터 **✅ 구현 완료(파서는 Railway 실검증 대기)**. 오늘 올라온 **기업·산업 리포트만** 모아 카테고리별 정렬, 헤드라인+주요내용(LLM 한 줄 요약)+시총(현재가 아님)+TP·의견 표기. **5영업일 커버리지 카운트** → 5회↑=**주요종목**, 직전 대비 TP 상향=**TP상향종목** 티어업. **소스 2곳(네이버·한경 컨센서스) 병합 수집**, 각 리포트에 출처 배지(네이버 sky/한경 emerald) 표시.
-  - **서버 `src/server/research/`**: `naver.ts`(주 소스·양 많음, 기업 company_list+산업 industry_list, EUC-KR 디코드, 목록 파싱+상세 TP/의견/본문, `#_market_sum`으로 시총, externalId `nv:<nid>`) + `hankyung.ts`(consensus.hankyung.com/analysis/list, 목록 컬럼서 TP/의견, 기업·산업만, externalId `hk:<report_idx>`) + `index.ts`(`collectResearch` 둘 다 fetch→ALLOWED 필터→한경 종목코드를 네이버 이름→코드 맵으로 보강→네이버 기업 리포트 TP/의견/요약 enrich→시총 수집[최근 코드 MAX 250, mapLimit 4]→조건부 upsert; `listResearch(date?)`는 커버리지=distinct `broker|reportDate`[교차소스 dedup], TP상향=동일 브로커 직전 TP 비교, 티어 정렬). `types.ts` `ALLOWED_CATEGORIES=Set(기업,산업)`.
-  - **DB**: 마이그레이션 0008=`research_reports`, 0009=summary(text)/marketCap(bigint) 추가(논지지도는 0010). tRPC `research` 라우터(`list`/`refresh`). 스케줄러 일일 크론(`RESEARCH_HOUR` 기본 8시 KST) + 부팅 시 12h↑ 오래되면 즉시 수집. Sources 탭 아닌 리포트 탭 자체에 날짜 피커 + '지금 수집' 버튼. 정적 데모는 `SAMPLE_*` 스텁.
-  - ⚠️ **파서는 샌드박스 egress 차단(네이버/한경 호스트 blocked)이라 실검증 못 함** — Railway(아웃바운드 개방)에서만 동작. 배포 후 결과가 비거나 어긋나면 사용자가 실제 HTML 붙여주면 파서 튜닝. **양쪽 소스 같은 리포트는 지금 병합 안 함**(카드 2장) — 원하면 병합 가능.
 
 ## 방향·다음 작업 (대화 요약 — 인계)
 **문제의식**: 현재 구조(피드에 글 쌓고 훑고 지움)가 "신경 끄기" 목표를 재현. 사용자는 **하루 2~3회 다이제스트만** 보고 끝내고 싶어함. 놓침 불안은 필터로 거르지 말고 **다이제스트 "누락금지 규칙"**으로 해결.

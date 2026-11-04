@@ -5,7 +5,6 @@ import { feedRouter } from "./feed.js";
 import { digestRouter } from "./digest.js";
 import { manualRouter } from "./manual.js";
 import { marketRouter } from "./market.js";
-import { researchRouter } from "./research.js";
 import { thesisRouter } from "./thesis.js";
 
 export const appRouter = router({
@@ -16,7 +15,6 @@ export const appRouter = router({
   digest: digestRouter,
   manual: manualRouter,
   market: marketRouter,
-  research: researchRouter,
   thesis: thesisRouter,
 });
 
