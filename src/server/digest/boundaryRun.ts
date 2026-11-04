@@ -18,8 +18,8 @@ export function boundaryFailureMessage(error: unknown): string {
     cause = cause instanceof Error ? cause.cause : undefined;
   }
   const detail = chain.join("; ");
-  if (/\b402\b|insufficient.?balance|insufficient.?credit/i.test(detail)) {
-    return "API 제공자가 잔액 부족(402)을 응답했습니다. 연결된 API 계정에 충전이 반영됐는지 확인한 뒤 다시 실행하세요.";
+  if (/\b402\b|insufficient.?balance|insufficient.?credit|credit balance|\(balance\b/i.test(detail)) {
+    return "API 제공자가 잔액 부족(402)·크레딧 소진을 응답했습니다. Claude 월 크레딧은 다음 결제 주기에 다시 들어옵니다. 연결된 API 계정의 잔액을 확인한 뒤 다시 실행하세요.";
   }
   const messages = {
     authentication: "API 인증에 실패했습니다. 연결된 API 키와 계정 상태를 확인한 뒤 다시 실행하세요.",

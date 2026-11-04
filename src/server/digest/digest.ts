@@ -3,6 +3,7 @@ import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, digests } from "../db/schema.js";
 import type { AnalysisConfig } from "../db/schema.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
+import { mapStageEffort } from "../../shared/llmModels.js";
 import { settingsRepo } from "../repo/settings.js";
 import { prepareStoredArticle } from "../repo/articleContent.js";
 import { readWholeArticle } from "../analysis/fullReading.js";
@@ -444,7 +445,7 @@ const MAP_SYSTEM =
   "이 출력은 2단계 종합의 입력이 되므로, 의견 종합은 하지 말고 투자 판단에 쓰일 구체 정보(수치·이벤트·근거)를 보존하는 데 집중한다.";
 
 /** Map stage: partial-summarize each chunk (bounded concurrency), keeping global [N]s. */
-export async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"]): Promise<string[]> {
+export async function mapStage(rows: DigestItem[], chunks: number[][], model: string, trace: ModelTrace, configuredThinking?: AnalysisConfig["digestMapThinking"], configuredEffort?: AnalysisConfig["digestMapEffort"]): Promise<string[]> {
   const thinking = digestThinkingMode(model, "map", configuredThinking);
   const partials = new Array<string>(chunks.length);
   const failed: number[] = [];
@@ -459,6 +460,7 @@ export async function mapStage(rows: DigestItem[], chunks: number[][], model: st
           user: `전체 ${rows.length}건 중 이 묶음 ${chunks[ci].length}건:\n\n${body}`,
           maxTokens: thinkingTokenBudget(MAP_MAX_TOKENS(), thinking),
           thinking,
+          effort: configuredEffort,
         },
         { stage: "map", retryMaxTokens: thinkingTokenBudget(MAP_RETRY_TOKENS(), thinking) },
         trace,
@@ -630,6 +632,7 @@ async function synthesizeFromFeed(
         user,
         maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
         thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
+        effort: cfg.digestFinalEffort,
       },
       {
         stage: "final",
@@ -637,6 +640,7 @@ async function synthesizeFromFeed(
         fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
         fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
         retryPrimary: false,
+      fallbackEffort: mapStageEffort(cfg),
       },
       trace,
     );
@@ -644,7 +648,7 @@ async function synthesizeFromFeed(
     const chunks = packChunks(rows);
     console.log(`[digest] map-reduce: ${rows.length}건 → ${chunks.length}청크 (≤${MAP_MAX_ITEMS()}건/청크)`);
     await reportDigestProgress(`자료 정리 중입니다 (${rows.length}개 글, ${chunks.length}개 묶음).`);
-    const partials = await mapStage(rows, chunks, mapModel, trace, cfg.digestMapThinking);
+    const partials = await mapStage(rows, chunks, mapModel, trace, cfg.digestMapThinking, mapStageEffort(cfg));
     const user =
       `기간: ${startDate} ~ ${endDate}\n\n` +
       `1차로 선별된 글 ${rows.length}건을 1단계에서 글별로 압축 정리했다(글마다 전역 번호 [N]). ` +
@@ -658,6 +662,7 @@ async function synthesizeFromFeed(
         user,
         maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
         thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
+        effort: cfg.digestFinalEffort,
       },
       {
         stage: "final",
@@ -665,6 +670,7 @@ async function synthesizeFromFeed(
         fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
         fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
         retryPrimary: false,
+      fallbackEffort: mapStageEffort(cfg),
       },
       trace,
     );
@@ -687,7 +693,7 @@ async function synthesizeFromDigests(
     await reportDigestProgress(`저장된 보고서 전체 읽기 ${i + 1}/${src.length} (보고서 #${d.id})`);
     const original = stripDigestHtml(d.markdown);
     const reading = hasLLM() ? await readWholeArticle({ body: original, model: mapModel, runId: trace.runId,
-      thinking: cfg.digestMapThinking ?? "disabled", instructions: cfg.summaryInstructions }) : null;
+      thinking: cfg.digestMapThinking ?? "disabled", effort: mapStageEffort(cfg), instructions: cfg.summaryInstructions }) : null;
     inputs.push(`### 다이제스트 ${i + 1}: ${d.title ?? d.periodStart} (${d.periodStart} ~ ${d.periodEnd})\n${reading?.text ?? original}`);
   }
   const body = inputs.join("\n\n---\n\n");
@@ -709,6 +715,7 @@ async function synthesizeFromDigests(
       user,
       maxTokens: finalMaxTokens(finalModel, cfg.digestFinalThinking),
       thinking: digestThinkingMode(finalModel, "final", cfg.digestFinalThinking),
+      effort: cfg.digestFinalEffort,
     },
     {
       stage: "final",
@@ -716,6 +723,7 @@ async function synthesizeFromDigests(
       fallbackThinking: digestThinkingMode(mapModel, "map", cfg.digestMapThinking),
       fallbackMaxTokens: finalMaxTokens(mapModel, digestThinkingMode(mapModel, "map", cfg.digestMapThinking)),
       retryPrimary: false,
+      fallbackEffort: mapStageEffort(cfg),
     },
     trace,
   );

@@ -32,6 +32,7 @@ async function summarize(title: string, body: string): Promise<string | null> {
       user: `제목: ${title}\n\n페이지 내용:\n${body}`,
       maxTokens: 200,
       thinking: "disabled",
+      effort: "low",
     });
     const s = out.replace(/\s+/g, " ").trim();
     return s ? s.slice(0, 200) : null;

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { complete, resolveModel, supportsThinkingControl } from "./anthropic.js";
 import { thinkingTokenBudget } from "../../shared/deepseekModels.js";
+import type { ClaudeEffort } from "../../shared/llmModels.js";
 import { contentScope, splitWholeText, type ArticleContentMeta, type ReadingCache } from "../../shared/articleContent.js";
 import { isLlmOutputLimitError, WholeReadingHeldError } from "./llmErrors.js";
 
@@ -47,7 +48,7 @@ export function readCachedSourceNotes(body: string, cache?: ReadingCache | null)
 }
 
 export async function readWholeArticle(opts: {
-  body: string; meta?: ArticleContentMeta | null; model: string; thinking?: "enabled" | "disabled";
+  body: string; meta?: ArticleContentMeta | null; model: string; thinking?: "enabled" | "disabled"; effort?: ClaudeEffort;
   instructions?: string; cache?: ReadingCache | null;
   /** Consumer-specific completed-note budget. Raw sources still use the original 12k first-pass threshold. */
   packetBudget?: ReadingPacketBudget;
@@ -130,7 +131,7 @@ export async function readWholeArticle(opts: {
       }
       try {
         const target = Math.max(200, Math.min(1000, Math.floor(part.length / 5)));
-        const summary = (await (opts.invoke ?? complete)({ model, thinking, system,
+        const summary = (await (opts.invoke ?? complete)({ model, thinking, effort: opts.effort, system,
           usage: { stage: "whole_reading", articleId: opts.articleId, runId: opts.runId },
           user: `${heading}\n이 구간의 모든 사건·주장을 짧은 사실 항목으로 보존한다. 약 ${target}자를 목표로 반복 표현을 압축하되 서로 다른 사건·수치·조건·반론·끝부분 결론은 빼지 마라. 완전한 보고서를 쓰거나 새로운 인과 해석을 덧붙이지 마라.\n\n${part}`,
           maxTokens: thinkingTokenBudget(3200, thinking),
@@ -210,7 +211,7 @@ export async function readWholeArticle(opts: {
       let summary = cache.chunks[chunkKey];
       if (!summary) {
         try {
-          summary = (await (opts.invoke ?? complete)({ model, thinking, system: `${CONSOLIDATE_SYSTEM}\n수집 상태: ${scope}`,
+          summary = (await (opts.invoke ?? complete)({ model, thinking, effort: opts.effort, system: `${CONSOLIDATE_SYSTEM}\n수집 상태: ${scope}`,
             usage: { stage: "whole_reading", articleId: opts.articleId, runId: opts.runId },
             user: `전체 사실 메모 ${parts.length}개 구간 중 ${i + 1}번째. 입력 전체를 확인한 뒤 핵심 사실을 약 ${target}자 안팎으로 충분히 압축한다. 수치의 긴 나열은 핵심 변화·범위로 묶되 서로 다른 핵심 사건과 조건·반론은 남긴다.\n\n${part}`,
             maxTokens: thinkingTokenBudget(3200, thinking),

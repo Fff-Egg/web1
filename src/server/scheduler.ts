@@ -3,6 +3,7 @@ import { collectAll } from "./workers/collect.js";
 import { analysisBatchSize, runAnalysis } from "./analysis/analyze.js";
 import {
   isAutomaticAnalysisPeakAvoidanceEnabled,
+  refreshAnalysisFilterProviderHint,
   shouldDeferAutomaticAnalysis,
 } from "./analysis/schedule.js";
 import {
@@ -35,6 +36,7 @@ async function runScheduledAnalysis(opts: { drain?: boolean; reason: string }): 
     await analysisTask;
   }
   const task = (async () => {
+    await refreshAnalysisFilterProviderHint();
     const maxRounds = opts.drain
       ? Math.max(1, Number(process.env.ANALYSIS_DRAIN_MAX_ROUNDS ?? 20))
       : 1;
@@ -241,11 +243,15 @@ export function startSchedulers(): void {
 
     // Self-heal a missed digest on boot, but never create an expensive automatic
     // digest during peak. The 13시/19시 off-peak catch-up will retry it instead.
-    if (shouldDeferAutomaticAnalysis()) {
-      console.log("[scheduler] digest boot catch-up deferred until the next off-peak drain.");
-    } else {
-      void catchUpRoutines(digestHour);
-    }
+    // Load the saved filter model first: a Claude filter has no peak pricing.
+    void (async () => {
+      await refreshAnalysisFilterProviderHint();
+      if (shouldDeferAutomaticAnalysis()) {
+        console.log("[scheduler] digest boot catch-up deferred until the next off-peak drain.");
+      } else {
+        void catchUpRoutines(digestHour);
+      }
+    })();
   } else {
     console.log("[scheduler] automatic peak-price avoidance disabled (ANALYSIS_AVOID_PEAK=0).");
     void catchUpRoutines(digestHour);

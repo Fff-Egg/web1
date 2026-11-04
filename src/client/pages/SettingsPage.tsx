@@ -4,6 +4,9 @@ import { api } from "../data/client.js";
 import type { AnalysisConfig, ModelPlan } from "../data/client.js";
 import { LlmUsagePanel } from "../components/LlmUsagePanel.js";
 import { AnalysisRetryPanel } from "../components/AnalysisRetryPanel.js";
+import {
+  CLAUDE_EFFORTS, EFFORT_LABELS, MODEL_OPTIONS, isClaudeEffort, isClaudeModel, modelOption, type ClaudeEffort,
+} from "../../shared/llmModels.js";
 
 /**
  * Settings — edit the analysis instructions ("지침"). This text is used as the
@@ -46,8 +49,8 @@ export function SettingsPage() {
         <div>
           <h2 className="text-lg font-semibold">분석 지침</h2>
           <p className="mt-1 text-sm text-slate-500">
-            글 선별·자료 정리·최종 작성에 사용할 모델을 단계별로 설정할 수 있습니다.
-            DeepSeek의 생각 기능은 모델 이름과 별개로 단계마다 설정하며, 모델을 바꿔도 유지됩니다.
+            글 선별·자료 정리·최종 작성에 사용할 모델과 추론 강도를 단계별로 고를 수 있습니다(고급).
+            Claude 모델(claude-*)은 Claude API 월 크레딧으로, DeepSeek 모델은 DeepSeek API로 호출됩니다.
           </p>
           <p className="mt-2 rounded border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-800">
             논지 지도는 글을 거르는 필터가 아니라 선별 후 붙이는 사후 태그입니다. 바이오·방산·크립토 등 현재
@@ -135,51 +138,38 @@ export function SettingsPage() {
               />
             </label>
             <div className="grid gap-3 sm:grid-cols-3">
-              <label className="block">
-                <span className="text-xs font-medium text-slate-700">1차 글 선별 모델</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Flash 권장 · 비우면 FILTER_MODEL</span>
-                <input
-                  value={form.filterModel ?? ""}
-                  onChange={(e) => set({ filterModel: e.target.value || undefined })}
-                  placeholder="기본: FILTER_MODEL 환경변수"
-                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium text-slate-700">다이제스트 자료 정리 모델</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Flash 권장 · 비우면 1차 모델</span>
-                <input
-                  value={form.digestMapModel ?? ""}
-                  onChange={(e) => set({ digestMapModel: e.target.value || undefined })}
-                  placeholder="기본: 1차 글 선별 모델"
-                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
-                />
-              </label>
-              <label className="block">
-                <span className="text-xs font-medium text-slate-700">최종 연결·심층 모델</span>
-                <span className="mt-0.5 block text-[11px] text-slate-400">Flash 또는 Pro · 비우면 ANALYSIS_MODEL</span>
-                <input
-                  value={form.analysisModel ?? ""}
-                  onChange={(e) => set({ analysisModel: e.target.value || undefined })}
-                  placeholder="기본: ANALYSIS_MODEL 환경변수"
-                  className="mt-1 w-full rounded border border-slate-300 px-3 py-2 font-mono text-xs"
-                />
-              </label>
+              <ModelSelect label="1차 글 선별 모델" value={form.filterModel}
+                defaultLabel={`기본값 (${planQuery.data?.filter.source === "web" ? "서버 설정" : planQuery.data?.filter.effective ?? "서버 설정"})`}
+                onChange={(filterModel) => set({ filterModel })} />
+              <ModelSelect label="다이제스트 자료 정리 모델" value={form.digestMapModel}
+                defaultLabel="기본값 (1차 선별 모델과 같음)"
+                onChange={(digestMapModel) => set({ digestMapModel })} />
+              <ModelSelect label="최종 연결·심층 모델" value={form.analysisModel}
+                defaultLabel={`기본값 (${planQuery.data?.final.source === "web" ? "서버 설정" : planQuery.data?.final.effective ?? "서버 설정"})`}
+                onChange={(analysisModel) => set({ analysisModel })} />
             </div>
             <div className="grid gap-3 sm:grid-cols-3">
-              <ThinkingControl label="글 선별 Thinking" value={form.filterThinking}
-                supported={planQuery.data?.filterThinking !== undefined}
-                onChange={(filterThinking) => set({ filterThinking })} />
-              <ThinkingControl label="자료 정리 Thinking" value={form.digestMapThinking}
-                supported={planQuery.data?.mapThinking !== undefined}
-                onChange={(digestMapThinking) => set({ digestMapThinking })} />
-              <ThinkingControl label="최종 보고서 Thinking" value={form.digestFinalThinking}
-                supported={planQuery.data?.finalThinking !== undefined}
-                onChange={(digestFinalThinking) => set({ digestFinalThinking })} />
+              <ReasoningControl stage="글 선별"
+                model={form.filterModel || planQuery.data?.filter.effective}
+                effort={form.filterEffort} onEffort={(filterEffort) => set({ filterEffort })}
+                thinking={form.filterThinking} onThinking={(filterThinking) => set({ filterThinking })}
+                thinkingSupported={planQuery.data?.filterThinking !== undefined} />
+              <ReasoningControl stage="자료 정리"
+                model={form.digestMapModel || form.filterModel || planQuery.data?.map.effective}
+                effort={form.digestMapEffort} onEffort={(digestMapEffort) => set({ digestMapEffort })}
+                inheritedEffort={form.digestMapModel ? undefined : form.filterEffort}
+                thinking={form.digestMapThinking} onThinking={(digestMapThinking) => set({ digestMapThinking })}
+                thinkingSupported={planQuery.data?.mapThinking !== undefined} />
+              <ReasoningControl stage="최종 보고서"
+                model={form.analysisModel || planQuery.data?.final.effective}
+                effort={form.digestFinalEffort} onEffort={(digestFinalEffort) => set({ digestFinalEffort })}
+                thinking={form.digestFinalThinking} onThinking={(digestFinalThinking) => set({ digestFinalThinking })}
+                thinkingSupported={planQuery.data?.finalThinking !== undefined} />
             </div>
             <p className="text-xs text-slate-500">
-              기본은 선별 OFF · 정리 OFF · 최종 ON입니다. 직접 선택한 값이 서버 기본값보다 우선합니다.
-              ON은 생각할 시간을 더 주므로 비용과 생성 시간이 늘어날 수 있습니다. 저장 후 아래 적용 흐름을 확인하세요.
+              Claude 모델은 <strong>추론 강도</strong>(낮음~최대)로, DeepSeek 모델은 Thinking ON/OFF로 생각의 깊이를 정합니다.
+              강도가 높을수록 품질이 오를 수 있지만 출력 토큰(비용)과 시간이 늘어납니다. 글마다 도는 선별은 낮음부터
+              시작하는 것을 권장합니다. 저장 후 아래 적용 흐름과 사용량 카드를 확인하세요.
             </p>
             {planQuery.data && <ModelFlowCard plan={planQuery.data} />}
             {planQuery.error && (
@@ -211,6 +201,71 @@ export function SettingsPage() {
         매일 <code>DIGEST_HOUR</code>(KST)에 생성됩니다.
       </p>
     </div>
+  );
+}
+
+function ModelSelect({ label, value, defaultLabel, onChange }: {
+  label: string;
+  value: string | undefined;
+  defaultLabel: string;
+  onChange: (value: string | undefined) => void;
+}) {
+  const current = value?.trim() ?? "";
+  const known = !current || MODEL_OPTIONS.some((option) => option.id === current);
+  const note = modelOption(current)?.note;
+  return (
+    <label className="block text-xs font-medium text-slate-700">
+      {label}
+      <select value={current} onChange={(e) => onChange(e.target.value || undefined)}
+        className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2 text-xs">
+        <option value="">{defaultLabel}</option>
+        <optgroup label="Claude (월 크레딧)">
+          {MODEL_OPTIONS.filter((o) => o.provider === "anthropic").map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </optgroup>
+        <optgroup label="DeepSeek">
+          {MODEL_OPTIONS.filter((o) => o.provider === "deepseek").map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </optgroup>
+        {!known && <option value={current}>현재 값: {current}</option>}
+      </select>
+      <span className="mt-1 block text-[11px] font-normal text-slate-400">
+        {note ?? (current ? "목록 밖의 모델 이름입니다." : "비우면 서버 기본값을 씁니다.")}
+      </span>
+    </label>
+  );
+}
+
+function ReasoningControl({ stage, model, effort, inheritedEffort, onEffort, thinking, onThinking, thinkingSupported }: {
+  stage: string;
+  model: string | undefined;
+  effort: ClaudeEffort | undefined;
+  inheritedEffort?: ClaudeEffort;
+  onEffort: (value: ClaudeEffort | undefined) => void;
+  thinking: AnalysisConfig["filterThinking"];
+  onThinking: (value: AnalysisConfig["filterThinking"]) => void;
+  thinkingSupported: boolean;
+}) {
+  if (!isClaudeModel(model)) {
+    return <ThinkingControl label={`${stage} Thinking`} value={thinking} supported={thinkingSupported} onChange={onThinking} />;
+  }
+  const option = modelOption(model);
+  const levels = option?.efforts ?? CLAUDE_EFFORTS;
+  const fallback = inheritedEffort && levels.includes(inheritedEffort) ? inheritedEffort : option?.defaultEffort ?? "high";
+  return (
+    <label className="block text-xs font-medium text-slate-700">
+      {stage} 추론 강도
+      <select value={effort ?? ""} onChange={(e) => onEffort(isClaudeEffort(e.target.value) ? e.target.value : undefined)}
+        className="mt-1 w-full rounded border border-slate-300 bg-white px-3 py-2">
+        <option value="">
+          {inheritedEffort ? `선별 강도 따름 (${EFFORT_LABELS[fallback]})` : `모델 기본값 (${EFFORT_LABELS[fallback]})`}
+        </option>
+        {levels.map((level) => <option key={level} value={level}>{EFFORT_LABELS[level]}</option>)}
+      </select>
+      <span className="mt-1 block text-[11px] font-normal text-slate-400">{option?.label ?? model} · 생각은 항상 켜져 있고 강도로 깊이를 정합니다.</span>
+    </label>
   );
 }
 
@@ -254,11 +309,13 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <p className="text-xs font-semibold text-indigo-900">현재 서버 적용 흐름</p>
         <span className="rounded bg-white/80 px-2 py-0.5 text-[10px] text-indigo-600">
-          {plan.provider === "openai-compatible"
-            ? "OpenAI 호환 API"
-            : plan.provider === "anthropic"
-              ? "Anthropic API"
-              : "LLM 미설정"}
+          {plan.provider === "mixed"
+            ? "Claude API + DeepSeek"
+            : plan.provider === "openai-compatible"
+              ? "DeepSeek(OpenAI 호환 API)"
+              : plan.provider === "anthropic"
+                ? "Claude API"
+                : "LLM 미설정"}
         </span>
       </div>
       <div className="mt-2 grid gap-2 sm:grid-cols-3">
@@ -266,7 +323,12 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
           <div key={label} className="relative rounded-md border border-indigo-100 bg-white px-3 py-2">
             <p className="text-[10px] font-medium text-slate-500">{label}</p>
             <p className="mt-0.5 break-all font-mono text-xs font-semibold text-slate-800">{step.effective}</p>
-            <p className="mt-1 text-[10px] text-slate-400">{sourceLabel(step.source)}</p>
+            <p className="mt-1 text-[10px] text-slate-400">
+              {sourceLabel(step.source)} · {step.provider === "anthropic" ? "Claude API" : "DeepSeek"}
+            </p>
+            {step.effort && (
+              <p className="mt-1 text-[10px] text-indigo-700">추론 강도 {EFFORT_LABELS[step.effort].split(" —")[0]}</p>
+            )}
             {thinking && (
               <p className="mt-1 text-[10px] text-indigo-700">Thinking {thinking === "enabled" ? "ON" : "OFF"}</p>
             )}
@@ -278,11 +340,13 @@ function ModelFlowCard({ plan }: { plan: ModelPlan }) {
       </div>
       <p className="mt-2 text-[11px] leading-relaxed text-indigo-800">
         최종 작성은 {plan.finalThinking ? `Thinking ${plan.finalThinking === "enabled" ? "ON" : "OFF"} · ` : ""}
+        {plan.final.effort ? `추론 강도 ${EFFORT_LABELS[plan.final.effort].split(" —")[0]} · ` : ""}
         최대 {plan.finalTokens.toLocaleString()}토큰 설정으로 <strong>{plan.finalAttempts}번</strong> 시도합니다.{" "}
         {plan.finalFallbackAvailable ? (
           <>
             실패하면 원인을 기록하고, 자료 정리 단계의 설정(
             {plan.mapThinking ? `Thinking ${plan.mapThinking === "enabled" ? "ON" : "OFF"} · ` : ""}
+            {plan.map.effort ? `추론 강도 ${EFFORT_LABELS[plan.map.effort].split(" —")[0]} · ` : ""}
             최대 {plan.finalFallbackTokens.toLocaleString()}토큰)으로 한 번 대체 작성합니다.
           </>
         ) : "실패하면 원인을 기록하고 종료합니다."}

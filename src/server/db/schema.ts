@@ -16,6 +16,7 @@ import {
 import { relations } from "drizzle-orm";
 import type { ArticleContentMeta, ReadingCache } from "../../shared/articleContent.js";
 import type { LlmThinking, LlmUsageStage } from "../../shared/llmUsage.js";
+import type { ClaudeEffort } from "../../shared/llmModels.js";
 import type { AnalysisRetryReason } from "../../shared/analysisRetry.js";
 import type { ProviderErrorCategory } from "../../shared/providerError.js";
 
@@ -396,6 +397,10 @@ export interface AnalysisConfig {
   filterThinking?: "enabled" | "disabled";
   digestMapThinking?: "enabled" | "disabled";
   digestFinalThinking?: "enabled" | "disabled";
+  /** Per-stage Claude reasoning effort (Claude models only). Omit for the model default. */
+  filterEffort?: ClaudeEffort;
+  digestMapEffort?: ClaudeEffort;
+  digestFinalEffort?: ClaudeEffort;
 }
 
 // ─── Relations ──────────────────────────────────────────────────────

@@ -7,6 +7,19 @@
 > `docs/fear-indicators.md`(K-공포지수·US 진입신호 지표 상세)에 자족적으로 정리돼 있다. 이 CLAUDE.md의
 > §0 이후는 세션 인수인계·주의사항·세부 구현 노트다.
 
+## 최신 인수인계 — 2026-11-04 Claude API 전환 (모델·추론 강도 드롭다운)
+
+- **배경·결정**: 사용자가 Claude **Ultra** 플랜(월 Claude API 크레딧 $200, 이월 없음, 소진 시 다음 결제주기까지 API 요청 거부·플랜 과금 없음 — 공식 문서 확인)으로 바꿔 LLM을 Claude로 옮김. 사용자가 고른 기본 조합은 **선별 Sonnet 5.5 + 보고서 Opus 5.5**, 크레딧 소진 시 **멈추고 화면 알림**(DeepSeek 자동 대체 안 함). DeepSeek 키·경로는 유지(단계별 혼용 가능).
+- **공급자 = 모델 ID로 결정**(`anthropic.ts providerFor`): `claude-*` + `ANTHROPIC_API_KEY` → Claude API, 그 외 → OpenAI 호환(DeepSeek). Anthropic 키 없이 DeepSeek만 있으면 예전처럼 `claude-*`를 `LLM_MODEL`로 치환. 기본 모델(설정·env 없음, DeepSeek 미설정): 선별 `claude-sonnet-5-5`, 최종 `claude-opus-5-5`.
+- **Claude 호출**(`completeAnthropic`, SDK `@anthropic-ai/sdk` 0.65→**1.5.0**, API 버전 2026-10-21 — 이 경로는 샘플링 파라미터를 안 보내 영향 없음; SDK 라이선스가 Apache 2.0으로 바뀜): `beta.messages.stream().finalMessage()`, `thinking:{type:"adaptive"}` + `output_config.effort`(단계별), system에 `cache_control: ephemeral`, Opus 5.5·Sonnet 5.5·Fable 5.1엔 서버측 거절 대체(`fallbacks:"default"`, beta `server-side-fallback-2026-07-01`, 대체 모델 단가로 과금; Haiku 제외). `max_tokens` 하한 16,000(최종 보고서 64,000, `CLAUDE_FINAL_MAX_TOKENS`) — 생각과 답이 같은 한도를 공유하며 상한일 뿐. `stop_reason=max_tokens`→`LlmOutputLimitError`(기존 분할 복구 그대로), `refusal`→`LlmProviderError` content_policy(보류), 빈 응답→오류, SDK 오류→`LLM API {status}:` + 고정 분류(원문 미저장). 사용량: input+cache_read+cache_creation=입력, 적중=cache_read, 미적중=input+cache_creation(캐시 쓰기 1.25배는 추정에서 일반 입력으로 계산 — 별도 컬럼/마이그레이션 안 만듦).
+- **크레딧 소진**: "credit balance is too low"/402 → 분류 `balance`(`providerError.ts`), `analysisFailureReason`이 상태코드보다 분류를 먼저 봄(Claude는 400으로 응답). `balance` 전역 대기 **60→360분**(DeepSeek 잔액 부족도 동일). 앱 상단 빨간 배너(`App.tsx`, `analysisRetryStatus.globalPause.reason==="balance"`), Settings 재시도 관리에서 해제 가능. 다이제스트 버튼 안내 문구도 크레딧 언급.
+- **피크 대기**(`ANALYSIS_AVOID_PEAK`, DeepSeek 혼잡 단가 회피)는 **선별 모델이 DeepSeek일 때만** 적용 — `schedule.ts`의 `refreshAnalysisFilterProviderHint()`가 저장 설정을 읽어 갱신(배치 시작·설정 저장·부팅·스케줄 조회 시).
+- **설정**: `AnalysisConfig`에 `filterEffort`·`digestMapEffort`·`digestFinalEffort`(JSON, 마이그레이션 없음). 자료 정리 모델이 비면 선별 모델을 상속하듯 **강도도 선별 강도를 상속**(`mapStageEffort`). 모델 목록·단가·강도 = `src/shared/llmModels.ts`(Opus 5.5 기본 medium, Sonnet 5.5 high, Haiku 5.5 medium, Fable 5.1 high). Settings → 고급: 모델 3칸이 **드롭다운**(Claude/DeepSeek 그룹), 그 아래는 Claude면 **추론 강도**, DeepSeek면 기존 Thinking ON/OFF. 적용 흐름 카드에 단계별 공급자·강도 표시.
+- **사용량 카드**: Claude 행은 모델별 정가(`claudeCostUsd`, `usageEstimate`)로 추정, **최근 기록 → 30일 환산 / 월 $200** 막대(초과 예상 시 경고). 실제 잔액은 Console Billing/Cost.
+- **비용 감각(추정, 미측정)**: DeepSeek 하루 ~$0.5와 같은 토큰량이면 Sonnet 선별 월 ~$150~185 + Opus 보고서 월 ~$30~40 ≈ $200 경계. 사용자에게 품질 대비 효율 순서로 "선별 Haiku → 자료 정리 Sonnet → 최종 Fable/Opus"도 권했음(자료 정리 모델이 큰 창에서 최종 모델의 실제 입력이고, 긴 글 구간 읽기에도 쓰임). 리포트 요약(`research_summary`)은 env `FILTER_MODEL` 기본값 그대로(하루 최대 160건이라 Sonnet이면 비쌈) — DeepSeek 설정 시 DeepSeek로 계속 감.
+- **검증**: 신규 `tests/claudeProvider.test.ts` 11개(라우팅, 요청 본문, Haiku 대체 미전송, max_tokens/refusal/빈 응답, 잔액 부족 6시간 대기, 최종 토큰, 강도 상속, 단가, 피크 대기) 포함 전체 **284/284**, 타입 검사·빌드 통과. 정적 데모 화면에서 드롭다운·강도 전환 확인. **실제 Claude API 호출은 하지 않음**(키 없음).
+- **사용자 남은 작업**: ① claude.ai 설정→결제→API credits에서 Console 조직 연결(플랜 7일 후) ② Console에서 API 키 발급 ③ Railway `ANTHROPIC_API_KEY` 추가 ④ Settings → 고급에서 모델·강도 선택 후 저장 ⑤ 사용량 카드의 `1건 다시 분석`으로 1회 검증 ⑥ 다이제스트 수동 생성 ⑦ Console Cost와 앱 추정 비교. 전환 후 미완료 전체 읽기 캐시는 모델이 키에 포함돼 1회 새로 읽음.
+
 ## 최신 인수인계 — 2026-09-22 참고 링크 3개 초과 시 연결 자료 생략
 
 - **사용자 기준**: 원래 X·텔레그램 게시글의 참고 링크가 4개 이상이면 연결 자료를 모두 생략하고 원 게시글 전체만 분석한다. 3개 이하는 기존대로 수집한다. 연결 기사 내부의 링크 수나 처음 3개 선택 기준이 아니다.

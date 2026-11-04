@@ -1,7 +1,9 @@
 import type { LlmCallDiagnostics } from "../../shared/llmDiagnostics.js";
 import { THINKING_TOKEN_FLOOR, thinkingTokenBudget } from "../../shared/deepseekModels.js";
 import {
+  claudeMaxTokens,
   complete,
+  providerFor,
   resolveModel,
   supportsThinkingControl,
   type CompleteOpts,
@@ -74,8 +76,13 @@ export function digestFinalTokenBudget(
   requestedThinkingTokens = DIGEST_FINAL_THINKING_TOKEN_FLOOR,
   configuredThinking?: CompleteOpts["thinking"],
 ): number {
+  // Claude: adaptive thinking + the report share one cap; streaming permits a large one.
+  if (providerFor(model) === "anthropic") return claudeMaxTokens(Math.max(regularMaxTokens, CLAUDE_FINAL_MAX_TOKENS));
   return thinkingTokenBudget(regularMaxTokens, digestThinkingMode(model, "final", configuredThinking), requestedThinkingTokens);
 }
+
+/** Final report ceiling for Claude models (a cap, not a target). */
+export const CLAUDE_FINAL_MAX_TOKENS = 64_000;
 
 export interface StageModelTrace {
   /** Value selected by Settings/env before provider compatibility remapping. */
@@ -221,7 +228,7 @@ export function classifyDigestFailure(err: unknown): DigestFailureKind {
   if (/finish_reason=length|응답 잘림|maximum context|max(?:imum)?[_ ]tokens/i.test(detail)) return "token_limit";
   if (/429|rate[ _-]?limit|quota|TPD|tokens per day/i.test(detail)) return "rate_limit";
   if (/\b(?:401|403)\b|unauthorized|forbidden|authentication|invalid api key/i.test(detail)) return "authentication";
-  if (/content_filter|content filter/i.test(detail)) return "content_filter";
+  if (/content_filter|content filter|content_policy/i.test(detail)) return "content_filter";
   if (/timeout|timed out|aborterror|aborted/i.test(detail)) return "timeout";
   if (/fetch failed|terminated|und_err_socket|socket (?:closed|hang up)|other side closed|econnreset|enotfound|eai_again|network/i.test(detail)) {
     return "network";
@@ -276,6 +283,8 @@ export interface DigestCallPolicy {
   fallbackThinking?: CompleteOpts["thinking"];
   /** Token budget for the fallback model (normally the non-thinking final budget). */
   fallbackMaxTokens?: number;
+  /** Claude effort for the fallback model (normally the map stage effort). */
+  fallbackEffort?: CompleteOpts["effort"];
   /** False = one primary attempt, then immediate fallback. Defaults to true for map resilience. */
   retryPrimary?: boolean;
   /** Token budget for a same-model retry after output exhaustion. */
@@ -347,6 +356,7 @@ export async function completeDigestStage(
       model: fallback,
       ...(policy.fallbackMaxTokens !== undefined ? { maxTokens: policy.fallbackMaxTokens } : {}),
       ...(policy.fallbackThinking ? { thinking: policy.fallbackThinking } : {}),
+      effort: policy.fallbackEffort,
     };
     try {
       const text = await invokeAttempt(fallbackOpts, "fallback");

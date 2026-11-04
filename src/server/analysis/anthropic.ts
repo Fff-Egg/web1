@@ -8,26 +8,33 @@ import { currentLlmUsageContext, observeLlmUsage } from "./usageObservation.js";
 import { recordProviderUsage, tokenCount } from "./providerUsage.js";
 import { LlmOutputLimitError } from "./llmErrors.js";
 import { diagnoseProviderError, LlmProviderError } from "./providerError.js";
+import { effortFor, isClaudeModel, type ClaudeEffort } from "../../shared/llmModels.js";
 
 let _client: Anthropic | null = null;
 
-/** True when an OpenAI-compatible endpoint (Groq / OpenRouter / Ollama …) is configured. */
+/** True when an OpenAI-compatible endpoint (DeepSeek / Groq / OpenRouter …) is configured. */
 function usingOpenAI(): boolean {
   return Boolean(process.env.LLM_BASE_URL && process.env.LLM_API_KEY);
 }
 
-export type LlmProvider = "openai-compatible" | "anthropic" | "unconfigured";
+/** True when the Anthropic Claude API key is configured. */
+function usingAnthropic(): boolean {
+  return Boolean(process.env.ANTHROPIC_API_KEY);
+}
+
+export type LlmProvider = "openai-compatible" | "anthropic" | "mixed" | "unconfigured";
 
 /** Non-secret runtime provider label for the Settings diagnostics card. */
 export function llmProvider(): LlmProvider {
+  if (usingOpenAI() && usingAnthropic()) return "mixed";
   if (usingOpenAI()) return "openai-compatible";
-  if (process.env.ANTHROPIC_API_KEY) return "anthropic";
+  if (usingAnthropic()) return "anthropic";
   return "unconfigured";
 }
 
 /** Whether analysis can run — either Anthropic OR an OpenAI-compatible endpoint. */
 export function hasLLM(): boolean {
-  return Boolean(process.env.ANTHROPIC_API_KEY) || usingOpenAI();
+  return usingAnthropic() || usingOpenAI();
 }
 
 /** @deprecated kept for back-compat; prefer hasLLM(). */
@@ -39,41 +46,58 @@ export function getAnthropic(): Anthropic {
   if (!_client) {
     const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) throw new Error("ANTHROPIC_API_KEY is not set");
-    _client = new Anthropic({ apiKey });
+    _client = new Anthropic({ apiKey, maxRetries: 2 });
   }
   return _client;
 }
 
+/** Test hook: replace (or reset with null) the cached Claude client. */
+export function setAnthropicClientForTests(client: Anthropic | null): void {
+  _client = client;
+}
+
 // Model defaults depend on the active provider. With an OpenAI-compatible
 // endpoint, set LLM_MODEL (or FILTER_MODEL / ANALYSIS_MODEL) to that host's id
-// (e.g. "llama-3.3-70b-versatile", "qwen-2.5-32b").
+// (e.g. "deepseek-flash").
 const OPENAI_DEFAULT_MODEL = () => process.env.LLM_MODEL ?? "llama-3.3-70b-versatile";
 
 /**
- * Return the model id that will actually be sent to the active provider.
+ * The provider is chosen per call from the model ID: `claude-*` goes to the
+ * Claude API when ANTHROPIC_API_KEY is set; every other ID goes to the
+ * OpenAI-compatible endpoint. This lets Settings mix providers per stage
+ * (e.g. Claude Sonnet filter + Claude Opus final, or DeepSeek filter + Claude final).
+ */
+export function providerFor(model: string): "anthropic" | "openai-compatible" {
+  const id = model.trim();
+  if (isClaudeModel(id) && usingAnthropic()) return "anthropic";
+  if (usingOpenAI()) return "openai-compatible";
+  return "anthropic";
+}
+
+/**
+ * Return the model id that will actually be sent to its provider.
  *
- * Old Settings/Railway values may still contain a `claude-*` id after the app
- * was moved to an OpenAI-compatible endpoint. `complete()` has always replaced
- * that stale id with LLM_MODEL, but callers used to log the pre-replacement id.
- * Keeping resolution public and pure-at-call-time lets the digest trace show the
- * real model (for example deepseek-v4-flash rather than Claude Haiku).
+ * Old Settings/Railway values may still contain a `claude-*` id while only an
+ * OpenAI-compatible endpoint is configured. Without an Anthropic key that id
+ * would 404, so it is replaced with LLM_MODEL (the long-standing behaviour).
+ * With ANTHROPIC_API_KEY set, Claude ids are sent to Claude unchanged.
  */
 export function resolveModel(model: string): string {
   const id = model.trim();
-  return usingOpenAI() && id.startsWith("claude") ? OPENAI_DEFAULT_MODEL() : id;
+  return providerFor(id) === "openai-compatible" && isClaudeModel(id) ? OPENAI_DEFAULT_MODEL() : id;
 }
 
-/** Protocol support follows the provider endpoint, so model upgrades need no code change. */
+/** DeepSeek thinking ON/OFF protocol support; Claude uses effort levels instead. */
 export function supportsThinkingControl(model: string): boolean {
-  return usingOpenAI() && supportsDeepSeekThinking(process.env.LLM_BASE_URL, resolveModel(model));
+  return providerFor(model) === "openai-compatible" && supportsDeepSeekThinking(process.env.LLM_BASE_URL, resolveModel(model));
 }
 
 export const FILTER_MODEL = () =>
   resolveModel(
-    process.env.FILTER_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-haiku-4-5-20251001"),
+    process.env.FILTER_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-sonnet-5-5"),
   );
 export const ANALYSIS_MODEL = () =>
-  resolveModel(process.env.ANALYSIS_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-opus-4-8"));
+  resolveModel(process.env.ANALYSIS_MODEL ?? (usingOpenAI() ? OPENAI_DEFAULT_MODEL() : "claude-opus-5-5"));
 
 
 /**
@@ -133,47 +157,119 @@ export interface CompleteOpts {
   responseFormat?: "json_object";
   /** DeepSeek V4 per-call thinking switch. Ignored by providers/models that do not support it. */
   thinking?: "enabled" | "disabled";
+  /** Claude reasoning effort for this stage. Ignored by non-Claude models. */
+  effort?: ClaudeEffort;
 }
 
 /** Single-turn helper: system prompt + user content -> assistant text. */
 export async function complete(opts: CompleteOpts): Promise<string> {
-  if (usingOpenAI()) {
-    // Saved Settings may still carry Claude model ids (the old defaults); those
-    // 404 on an OpenAI-compatible host, so fall back to the configured open model.
+  if (providerFor(opts.model) === "openai-compatible") {
+    // Saved Settings may still carry Claude model ids while only an
+    // OpenAI-compatible host is configured; resolveModel maps those to LLM_MODEL.
     const model = resolveModel(opts.model);
     return completeOpenAI({ ...opts, model });
   }
   return completeAnthropic(opts);
 }
 
+/** Thinking shares max_tokens with the answer, so Claude calls get a generous ceiling.
+ * It is a cap, not a target: only generated tokens are billed. */
+export const CLAUDE_MIN_MAX_TOKENS = 16_000;
+const CLAUDE_MAX_OUTPUT_TOKENS = 128_000;
+export function claudeMaxTokens(requested?: number): number {
+  const asked = Number.isFinite(requested) && (requested ?? 0) > 0 ? Math.floor(requested!) : 0;
+  return Math.min(CLAUDE_MAX_OUTPUT_TOKENS, Math.max(CLAUDE_MIN_MAX_TOKENS, asked));
+}
+
+/** Models that accept the server-side refusal fallback (`fallbacks: "default"`). */
+const SERVER_FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
+const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+
+/** Wrap SDK HTTP errors into the shared contract: `LLM API <status>:` + a finite category. */
+function anthropicFailure(error: unknown, probe: LlmCallProbe): unknown {
+  if (error instanceof Anthropic.APIError && typeof error.status === "number") {
+    // Inspect the provider body only in memory; store just the fixed category.
+    const diagnosis = diagnoseProviderError(JSON.stringify(error.error ?? {}), error.status);
+    probe.data.httpStatus = error.status;
+    probe.data.errorCategory = diagnosis.category;
+    probe.data.errorParam = diagnosis.param;
+    return new LlmProviderError(error.status, diagnosis);
+  }
+  return error;
+}
+
 async function completeAnthropic(opts: CompleteOpts): Promise<string> {
   const probe = new LlmCallProbe(opts.system, opts.user);
+  const model = opts.model.trim();
+  const effort = effortFor(model, opts.effort);
+  const maxTokens = claudeMaxTokens(opts.maxTokens);
   probe.data.endpointHost = "api.anthropic.com";
-  probe.data.effectiveModel = opts.model;
-  probe.data.effectiveThinking = "disabled";
+  probe.data.effectiveModel = model;
+  // Current Claude models run adaptive thinking; depth is set by effort.
+  probe.data.effectiveThinking = "enabled";
+  probe.data.effectiveMaxTokens = maxTokens;
+  probe.data.stream = true;
   let success = false;
   try {
-    const res = await getAnthropic().messages.create({
-      model: opts.model,
-      max_tokens: opts.maxTokens ?? 1024,
-      system: stripLoneSurrogates(opts.system),
+    const useFallback = SERVER_FALLBACK_MODELS.has(model);
+    const params: Anthropic.Beta.Messages.MessageCreateParamsStreaming = {
+      model,
+      max_tokens: maxTokens,
+      // The stage instructions repeat on every call — cache them (reads bill at ~10%).
+      system: [{ type: "text", text: stripLoneSurrogates(opts.system), cache_control: { type: "ephemeral" } }],
       messages: [{ role: "user", content: stripLoneSurrogates(opts.user) }],
-    });
-    // Anthropic input_tokens excludes cache reads/writes: keep cache misses unknown
-    // because cache-creation tokens have their own pricing, unlike DeepSeek misses.
+      thinking: { type: "adaptive" },
+      ...(effort ? { output_config: { effort } } : {}),
+      ...(useFallback ? { fallbacks: "default" as const, betas: [SERVER_FALLBACK_BETA] } : {}),
+      stream: true,
+    };
+    probe.data.requestBytes = Buffer.byteLength(JSON.stringify(params));
+    probe.data.stage = "awaiting_headers";
+    let res: Anthropic.Beta.Messages.BetaMessage;
+    try {
+      // Streaming avoids HTTP timeouts on long thinking/report generations.
+      const { stream: _stream, ...streamParams } = params;
+      res = await getAnthropic().beta.messages.stream(streamParams).finalMessage();
+    } catch (error) {
+      throw anthropicFailure(error, probe);
+    }
+    probe.data.stage = "validating_response";
     const usage = res.usage;
-    const hit = tokenCount(usage.cache_read_input_tokens);
-    const creation = tokenCount(usage.cache_creation_input_tokens);
     const input = tokenCount(usage.input_tokens);
-    if (input !== undefined && hit !== undefined && creation !== undefined) probe.data.promptTokens = input + hit + creation;
-    probe.data.cacheHitTokens = hit;
+    const hit = tokenCount(usage.cache_read_input_tokens ?? 0);
+    const creation = tokenCount(usage.cache_creation_input_tokens ?? 0);
+    if (input !== undefined && hit !== undefined && creation !== undefined) {
+      probe.data.promptTokens = input + hit + creation;
+      probe.data.cacheHitTokens = hit;
+      // Uncached input incl. cache writes (writes bill ~1.25x; estimate treats them as input).
+      probe.data.cacheMissTokens = input + creation;
+    }
     probe.data.completionTokens = tokenCount(usage.output_tokens);
-    probe.data.finishReason = res.stop_reason ?? undefined;
+    probe.data.reasoningTokens = tokenCount(usage.output_tokens_details?.thinking_tokens);
+    if (typeof res.model === "string" && /^[\w./:-]{1,160}$/.test(res.model)) probe.data.effectiveModel = res.model;
+    const reason = res.stop_reason ?? "unknown";
+    probe.data.finishReason = /^[a-z_]{1,40}$/.test(reason) ? reason : "unknown";
     const text = res.content
-      .filter((b): b is Anthropic.TextBlock => b.type === "text")
+      .filter((b): b is Anthropic.Beta.Messages.BetaTextBlock => b.type === "text")
       .map((b) => b.text)
       .join("\n")
       .trim();
+    probe.data.contentChars = text.length;
+    const detail = `stop_reason=${reason} tokens(output=${usage.output_tokens ?? "?"}) max_tokens=${maxTokens}`;
+    if (reason === "max_tokens") {
+      console.warn(`[llm] 불완전 응답 폐기 (model=${model}) ${detail}`);
+      throw new LlmOutputLimitError(`LLM 응답 잘림 (finish_reason=length ${detail}) — 부분 결과는 저장하지 않습니다.`);
+    }
+    if (reason === "refusal") {
+      // The server-side fallback (if any) also declined. Treat like a policy rejection.
+      probe.data.httpStatus = 400;
+      probe.data.errorCategory = "content_policy";
+      throw new LlmProviderError(400, { category: "content_policy", param: null });
+    }
+    if (!text) {
+      console.error(`[llm] 빈 응답 (model=${model}) ${detail}`);
+      throw new Error(`LLM 빈 응답 (${detail})`);
+    }
     probe.data.stage = "complete";
     success = true;
     return text;

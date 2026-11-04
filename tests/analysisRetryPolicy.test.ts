@@ -27,7 +27,7 @@ test("transient retries back off and hold on third failure; deterministic failur
   for (const reason of ["output_limit", "reading_held", "request_rejected"] as const) assert.equal(nextAnalysisRetry(0, reason, now).held, true);
   assert.equal(analysisFailureReason(new WholeReadingHeldError()), "reading_held");
   assert.equal(analysisFailureReason(new Error("LLM API 400: provider request failed")), "request_rejected");
-  assert.equal(globalPauseMinutes(analysisFailureReason(new Error("LLM API 402: provider request failed"))), 60);
+  assert.equal(globalPauseMinutes(analysisFailureReason(new Error("LLM API 402: provider request failed"))), 360);
   for (const status of [401, 403]) assert.equal(globalPauseMinutes(analysisFailureReason(new Error(`LLM API ${status}: provider request failed`))), 60);
   assert.equal(globalPauseMinutes(analysisFailureReason(new Error("LLM API 429: provider request failed"))), 30);
 });

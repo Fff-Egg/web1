@@ -1,3 +1,4 @@
+import { effortFor, isClaudeModel, mapStageEffort, type ClaudeEffort } from "../../shared/llmModels.js";
 import { createTRPCClient, httpBatchLink } from "@trpc/client";
 import superjson from "superjson";
 import type { AppRouter } from "../../server/trpc/routers/index.js";
@@ -117,10 +118,14 @@ export interface EffectiveModelStep {
   configured: string;
   effective: string;
   source: "web" | "railway" | "default" | "filter";
+  /** Which API this stage actually calls. */
+  provider?: "anthropic" | "openai-compatible";
+  /** Claude reasoning effort actually sent (null for non-Claude models). */
+  effort?: ClaudeEffort | null;
 }
 
 export interface ModelPlan {
-  provider: "openai-compatible" | "anthropic" | "unconfigured";
+  provider: "openai-compatible" | "anthropic" | "mixed" | "unconfigured";
   filter: EffectiveModelStep;
   map: EffectiveModelStep;
   final: EffectiveModelStep;
@@ -487,13 +492,16 @@ function makeStaticApi(): DataApi {
       const finalThinking = cfg.digestFinalThinking ?? "enabled";
       return {
         provider: "openai-compatible",
-        filter: { configured: filter, effective: filter, source: cfg.filterModel ? "web" : "default" },
+        filter: { configured: filter, effective: filter, source: cfg.filterModel ? "web" : "default",
+          provider: isClaudeModel(filter) ? "anthropic" : "openai-compatible", effort: effortFor(filter, cfg.filterEffort) ?? null },
         map: {
           configured: map,
           effective: map,
           source: cfg.digestMapModel ? "web" : "filter",
+          provider: isClaudeModel(map) ? "anthropic" : "openai-compatible", effort: effortFor(map, mapStageEffort(cfg)) ?? null,
         },
-        final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default" },
+        final: { configured: final, effective: final, source: cfg.analysisModel ? "web" : "default",
+          provider: isClaudeModel(final) ? "anthropic" : "openai-compatible", effort: effortFor(final, cfg.digestFinalEffort) ?? null },
         finalTokens: thinkingTokenBudget(8192, finalThinking),
         finalThinking,
         mapThinking,

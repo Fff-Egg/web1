@@ -27,7 +27,7 @@
 | 변수 | 값 |
 |---|---|
 | `DATABASE_URL` | `${{ MySQL.MYSQL_URL }}` (Railway 변수 참조 — MySQL 서비스 이름이 다르면 맞게) |
-| `ANTHROPIC_API_KEY` | Claude 사용 시 `sk-ant-...` |
+| `ANTHROPIC_API_KEY` | Claude 사용 시 `sk-ant-...` (Max/Ultra 플랜 월 API 크레딧 사용 가능 — claude.ai 설정→결제→API credits에서 Console 조직 연결 후 키 발급). DeepSeek 변수와 함께 둬도 되며, 단계별 모델은 웹 **설정 → 고급** 드롭다운에서 고릅니다 |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | DeepSeek 등 OpenAI 호환 API 사용 시 세 변수를 함께 설정 |
 | `FILTER_MODEL` | 글 선별·다이제스트 자료 정리 모델 (예: `deepseek-v4-flash`) |
 | `ANALYSIS_MODEL` | 최종 연결·심층 모델 (예: `deepseek-v4-pro`) |

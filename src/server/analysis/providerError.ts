@@ -32,6 +32,8 @@ export function diagnoseProviderError(raw: string, status: number): ProviderErro
   if (status === 401) return result("authentication");
   if (status === 402) return result("balance");
   if (status === 429) return result("rate_limit");
+  // Claude API: prepaid/plan credits exhausted ("Your credit balance is too low …").
+  if (/credit balance.{0,30}too low|billing_error/u.test(text) || (root.type === "error" && nested.type === "billing_error")) return result("balance");
   if (/content[_ ](?:filter|policy|exists[_ ]risk|risk)|safety[_ ](?:violation|policy)|moderation|sensitive content|内容.{0,20}风险/u.test(text)) return result("content_policy");
   if (status === 403) return result("authentication");
   if (/authentication[_ ](?:error|failed)|invalid[_ ]api[_ ]key|(?:api[_ ]key|api key).{0,30}(?:invalid|incorrect|missing)/u.test(text)) return result("authentication");

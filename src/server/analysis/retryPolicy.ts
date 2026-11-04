@@ -18,6 +18,7 @@ export function analysisConfigFingerprint(cfg: AnalysisConfig, hasThreads: boole
     ANALYSIS_RETRY_VERSION, process.env.LLM_BASE_URL ?? "anthropic", process.env.LLM_EXTRA_BODY ?? "",
     resolveModel(cfg.filterModel || FILTER_MODEL()), resolveModel(cfg.digestMapModel || cfg.filterModel || FILTER_MODEL()),
     resolveModel(cfg.analysisModel || ANALYSIS_MODEL()), cfg.filterThinking ?? "disabled", cfg.digestMapThinking ?? "disabled",
+    cfg.filterEffort ?? "", cfg.digestMapEffort ?? "",
     filterTokenLimit(hasThreads), process.env.ANALYSIS_MAX_TOKENS ?? "4096", process.env.DEEP_ANALYSIS ?? "0",
     cfg.instructions, cfg.relevanceCriteria, cfg.importanceCriteria, cfg.summaryInstructions,
   ])).digest("hex");
@@ -34,6 +35,10 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
   const message = error instanceof Error ? error.message : "";
   if (code === "WHOLE_READING_HELD") return "reading_held";
   if (code === "LLM_OUTPUT_LIMIT" || /finish_reason=length/.test(message)) return "output_limit";
+  // Provider category first: Claude reports exhausted credits as HTTP 400.
+  const category = error && typeof error === "object" && "category" in error ? String(error.category) : "";
+  if (category === "balance") return "balance";
+  if (category === "authentication") return "authentication";
   const status = /LLM API (\d{3}):/.exec(message)?.[1];
   if (status === "401" || status === "403") return "authentication";
   if (status === "402") return "balance";
@@ -49,5 +54,8 @@ export function nextAnalysisRetry(attemptsBefore: number, reason: AnalysisRetryR
   return { attempts, reason, held, nextRetryAt: held ? null : new Date(now.getTime() + delay), updatedAt: now };
 }
 export function globalPauseMinutes(reason: AnalysisRetryReason): number {
-  return reason === "authentication" || reason === "balance" ? 60 : reason === "rate_limit" ? 30 : 0;
+  // Exhausted credits only return next billing cycle (or after a manual top-up and
+  // "해제"). Re-check every 6h: a rejected request is not billed.
+  if (reason === "balance") return 360;
+  return reason === "authentication" ? 60 : reason === "rate_limit" ? 30 : 0;
 }

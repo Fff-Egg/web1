@@ -1,5 +1,6 @@
 import type { LlmUsageBucket } from "./llmUsage.js";
 import type { ProviderErrorCategory } from "./providerError.js";
+import { claudeCostUsd } from "./llmModels.js";
 
 // Official Flash rates checked 2026-09-21. Reference estimates, not billing-time prices.
 export const FLASH_OFFPEAK_RATES = { hit: 0.003, miss: 0.15, output: 0.6 } as const;
@@ -9,6 +10,23 @@ export function discountedFlashEstimate(row: Pick<LlmUsageBucket, "model" | "end
   if (!b || b.requests <= 0 || ![b.cacheHitTokens, b.cacheMissTokens, b.outputTokens].every(n => Number.isFinite(n) && n >= 0)) return null;
   return { usd: (b.cacheHitTokens * FLASH_OFFPEAK_RATES.hit + b.cacheMissTokens * FLASH_OFFPEAK_RATES.miss + b.outputTokens * FLASH_OFFPEAK_RATES.output) / 1_000_000, requests: b.requests };
 }
+
+/**
+ * Reference cost for one usage bucket: Claude list prices for Claude API rows,
+ * the DeepSeek Flash off-peak estimate otherwise. Null when not computable.
+ */
+export function usageEstimate(row: Pick<LlmUsageBucket, "model" | "endpointHost" | "costBasis">): { usd: number; requests: number } | null {
+  if (row.endpointHost === "api.anthropic.com") {
+    const b = row.costBasis;
+    if (!b || b.requests <= 0) return null;
+    const usd = claudeCostUsd(row.model, b);
+    return usd === null ? null : { usd, requests: b.requests };
+  }
+  return discountedFlashEstimate(row);
+}
+
+/** Monthly Claude API credit included with the Ultra plan (USD). */
+export const CLAUDE_MONTHLY_CREDIT_USD = 200;
 
 export function usageKstDay(iso: string): string {
   return new Date(new Date(iso).getTime() + 9 * 3600_000).toISOString().slice(0, 10);

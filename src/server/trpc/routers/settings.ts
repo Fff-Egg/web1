@@ -2,6 +2,7 @@ import { z } from "zod";
 import { router, publicProcedure } from "../trpc.js";
 import { settingsRepo } from "../../repo/settings.js";
 import { getRuntimeSchedule } from "../../runtimeSchedule.js";
+import { refreshAnalysisFilterProviderHint } from "../../analysis/schedule.js";
 import { getLlmUsageReport } from "../../repo/llmUsage.js";
 import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
 import { runArticleAnalysis } from "../../analysis/analyze.js";
@@ -10,8 +11,10 @@ import {
   ANALYSIS_MODEL,
   FILTER_MODEL,
   llmProvider,
+  providerFor,
   resolveModel,
 } from "../../analysis/anthropic.js";
+import { CLAUDE_EFFORTS, effortFor, mapStageEffort } from "../../../shared/llmModels.js";
 import {
   digestFinalTokenBudget,
   DIGEST_FINAL_THINKING_TOKEN_FLOOR,
@@ -30,9 +33,13 @@ const analysisConfigSchema = z.object({
   filterThinking: z.enum(["enabled", "disabled"]).optional(),
   digestMapThinking: z.enum(["enabled", "disabled"]).optional(),
   digestFinalThinking: z.enum(["enabled", "disabled"]).optional(),
+  filterEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  digestMapEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  digestFinalEffort: z.enum(CLAUDE_EFFORTS).optional(),
 });
 
 type ModelSource = "web" | "railway" | "default" | "filter";
+type AnalysisConfigEffort = z.infer<typeof analysisConfigSchema>["filterEffort"];
 
 function configuredModel(
   web: string | undefined,
@@ -51,7 +58,10 @@ function configuredModel(
 
 /** settings router — edit the analysis instructions ("지침") from the dashboard. */
 export const settingsRouter = router({
-  getRuntimeSchedule: publicProcedure.query(() => getRuntimeSchedule()),
+  getRuntimeSchedule: publicProcedure.query(async () => {
+    await refreshAnalysisFilterProviderHint();
+    return getRuntimeSchedule();
+  }),
   getLlmUsage: publicProcedure.query(() => getLlmUsageReport()),
   getAnalysisRetryStatus: publicProcedure.query(() => getAnalysisRetryStatus()),
   getArticleAnalysisDiagnostics: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
@@ -77,11 +87,14 @@ export const settingsRouter = router({
     const finalTokens = digestFinalTokenBudget(final.effective, fallbackTokens, configuredThinkingTokens, cfg.digestFinalThinking);
     const finalThinking = digestThinkingMode(final.effective, "final", cfg.digestFinalThinking);
     const mapThinking = digestThinkingMode(map.effective, "map", cfg.digestMapThinking);
+    const stage = <T extends { effective: string }>(m: T, effort: AnalysisConfigEffort) => ({
+      ...m, provider: providerFor(m.effective), effort: effortFor(m.effective, effort) ?? null,
+    });
     return {
       provider: llmProvider(),
-      filter,
-      map,
-      final,
+      filter: stage(filter, cfg.filterEffort),
+      map: stage(map, mapStageEffort(cfg)),
+      final: stage(final, cfg.digestFinalEffort),
       finalTokens,
       finalThinking,
       mapThinking,
@@ -95,6 +108,7 @@ export const settingsRouter = router({
     .input(analysisConfigSchema)
     .mutation(async ({ input }) => {
       await settingsRepo.setAnalysisConfig(input);
+      await refreshAnalysisFilterProviderHint();
       return { ok: true };
     }),
 

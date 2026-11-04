@@ -45,6 +45,9 @@ export function App() {
   }, []);
   const health = useQuery({ queryKey: ["health"], queryFn: () => api.health() });
   const status = useQuery({ queryKey: ["status"], queryFn: () => api.status() });
+  // Shares the Settings retry panel's query: one request, refreshed every minute.
+  const retryStatus = useQuery({ queryKey: ["analysisRetryStatus"], queryFn: () => api.getAnalysisRetryStatus(), refetchInterval: 60_000 });
+  const creditPause = retryStatus.data?.globalPause?.reason === "balance" ? retryStatus.data.globalPause : null;
 
   return (
     <div className="mx-auto max-w-4xl p-3 sm:p-6">
@@ -56,6 +59,14 @@ export function App() {
         </p>
       </header>
 
+      {creditPause && (
+        <div role="alert" className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
+          <strong>API 크레딧(잔액) 소진</strong> — 자동 글 분석을 멈췄습니다. 수집은 계속됩니다.
+          {" "}{new Date(creditPause.until).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}에 다시 확인하며,
+          Claude 월 크레딧은 다음 결제 주기에 들어옵니다. 잔액은 Claude Console → Billing에서 확인하세요.
+          충전했다면 Settings → 재시도 관리에서 대기를 해제할 수 있습니다.
+        </div>
+      )}
       {status.data && !status.data.persisted && (
         <div className="mb-4 rounded border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           {api.mode === "static" ? (

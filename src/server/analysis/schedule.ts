@@ -18,8 +18,27 @@ export function kstMinuteOfDay(at = new Date()): number {
   return hour * 60 + minute;
 }
 
+/**
+ * Peak avoidance exists for DeepSeek's time-of-day pricing. When the article
+ * filter runs on Claude (no peak surcharge) analysis runs around the clock.
+ * The hint is refreshed from saved Settings before each automatic batch.
+ */
+let filterOnClaude = false;
+export function setAnalysisFilterProviderHint(onClaude: boolean): void {
+  filterOnClaude = onClaude;
+}
+export async function refreshAnalysisFilterProviderHint(): Promise<void> {
+  try {
+    const [{ settingsRepo }, { FILTER_MODEL, providerFor }] = await Promise.all([
+      import("../repo/settings.js"), import("./anthropic.js"),
+    ]);
+    const cfg = await settingsRepo.getAnalysisConfig();
+    filterOnClaude = providerFor(cfg.filterModel || FILTER_MODEL()) === "anthropic";
+  } catch { /* keep the previous hint; never block analysis on a settings read */ }
+}
+
 export function isAutomaticAnalysisPeakAvoidanceEnabled(): boolean {
-  return process.env.ANALYSIS_AVOID_PEAK !== "0";
+  return process.env.ANALYSIS_AVOID_PEAK !== "0" && !filterOnClaude;
 }
 
 /**

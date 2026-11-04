@@ -236,6 +236,7 @@ export async function filterRelevant(
     system: system + (corrected ? "\n[완전한 JSON 출력 길이 관리]\n앞 응답이 출력 한도에 걸렸다. 같은 판단 기준과 요약 지침을 유지하되 반복 표현과 불필요한 서론을 줄여 간결하게 작성한다. 모든 필수 JSON 필드와 닫는 괄호를 반드시 완성하고, signals의 근거는 한 줄로 쓴다. JSON 밖의 설명은 쓰지 않는다." : ""),
     user,
     thinking,
+    effort: cfg.filterEffort,
     responseFormat: supportsThinkingControl(filterModel) ? "json_object" : undefined,
     // Budget for the full-body evidence packet and optional thesis fields.
     maxTokens: thinkingTokenBudget(corrected ? correctedFilterTokenLimit(initialLimit) : initialLimit, thinking),
@@ -287,6 +288,7 @@ export async function filterRelevant(
         user: `다음 글을 한국어로만 2~3문장으로 요약:\n${article.body ?? ""}`,
         maxTokens: 400,
         thinking: "disabled",
+        effort: "low",
       });
       if (hasKorean(re)) summary = re.trim();
     } catch {
@@ -321,6 +323,7 @@ export async function deepAnalyze(
     system,
     user,
     thinking: "disabled",
+    effort: cfg.digestFinalEffort,
     // Large enough for a full multi-section report in `fullAnalysis`.
     maxTokens: Number(process.env.ANALYSIS_MAX_TOKENS ?? 4096),
   });
