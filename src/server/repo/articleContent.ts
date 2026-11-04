@@ -1,31 +1,48 @@
-import { mapStageEffort } from "../../shared/llmModels.js";
+import { mapStageEffort, modelOption } from "../../shared/llmModels.js";
 import { and, eq, isNull, sql } from "drizzle-orm";
 import { db, hasDb } from "../db/client.js";
 import { analyses, articles, sources, type Article, type AnalysisConfig } from "../db/schema.js";
 import { enrichArticle, htmlToText, skipLinkedArticleExpansion } from "../adapters/fullText.js";
 import { readWholeArticle, READING_CHUNK_CHARS, type ReadingPacketBudget } from "../analysis/fullReading.js";
-import { ANALYSIS_MODEL, FILTER_MODEL, resolveModel } from "../analysis/anthropic.js";
+import { ANALYSIS_MODEL, FILTER_MODEL, providerFor, resolveModel } from "../analysis/anthropic.js";
 import { contentScope, resetReadingRecovery } from "../../shared/articleContent.js";
 
 const jobs = new Map<number, Promise<unknown>>();
+/** Large per-article note budget for 1M-token-context consumers (name kept: first used for DeepSeek Flash). */
 export const DEEPSEEK_READING_PACKET_BYTES = 384 * 1024;
 const FLASH_CONTEXT_MODELS = new Set(["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp"]);
 
-/** Deliberately scoped to documented 1M-context Flash consumers, not generic compatible endpoints. */
+/** Official DeepSeek endpoint check, or null when the compatible endpoint is not provably Flash. */
+function deepseekFlashCheck(): ((model: string) => boolean) | null {
+  if (!process.env.LLM_API_KEY || new URL(process.env.LLM_BASE_URL ?? "").hostname !== "api.deepseek.com") return null;
+  const extra: unknown = JSON.parse(process.env.LLM_EXTRA_BODY || "{}");
+  if (!extra || typeof extra !== "object" || Array.isArray(extra)) return null;
+  const override = (extra as { model?: unknown }).model;
+  if (override !== undefined && typeof override !== "string") return null;
+  return model => FLASH_CONTEXT_MODELS.has(typeof override === "string" ? override : resolveModel(model));
+}
+
+/**
+ * Deliberately scoped to documented 1M-context consumers: official DeepSeek Flash
+ * and the catalog Claude models (Opus/Sonnet/Haiku 5.5, Fable 5.1 — all 1M tokens)
+ * actually routed to the Claude API. Stages may mix the two. Anything else keeps
+ * the conservative 12,000-char budget.
+ */
 export function articleReadingPacketBudget(cfg: AnalysisConfig): ReadingPacketBudget {
   const conservative = { maxChars: READING_CHUNK_CHARS };
   try {
-    if (!process.env.LLM_API_KEY || new URL(process.env.LLM_BASE_URL ?? "").hostname !== "api.deepseek.com") return conservative;
-    const extra: unknown = JSON.parse(process.env.LLM_EXTRA_BODY || "{}");
-    if (!extra || typeof extra !== "object" || Array.isArray(extra)) return conservative;
-    const override = (extra as { model?: unknown }).model;
-    if (override !== undefined && typeof override !== "string") return conservative;
     const filter = cfg.filterModel || FILTER_MODEL();
     // The final model is also the optional per-article deep-analysis model.
     const consumers = [filter, cfg.digestMapModel || filter, cfg.analysisModel || ANALYSIS_MODEL()];
-    if (!consumers.every(model => FLASH_CONTEXT_MODELS.has(typeof override === "string" ? override : resolveModel(model)))) return conservative;
-    // A UTF-8 byte bound is conservative relative to the documented 1M token
-    // window and leaves room for caller instructions and final thinking/output.
+    let flash: ((model: string) => boolean) | null | undefined;
+    const longContext = (model: string) => {
+      if (providerFor(model) === "anthropic") return modelOption(model)?.provider === "anthropic";
+      if (flash === undefined) flash = deepseekFlashCheck();
+      return flash !== null && flash(model);
+    };
+    if (!consumers.every(longContext)) return conservative;
+    // A UTF-8 byte bound is conservative relative to the 1M token window and
+    // leaves room for caller instructions and final thinking/output.
     return { maxBytes: DEEPSEEK_READING_PACKET_BYTES };
   } catch { return conservative; }
 }

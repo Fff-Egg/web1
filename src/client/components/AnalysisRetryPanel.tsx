@@ -7,7 +7,8 @@ import { ArticleAnalysisDiagnostics } from "./ArticleAnalysisDiagnostics.js";
 const reasons: Record<AnalysisRetryReason, string> = {
   output_limit: "출력 제한 보정 후에도 응답이 잘림", reading_held: "전체 읽기 복구 한도 도달",
   request_rejected: "API 요청 거절 · 모델/입력 설정 확인 필요", authentication: "API 인증/권한 오류",
-  balance: "API 잔액·크레딧 부족 (6시간마다 재확인)", rate_limit: "API 요청 속도 제한", transient: "일시적인 연결/처리 오류",
+  balance: "API 크레딧 소진·사용 한도 도달 (6시간마다 재확인)", rate_limit: "API 요청 속도 제한",
+  overloaded: "API 서버 과부하 (15분 뒤 재시도)", transient: "일시적인 연결/처리 오류",
 };
 const time = (iso: string) => new Date(iso).toLocaleString("ko-KR", { timeZone: "Asia/Seoul" });
 

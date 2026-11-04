@@ -39,6 +39,7 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
   const category = error && typeof error === "object" && "category" in error ? String(error.category) : "";
   if (category === "balance") return "balance";
   if (category === "authentication") return "authentication";
+  if (category === "overloaded") return "overloaded";
   const status = /LLM API (\d{3}):/.exec(message)?.[1];
   if (status === "401" || status === "403") return "authentication";
   if (status === "402") return "balance";
@@ -47,7 +48,16 @@ export function analysisFailureReason(error: unknown): AnalysisRetryReason {
   return "transient";
 }
 
+/**
+ * Account/provider-wide failures: the whole batch already waits on the global
+ * pause, and the article itself did nothing wrong. Refund the reserved attempt
+ * so days of exhausted credit (one probe every 6h) never hold healthy articles.
+ * These requests are rejected before any work, or (mid-stream overload) rare.
+ */
+const PROVIDER_WIDE_REASONS: ReadonlySet<AnalysisRetryReason> = new Set(["balance", "authentication", "rate_limit", "overloaded"]);
+
 export function nextAnalysisRetry(attemptsBefore: number, reason: AnalysisRetryReason, now = new Date()) {
+  if (PROVIDER_WIDE_REASONS.has(reason)) return { attempts: attemptsBefore, reason, held: false, nextRetryAt: null, updatedAt: now };
   const attempts = attemptsBefore + 1;
   const held = ["output_limit", "reading_held", "request_rejected"].includes(reason) || attempts >= 3;
   const delay = attempts === 1 ? 30 * 60_000 : 2 * 3600_000;
@@ -57,5 +67,6 @@ export function globalPauseMinutes(reason: AnalysisRetryReason): number {
   // Exhausted credits only return next billing cycle (or after a manual top-up and
   // "해제"). Re-check every 6h: a rejected request is not billed.
   if (reason === "balance") return 360;
-  return reason === "authentication" ? 60 : reason === "rate_limit" ? 30 : 0;
+  // Overload is short-lived; a brief pause keeps the batch from hammering a busy API.
+  return reason === "authentication" ? 60 : reason === "rate_limit" ? 30 : reason === "overloaded" ? 15 : 0;
 }

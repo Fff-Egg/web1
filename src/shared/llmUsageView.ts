@@ -37,7 +37,7 @@ const PROVIDER_FAILURE_LABELS: Record<ProviderErrorCategory, string> = {
   unsupported_parameter: "지원하지 않는 요청 설정", stream_options: "스트리밍 설정 충돌",
   json_requirement: "JSON 출력 조건 미충족", invalid_unicode: "문자 인코딩 오류", invalid_json: "요청 JSON 형식 오류",
   content_policy: "제공자의 내용 정책 거절", authentication: "API 인증·권한 오류", balance: "API 잔액 부족",
-  rate_limit: "API 호출 한도 초과", unknown: "요청 오류",
+  rate_limit: "API 호출 한도 초과", overloaded: "제공자 서버 과부하", unknown: "요청 오류",
 };
 export function usageFailureLabel(row: { httpStatus: number | null; finishReason: string | null; errorCategory?: ProviderErrorCategory | null; errorParam?: string | null }): string {
   if (row.httpStatus !== null && row.httpStatus >= 400) return `${PROVIDER_FAILURE_LABELS[row.errorCategory ?? "unknown"]} (HTTP ${row.httpStatus})${row.errorParam ? ` · ${row.errorParam}` : ""}`;

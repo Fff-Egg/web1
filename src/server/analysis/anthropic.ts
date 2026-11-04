@@ -54,6 +54,7 @@ export function getAnthropic(): Anthropic {
 /** Test hook: replace (or reset with null) the cached Claude client. */
 export function setAnthropicClientForTests(client: Anthropic | null): void {
   _client = client;
+  serverFallbackUnavailable = false;
 }
 
 // Model defaults depend on the active provider. With an OpenAI-compatible
@@ -184,21 +185,71 @@ export function claudeMaxTokens(requested?: number): number {
 /** Models that accept the server-side refusal fallback (`fallbacks: "default"`). */
 const SERVER_FALLBACK_MODELS = new Set(["claude-opus-5-5", "claude-sonnet-5-5", "claude-fable-5-1"]);
 const SERVER_FALLBACK_BETA = "server-side-fallback-2026-07-01";
+/**
+ * Set once the API rejected the fallback beta and a plain resend succeeded: this
+ * process stops sending it (one extra rejected, unbilled call per process, not per call).
+ */
+let serverFallbackUnavailable = false;
+/** Wrapped errors whose request the API rejected because of the fallback beta. */
+const fallbackRejections = new WeakSet<object>();
+
+/**
+ * A mid-stream SSE `error` event reaches us as an APIError without an HTTP status.
+ * Map its error type to the status it stands for so it is classified, not "unknown".
+ * Connection drops carry no error body and stay untouched (handled as transient).
+ */
+const STREAM_ERROR_STATUS: Record<string, number> = {
+  invalid_request_error: 400, authentication_error: 401, billing_error: 402, permission_error: 403,
+  not_found_error: 404, request_too_large: 413, rate_limit_error: 429, api_error: 500,
+  timeout_error: 504, overloaded_error: 529,
+};
+function streamErrorStatus(error: InstanceType<typeof Anthropic.APIError>): number | undefined {
+  const body = error.error as { type?: unknown; error?: { type?: unknown } } | undefined;
+  const sdkType = (error as { type?: unknown }).type;
+  const type = typeof sdkType === "string" ? sdkType : typeof body?.error?.type === "string" ? body.error.type : undefined;
+  return type ? STREAM_ERROR_STATUS[type] : undefined;
+}
+
+/** HTTP 400 that names the fallback field/beta (or rejects an unknown parameter). */
+function rejectsServerFallback(raw: string, status: number, category: string): boolean {
+  return status === 400 && (category === "unsupported_parameter" || /fallback|anthropic-beta|\bbetas?\b/i.test(raw));
+}
 
 /** Wrap SDK HTTP errors into the shared contract: `LLM API <status>:` + a finite category. */
-function anthropicFailure(error: unknown, probe: LlmCallProbe): unknown {
-  if (error instanceof Anthropic.APIError && typeof error.status === "number") {
+function anthropicFailure(error: unknown, probe: LlmCallProbe, withFallback: boolean): unknown {
+  if (error instanceof Anthropic.APIError) {
+    const status = typeof error.status === "number" ? error.status : streamErrorStatus(error);
+    if (status === undefined) return error;
     // Inspect the provider body only in memory; store just the fixed category.
-    const diagnosis = diagnoseProviderError(JSON.stringify(error.error ?? {}), error.status);
-    probe.data.httpStatus = error.status;
+    const raw = JSON.stringify(error.error ?? {});
+    const diagnosis = diagnoseProviderError(raw, status);
+    probe.data.httpStatus = status;
     probe.data.errorCategory = diagnosis.category;
     probe.data.errorParam = diagnosis.param;
-    return new LlmProviderError(error.status, diagnosis);
+    const wrapped = new LlmProviderError(status, diagnosis);
+    if (withFallback && rejectsServerFallback(raw, status, diagnosis.category)) fallbackRejections.add(wrapped);
+    return wrapped;
   }
   return error;
 }
 
 async function completeAnthropic(opts: CompleteOpts): Promise<string> {
+  const useFallback = SERVER_FALLBACK_MODELS.has(opts.model.trim()) && !serverFallbackUnavailable;
+  try {
+    return await attemptAnthropic(opts, useFallback);
+  } catch (error) {
+    if (!useFallback || !(error instanceof Object) || !fallbackRejections.has(error)) throw error;
+    // The account/API refused the refusal-fallback beta. Without this resend every
+    // Sonnet/Opus call would fail as "request rejected" and hold all articles.
+    console.warn("[llm] 거절 시 자동 대체(server-side fallback) 베타가 거부돼 이 기능 없이 다시 보냅니다");
+    const text = await attemptAnthropic(opts, false);
+    serverFallbackUnavailable = true;
+    console.warn("[llm] 자동 대체 없이 성공 — 이 서버 프로세스에서는 이후 호출에 자동 대체를 보내지 않습니다");
+    return text;
+  }
+}
+
+async function attemptAnthropic(opts: CompleteOpts, useFallback: boolean): Promise<string> {
   const probe = new LlmCallProbe(opts.system, opts.user);
   const model = opts.model.trim();
   const effort = effortFor(model, opts.effort);
@@ -211,7 +262,6 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
   probe.data.stream = true;
   let success = false;
   try {
-    const useFallback = SERVER_FALLBACK_MODELS.has(model);
     const params: Anthropic.Beta.Messages.MessageCreateParamsStreaming = {
       model,
       max_tokens: maxTokens,
@@ -231,7 +281,7 @@ async function completeAnthropic(opts: CompleteOpts): Promise<string> {
       const { stream: _stream, ...streamParams } = params;
       res = await getAnthropic().beta.messages.stream(streamParams).finalMessage();
     } catch (error) {
-      throw anthropicFailure(error, probe);
+      throw anthropicFailure(error, probe, useFallback);
     }
     probe.data.stage = "validating_response";
     const usage = res.usage;

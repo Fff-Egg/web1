@@ -27,13 +27,21 @@ export function diagnoseProviderError(raw: string, status: number): ProviderErro
     : typeof root.error === "string" ? root.error.slice(0, 65_536) : payload === undefined ? raw.slice(0, 65_536) : "";
   // Codes can be useful to classify but are untrusted and are not returned/stored.
   const code = typeof error.code === "string" ? error.code.slice(0, 128).toLowerCase() : "";
-  const text = `${code} ${message}`.toLowerCase();
+  // Claude API puts its error class in `type` (e.g. overloaded_error, billing_error).
+  const type = typeof error.type === "string" ? error.type.slice(0, 64).toLowerCase() : "";
+  const text = `${code} ${type} ${message}`.toLowerCase();
   const result = (category: ProviderErrorDiagnosis["category"]): ProviderErrorDiagnosis => ({ category, param });
   if (status === 401) return result("authentication");
   if (status === 402) return result("balance");
   if (status === 429) return result("rate_limit");
+  // Claude API: overloaded servers (HTTP 529, or an `overloaded_error` event mid-stream).
+  if (status === 529 || /\boverloaded_error\b/u.test(text)) return result("overloaded");
   // Claude API: prepaid/plan credits exhausted ("Your credit balance is too low …").
   if (/credit balance.{0,30}too low|billing_error/u.test(text) || (root.type === "error" && nested.type === "billing_error")) return result("balance");
+  // Claude API: a spend limit set in the Console was reached (HTTP 400, "You have reached your
+  // specified API usage limits. You will regain access on …"). Same handling as exhausted credit:
+  // pause everything and show the banner instead of holding articles one by one.
+  if (/reached your (?:specified )?(?:api )?usage limits?|(?:api )?usage limits?.{0,80}regain access|spend(?:ing)? limit.{0,40}(?:reached|exceeded)/u.test(text)) return result("balance");
   if (/content[_ ](?:filter|policy|exists[_ ]risk|risk)|safety[_ ](?:violation|policy)|moderation|sensitive content|内容.{0,20}风险/u.test(text)) return result("content_policy");
   if (status === 403) return result("authentication");
   if (/authentication[_ ](?:error|failed)|invalid[_ ]api[_ ]key|(?:api[_ ]key|api key).{0,30}(?:invalid|incorrect|missing)/u.test(text)) return result("authentication");

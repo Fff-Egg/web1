@@ -59,10 +59,10 @@ export function App() {
 
       {creditPause && (
         <div role="alert" className="mb-4 rounded border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-800">
-          <strong>API 크레딧(잔액) 소진</strong> — 자동 글 분석을 멈췄습니다. 수집은 계속됩니다.
+          <strong>API 크레딧 소진 또는 사용 한도 도달</strong> — 자동 글 분석을 멈췄습니다. 수집은 계속됩니다.
           {" "}{new Date(creditPause.until).toLocaleString("ko-KR", { timeZone: "Asia/Seoul", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}에 다시 확인하며,
-          Claude 월 크레딧은 다음 결제 주기에 들어옵니다. 잔액은 Claude Console → Billing에서 확인하세요.
-          충전했다면 Settings → 재시도 관리에서 대기를 해제할 수 있습니다.
+          Claude 월 크레딧은 다음 결제 주기에 들어옵니다. 잔액은 Claude Console → Billing, 직접 건 사용 한도는 Console → Limits에서 확인하세요.
+          충전했거나 한도를 올렸다면 Settings → 재시도 관리에서 대기를 해제할 수 있습니다.
         </div>
       )}
       {status.data && !status.data.persisted && (

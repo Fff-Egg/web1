@@ -19,7 +19,7 @@ export function boundaryFailureMessage(error: unknown): string {
   }
   const detail = chain.join("; ");
   if (/\b402\b|insufficient.?balance|insufficient.?credit|credit balance|\(balance\b/i.test(detail)) {
-    return "API 제공자가 잔액 부족(402)·크레딧 소진을 응답했습니다. Claude 월 크레딧은 다음 결제 주기에 다시 들어옵니다. 연결된 API 계정의 잔액을 확인한 뒤 다시 실행하세요.";
+    return "API 제공자가 잔액 부족(402)·크레딧 소진 또는 사용 한도 도달을 응답했습니다. Claude 월 크레딧은 다음 결제 주기에 다시 들어옵니다. Console의 잔액(Billing)과 직접 건 사용 한도(Limits)를 확인한 뒤 다시 실행하세요.";
   }
   const messages = {
     authentication: "API 인증에 실패했습니다. 연결된 API 키와 계정 상태를 확인한 뒤 다시 실행하세요.",

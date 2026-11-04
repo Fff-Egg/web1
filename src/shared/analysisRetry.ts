@@ -1,4 +1,4 @@
-export type AnalysisRetryReason = "output_limit" | "reading_held" | "request_rejected" | "authentication" | "balance" | "rate_limit" | "transient";
+export type AnalysisRetryReason = "output_limit" | "reading_held" | "request_rejected" | "authentication" | "balance" | "rate_limit" | "overloaded" | "transient";
 export interface AnalysisRetryPause { reason: AnalysisRetryReason; until: string }
 export interface AnalysisRetryStatus {
   persisted: boolean;
