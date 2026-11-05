@@ -1,0 +1,23 @@
+CREATE TABLE `llm_usage` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `request_id` varchar(64) NOT NULL,
+  `started_at` timestamp(3) NOT NULL,
+  `stage` varchar(32) NOT NULL,
+  `model` varchar(160) NOT NULL,
+  `endpoint_host` varchar(255),
+  `thinking` varchar(16) NOT NULL,
+  `article_id` bigint unsigned,
+  `run_id` varchar(160),
+  `success` boolean NOT NULL,
+  `duration_ms` int unsigned NOT NULL,
+  `finish_reason` varchar(40),
+  `http_status` int unsigned,
+  `input_tokens` bigint unsigned,
+  `cache_hit_tokens` bigint unsigned,
+  `cache_miss_tokens` bigint unsigned,
+  `output_tokens` bigint unsigned,
+  `reasoning_tokens` bigint unsigned,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `llm_usage_request_unq` (`request_id`),
+  KEY `llm_usage_started_idx` (`started_at`)
+);

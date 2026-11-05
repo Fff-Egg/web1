@@ -1,0 +1,144 @@
+import { z } from "zod";
+import { router, publicProcedure } from "../trpc.js";
+import { settingsRepo } from "../../repo/settings.js";
+import { getRuntimeSchedule } from "../../runtimeSchedule.js";
+import { refreshAnalysisFilterProviderHint } from "../../analysis/schedule.js";
+import { getLlmUsageReport } from "../../repo/llmUsage.js";
+import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
+import { getLastBacklogCleanup, previewBacklogCleanup, trashUnanalyzedBefore, undoLastBacklogCleanup } from "../../repo/backlogCleanup.js";
+import { runArticleAnalysis } from "../../analysis/analyze.js";
+import { getArticleAnalysisDiagnostics } from "../../repo/analysisDiagnostics.js";
+import {
+  ANALYSIS_MODEL,
+  FILTER_MODEL,
+  llmProvider,
+  providerFor,
+  resolveModel,
+} from "../../analysis/anthropic.js";
+import { CLAUDE_EFFORTS, effortFor, mapStageEffort, readingStageEffort, readingStageThinking } from "../../../shared/llmModels.js";
+import {
+  digestFinalTokenBudget,
+  DIGEST_FINAL_THINKING_TOKEN_FLOOR,
+  digestThinkingMode,
+} from "../../digest/modelPipeline.js";
+
+const analysisConfigSchema = z.object({
+  instructions: z.string(),
+  relevanceCriteria: z.string().optional(),
+  importanceCriteria: z.string().optional(),
+  summaryInstructions: z.string().optional(),
+  digestInstructions: z.string().optional(),
+  filterModel: z.string().optional(),
+  digestMapModel: z.string().optional(),
+  readingModel: z.string().optional(),
+  analysisModel: z.string().optional(),
+  filterThinking: z.enum(["enabled", "disabled"]).optional(),
+  digestMapThinking: z.enum(["enabled", "disabled"]).optional(),
+  readingThinking: z.enum(["enabled", "disabled"]).optional(),
+  digestFinalThinking: z.enum(["enabled", "disabled"]).optional(),
+  filterEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  digestMapEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  readingEffort: z.enum(CLAUDE_EFFORTS).optional(),
+  digestFinalEffort: z.enum(CLAUDE_EFFORTS).optional(),
+});
+
+type ModelSource = "web" | "railway" | "default" | "filter" | "map";
+type AnalysisConfigEffort = z.infer<typeof analysisConfigSchema>["filterEffort"];
+
+function configuredModel(
+  web: string | undefined,
+  envName: "FILTER_MODEL" | "ANALYSIS_MODEL",
+  fallback: () => string,
+): { configured: string; effective: string; source: ModelSource } {
+  const saved = web?.trim();
+  const env = process.env[envName]?.trim();
+  const configured = saved || env || fallback();
+  return {
+    configured,
+    effective: resolveModel(configured),
+    source: saved ? "web" : env ? "railway" : "default",
+  };
+}
+
+const kstDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
+/** settings router — edit the analysis instructions ("지침") from the dashboard. */
+export const settingsRouter = router({
+  getRuntimeSchedule: publicProcedure.query(async () => {
+    await refreshAnalysisFilterProviderHint();
+    return getRuntimeSchedule();
+  }),
+  getLlmUsage: publicProcedure.query(() => getLlmUsageReport()),
+  getAnalysisRetryStatus: publicProcedure.query(() => getAnalysisRetryStatus()),
+  getArticleAnalysisDiagnostics: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
+    .query(({ input }) => getArticleAnalysisDiagnostics(input.articleId)),
+  resetAnalysisRetry: publicProcedure.input(z.object({ articleId: z.number().int().positive().optional() }))
+    .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
+  runArticleAnalysis: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
+    .mutation(({ input }) => runArticleAnalysis(input.articleId)),
+  /** 밀린 미분석 글 정리 — read-only preview, then explicit trash / undo. Never calls the LLM. */
+  previewBacklogCleanup: publicProcedure.input(z.object({ date: kstDate }).strict())
+    .query(({ input }) => previewBacklogCleanup(input.date)),
+  getLastBacklogCleanup: publicProcedure.query(() => getLastBacklogCleanup()),
+  trashUnanalyzedBefore: publicProcedure.input(z.object({ date: kstDate }).strict())
+    .mutation(({ input }) => trashUnanalyzedBefore(input.date)),
+  undoLastBacklogCleanup: publicProcedure.mutation(() => undoLastBacklogCleanup()),
+  getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),
+  /** Non-secret, effective model plan after Settings/env/provider remapping. */
+  getModelPlan: publicProcedure.query(async () => {
+    const cfg = await settingsRepo.getAnalysisConfig();
+    const filter = configuredModel(cfg.filterModel, "FILTER_MODEL", FILTER_MODEL);
+    const mapSaved = cfg.digestMapModel?.trim();
+    const map = mapSaved
+      ? { configured: mapSaved, effective: resolveModel(mapSaved), source: "web" as const }
+      : { ...filter, source: "filter" as const };
+    const readingSaved = cfg.readingModel?.trim();
+    const reading = readingSaved
+      ? { configured: readingSaved, effective: resolveModel(readingSaved), source: "web" as const }
+      : { ...map, source: "map" as const };
+    const final = configuredModel(cfg.analysisModel, "ANALYSIS_MODEL", ANALYSIS_MODEL);
+    const fallbackTokens = Number(process.env.DIGEST_MAX_TOKENS ?? 8192);
+    const configuredThinkingTokens = Number(
+      process.env.DIGEST_FINAL_THINKING_TOKENS ?? process.env.DIGEST_PRO_THINKING_TOKENS ?? DIGEST_FINAL_THINKING_TOKEN_FLOOR,
+    );
+    const finalTokens = digestFinalTokenBudget(final.effective, fallbackTokens, configuredThinkingTokens, cfg.digestFinalThinking);
+    const finalThinking = digestThinkingMode(final.effective, "final", cfg.digestFinalThinking);
+    const mapThinking = digestThinkingMode(map.effective, "map", cfg.digestMapThinking);
+    const stage = <T extends { effective: string }>(m: T, effort: AnalysisConfigEffort) => ({
+      ...m, provider: providerFor(m.effective), effort: effortFor(m.effective, effort) ?? null,
+    });
+    return {
+      provider: llmProvider(),
+      filter: stage(filter, cfg.filterEffort),
+      reading: stage(reading, readingStageEffort(cfg)),
+      readingThinking: digestThinkingMode(reading.effective, "map", readingStageThinking(cfg)),
+      map: stage(map, mapStageEffort(cfg)),
+      final: stage(final, cfg.digestFinalEffort),
+      finalTokens,
+      finalThinking,
+      mapThinking,
+      filterThinking: digestThinkingMode(filter.effective, "map", cfg.filterThinking),
+      finalFallbackAvailable: final.effective !== map.effective || (finalThinking === "enabled" && mapThinking === "disabled"),
+      finalAttempts: 1,
+      finalFallbackTokens: digestFinalTokenBudget(map.effective, fallbackTokens, configuredThinkingTokens, mapThinking),
+    };
+  }),
+  updateAnalysisConfig: publicProcedure
+    .input(analysisConfigSchema)
+    .mutation(async ({ input }) => {
+      await settingsRepo.setAnalysisConfig(input);
+      await refreshAnalysisFilterProviderHint();
+      return { ok: true };
+    }),
+
+  /** The cumulative "learned memo" (auto-distilled from feedback; separate from importanceCriteria). */
+  getFilterGuidance: publicProcedure.query(() => settingsRepo.getFilterGuidance()),
+  /** Manually edit / clear the learned memo. Preserves the feedback cursor & count. */
+  setFilterGuidance: publicProcedure
+    .input(z.object({ text: z.string() }))
+    .mutation(async ({ input }) => {
+      const prev = await settingsRepo.getFilterGuidance();
+      await settingsRepo.setFilterGuidance({ ...prev, text: input.text, updatedAt: new Date().toISOString() });
+      return { ok: true };
+    }),
+});
