@@ -199,6 +199,9 @@ export function startSchedulers(): void {
       console.error("[scheduler] collect failed:", err);
     }
     if (hasLLM()) {
+      // Re-read the saved filter model BEFORE the peak check: a stale "DeepSeek"
+      // hint must not hold a Claude filter (no peak pricing) at 10~13·15~19시.
+      await refreshAnalysisFilterProviderHint();
       if (shouldDeferAutomaticAnalysis()) {
         console.log("[scheduler] analyze deferred — DeepSeek 피크 시간(KST 10~13시·15~19시), 수집은 계속됩니다.");
       } else {
