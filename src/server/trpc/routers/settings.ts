@@ -5,6 +5,7 @@ import { getRuntimeSchedule } from "../../runtimeSchedule.js";
 import { refreshAnalysisFilterProviderHint } from "../../analysis/schedule.js";
 import { getLlmUsageReport } from "../../repo/llmUsage.js";
 import { getAnalysisRetryStatus, resetAnalysisRetry } from "../../repo/analysisRetry.js";
+import { getLastBacklogCleanup, previewBacklogCleanup, trashUnanalyzedBefore, undoLastBacklogCleanup } from "../../repo/backlogCleanup.js";
 import { runArticleAnalysis } from "../../analysis/analyze.js";
 import { getArticleAnalysisDiagnostics } from "../../repo/analysisDiagnostics.js";
 import {
@@ -59,6 +60,8 @@ function configuredModel(
   };
 }
 
+const kstDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
+
 /** settings router — edit the analysis instructions ("지침") from the dashboard. */
 export const settingsRouter = router({
   getRuntimeSchedule: publicProcedure.query(async () => {
@@ -73,6 +76,13 @@ export const settingsRouter = router({
     .mutation(({ input }) => resetAnalysisRetry(input.articleId)),
   runArticleAnalysis: publicProcedure.input(z.object({ articleId: z.number().int().positive().safe() }).strict())
     .mutation(({ input }) => runArticleAnalysis(input.articleId)),
+  /** 밀린 미분석 글 정리 — read-only preview, then explicit trash / undo. Never calls the LLM. */
+  previewBacklogCleanup: publicProcedure.input(z.object({ date: kstDate }).strict())
+    .query(({ input }) => previewBacklogCleanup(input.date)),
+  getLastBacklogCleanup: publicProcedure.query(() => getLastBacklogCleanup()),
+  trashUnanalyzedBefore: publicProcedure.input(z.object({ date: kstDate }).strict())
+    .mutation(({ input }) => trashUnanalyzedBefore(input.date)),
+  undoLastBacklogCleanup: publicProcedure.mutation(() => undoLastBacklogCleanup()),
   getAnalysisConfig: publicProcedure.query(() => settingsRepo.getAnalysisConfig()),
   /** Non-secret, effective model plan after Settings/env/provider remapping. */
   getModelPlan: publicProcedure.query(async () => {

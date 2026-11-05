@@ -36,6 +36,7 @@ export function AnalysisRetryPanel() {
         ["미분석 글", s.totalPending], ["분석 가능한 글", s.eligible], ["재시도 시간 대기", s.waiting], ["자동 재시도 보류", s.held],
       ].map(([label, value]) => <div key={label} className="rounded bg-slate-50 p-3">{label}<strong className="block text-lg">{Number(value).toLocaleString("ko-KR")}건</strong></div>)}</div>
       <p className="text-xs text-slate-500">분석 가능한 글도 위 절약 대기 시간에는 자동 실행을 기다립니다. 보류된 글은 분석을 마치기 전까지 다이제스트에 반영되지 않습니다.</p>
+      {s.persisted && <BacklogCleanupSection onChanged={() => void status.refetch()} />}
       {s.globalPause && <p className="rounded bg-amber-50 p-3 text-sm text-amber-800">전체 글 분석 대기: {reasons[s.globalPause.reason]} · {time(s.globalPause.until)}까지</p>}
       {s.items.length > 0 && <div className="max-h-80 overflow-auto"><table className="w-full text-left text-xs">
         <thead className="sticky top-0 bg-slate-100"><tr>{["글", "원인 / 상태", "시도", ""].map((label, i) => <th key={i} className="p-2 font-medium">{label}</th>)}</tr></thead>
@@ -65,4 +66,53 @@ export function AnalysisRetryPanel() {
     {reset.isSuccess && <p className="text-sm text-green-700">{reset.data.reset}건의 제한을 해제했습니다. 즉시 AI를 호출하지 않으며 다음 분석에서 이어갑니다.</p>}
     {reset.error && <p className="text-sm text-red-600">제한 해제에 실패했습니다. 상태를 새로고침해주세요.</p>}
   </section>;
+}
+
+const kstToday = () => new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+
+/**
+ * 밀린 미분석 글 정리: move unanalyzed articles collected before a KST date to the trash
+ * so only recent ones are analyzed (and billed). Preview and undo never call the AI.
+ */
+function BacklogCleanupSection({ onChanged }: { onChanged: () => void }) {
+  const [date, setDate] = useState(kstToday);
+  const [confirming, setConfirming] = useState(false);
+  const preview = useQuery({ queryKey: ["backlogCleanupPreview", date], queryFn: () => api.previewBacklogCleanup(date),
+    enabled: /^\d{4}-\d{2}-\d{2}$/.test(date) });
+  const last = useQuery({ queryKey: ["lastBacklogCleanup"], queryFn: () => api.getLastBacklogCleanup() });
+  const done = async () => { setConfirming(false); await Promise.all([preview.refetch(), last.refetch()]); onChanged(); };
+  const trash = useMutation({ mutationFn: () => api.trashUnanalyzedBefore(date), onSuccess: done });
+  const undo = useMutation({ mutationFn: () => api.undoLastBacklogCleanup(), onSuccess: done });
+  const p = preview.data;
+  const n = (v: number) => v.toLocaleString("ko-KR");
+  return <div className="rounded border border-slate-200 p-3 text-sm space-y-2">
+    <p className="font-medium">밀린 미분석 글 정리</p>
+    <p className="text-xs leading-relaxed text-slate-500">고른 날짜 0시(한국시간) <strong>이전에 수집된 미분석 글</strong>을 휴지통으로 옮겨
+      자동 분석·다이제스트에서 뺍니다. 그 뒤에 들어온 글과 이미 분석된 글은 그대로입니다. AI를 호출하지 않으며, 같은 글은 다시
+      수집되지 않습니다. 「휴지통 비우기」를 하면 본문까지 정리됩니다.</p>
+    <label className="flex flex-wrap items-center gap-2 text-xs">기준일
+      <input type="date" value={date} onChange={(e) => { setDate(e.target.value); setConfirming(false); }}
+        className="rounded border border-slate-300 px-2 py-1" />
+      <span className="text-slate-400">(이 날짜 0시 이전 수집분이 대상)</span>
+    </label>
+    {preview.isFetching && <p className="text-xs text-slate-500">건수 확인 중…</p>}
+    {p && <p className="text-xs">휴지통으로 옮길 글 <strong>{n(p.before)}건</strong> · 남아서 분석될 글 <strong>{n(p.kept)}건</strong></p>}
+    {p && p.before > 0 && !confirming && <button type="button" onClick={() => setConfirming(true)}
+      className="rounded border border-slate-300 px-3 py-1.5 text-sm">{n(p.before)}건 휴지통으로 옮기기</button>}
+    {p && confirming && <div className="rounded border border-amber-200 bg-amber-50 p-2 space-y-2">
+      <p className="text-xs">{date} 0시 이전에 수집된 미분석 글 {n(p.before)}건을 휴지통으로 옮깁니다. 이 글들은 분석·다이제스트에 들어가지
+        않습니다. 바로 아래 「되돌리기」로 이번 정리를 취소할 수 있습니다.</p>
+      <div className="flex gap-3"><button type="button" onClick={() => trash.mutate()} disabled={trash.isPending}
+        className="rounded bg-slate-900 px-3 py-1.5 text-white disabled:opacity-50">{trash.isPending ? "옮기는 중…" : "확인 · 휴지통으로"}</button>
+        <button type="button" onClick={() => setConfirming(false)} disabled={trash.isPending}>취소</button></div>
+    </div>}
+    {trash.isSuccess && <p className="text-xs text-green-700">{n(trash.data.trashed)}건을 휴지통으로 옮겼습니다.</p>}
+    {trash.error && <p className="text-xs text-red-600">정리에 실패했습니다. 새로고침 후 다시 시도해 주세요.</p>}
+    {last.data && <p className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      마지막 정리: {time(last.data.at)} · {last.data.date} 0시 이전 {n(last.data.trashed)}건
+      <button type="button" onClick={() => undo.mutate()} disabled={undo.isPending}
+        className="rounded border border-slate-300 px-2 py-0.5 disabled:opacity-50">{undo.isPending ? "되돌리는 중…" : "되돌리기"}</button>
+    </p>}
+    {undo.isSuccess && <p className="text-xs text-green-700">{n(undo.data.restored)}건을 다시 분석 대기로 되돌렸습니다(다음 분석 때 비용이 듭니다).</p>}
+  </div>;
 }
