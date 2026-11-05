@@ -191,13 +191,15 @@ export function startSchedulers(): void {
   const intervalMin = Math.max(1, Number(process.env.COLLECT_INTERVAL_MIN ?? 15) || 15);
   console.log(`[scheduler] collection every ${intervalMin}m`);
 
-  const tick = async () => {
+  const collectTick = async () => {
     try {
       const c = await collectAll();
       console.log(`[scheduler] collect: inserted=${c.inserted} errors=${c.errors}`);
     } catch (err) {
       console.error("[scheduler] collect failed:", err);
     }
+  };
+  const analyzeTick = async () => {
     if (hasLLM()) {
       // Re-read the saved filter model BEFORE the peak check: a stale "DeepSeek"
       // hint must not hold a Claude filter (no peak pricing) at 10~13·15~19시.
@@ -210,6 +212,13 @@ export function startSchedulers(): void {
     } else {
       console.warn("[scheduler] no LLM configured — auto-analysis disabled (manual mode still works).");
     }
+  };
+  // Collection and analysis run side by side: a slow or stuck source fetch
+  // (network trouble, 15s page timeouts × many items) must not hold the already
+  // queued backlog. Fresh items are picked up by the next tick's analysis.
+  // runScheduledAnalysis still skips while a previous batch is running.
+  const tick = async () => {
+    await Promise.all([collectTick(), analyzeTick()]);
   };
 
   // Kick once on boot, then on the interval (collect then analyze new articles).
@@ -231,7 +240,7 @@ export function startSchedulers(): void {
       await catchUpRoutines(digestHour);
     };
     cron.schedule("0 13,19 * * *", () => void runOffPeakCatchUp(), { timezone: "Asia/Seoul" });
-    console.log("[scheduler] automatic LLM analysis pauses at 10~13 and 15~19 KST; backlog drains at 13:00/19:00");
+    console.log("[scheduler] DeepSeek 선별일 때만 자동 분석이 KST 10~13·15~19시 대기(13:00/19:00 적체 처리) — Claude 선별이면 대기 없음");
 
     // Self-heal a missed digest on boot, but never create an expensive automatic
     // digest during peak. The 13시/19시 off-peak catch-up will retry it instead.
